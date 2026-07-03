@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact Us - Meethi Chaat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #ff4081; /* Vibrant Pink/Red */
+            --secondary-color: #7c4dff; /* Deep Purple */
+            --bg-dark: #09090b; /* Very dark background */
+            --bg-card: rgba(24, 24, 27, 0.6); /* Glassmorphism card bg */
+            --text-main: #f8fafc;
+            --text-muted: #a1a1aa;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --glass-nav: rgba(9, 9, 11, 0.8);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.7;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(124, 77, 255, 0.12) 0%, transparent 40%),
+                radial-gradient(circle at 85% 30%, rgba(255, 64, 129, 0.12) 0%, transparent 40%);
+            background-attachment: fixed;
+        }
+
+        /* --- Navigation --- */
+        nav {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            background: var(--glass-nav);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 1000;
+            padding: 1.2rem 5%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s ease;
+        }
+
+        .logo {
+            font-size: 1.6rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2.5rem;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 1rem;
+            position: relative;
+            padding: 0.5rem 0;
+            transition: color 0.3s ease;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: var(--text-main);
+        }
+
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+            transition: width 0.3s ease;
+            border-radius: 2px;
+        }
+
+        .nav-links a:hover::after, .nav-links a.active::after {
+            width: 100%;
+        }
+
+        /* --- Hero Section --- */
+        .hero {
+            padding: 160px 5% 80px;
+            text-align: center;
+            position: relative;
+        }
+
+        .hero h1 {
+            font-size: 4rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            line-height: 1.2;
+            background: linear-gradient(to right, #ffffff, #a1a1aa);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -1px;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        /* --- Content Container --- */
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 5% 100px;
+        }
+
+        .policy-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 3rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            transform: translateY(30px);
+            opacity: 0;
+            animation: fadeUpIn 0.8s forwards;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+            text-align: center;
+        }
+
+        .policy-section:hover {
+            transform: translateY(-5px);
+            border-color: rgba(124, 77, 255, 0.3);
+        }
+
+        .policy-section h2 {
+            font-size: 1.8rem;
+            color: #fff;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .policy-section p {
+            margin-bottom: 1.2rem;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+        
+        .contact-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white !important;
+            text-decoration: none;
+            padding: 15px 35px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 1.2rem;
+            margin-top: 20px;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px rgba(124, 77, 255, 0.2);
+        }
+        
+        .contact-link:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 25px rgba(124, 77, 255, 0.4);
+        }
+
+        .contact-link svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        /* --- Footer --- */
+        footer {
+            background: rgba(9, 9, 11, 0.95);
+            border-top: 1px solid var(--border-color);
+            padding: 3rem 5%;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        
+        .footer-content {
+            max-width: 900px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .footer-logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* --- Animations --- */
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeUpIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* --- Mobile Responsive --- */
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none;
+            }
+            .hero h1 {
+                font-size: 2.8rem;
+            }
+            .policy-section {
+                padding: 2rem 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navigation -->
+    <nav>
+        <a href="index.html" class="logo">Meethi Chaat</a>
+        <ul class="nav-links">
+            <li><a href="index.html">Home</a></li>
+            <li><a href="index.html#features">Features</a></li>
+            <li><a href="terms.html">Terms</a></li>
+            <li><a href="privacy.html">Privacy Policy</a></li>
+            <li><a href="contact.html" class="active">Contact</a></li>
+        </ul>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <h1>Get In Touch</h1>
+    </section>
+
+    <!-- Content Container -->
+    <main class="container">
+        <section class="policy-section">
+            <h2>We'd love to hear from you</h2>
+            <p>If you have any questions, concerns, or feedback about Meethi Chaat, please don't hesitate to reach out to our support team. We're here to help!</p>
+            <br>
+            <a href="mailto:support@mithichat.com" class="contact-link">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                support@mithichat.com
+            </a>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-content">
+            <div class="footer-logo">Meethi Chaat</div>
+            <p>&copy; 2026 Meethi Chaat. All rights reserved.</p>
+        </div>
+    </footer>
+
+</body>
+</html>

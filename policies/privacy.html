@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - Meethi Chaat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #ff4081; /* Vibrant Pink/Red */
+            --secondary-color: #7c4dff; /* Deep Purple */
+            --bg-dark: #09090b; /* Very dark background */
+            --bg-card: rgba(24, 24, 27, 0.6); /* Glassmorphism card bg */
+            --text-main: #f8fafc;
+            --text-muted: #a1a1aa;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --glass-nav: rgba(9, 9, 11, 0.8);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.7;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(124, 77, 255, 0.12) 0%, transparent 40%),
+                radial-gradient(circle at 85% 30%, rgba(255, 64, 129, 0.12) 0%, transparent 40%);
+            background-attachment: fixed;
+        }
+
+        /* --- Navigation --- */
+        nav {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            background: var(--glass-nav);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 1000;
+            padding: 1.2rem 5%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s ease;
+        }
+
+        .logo {
+            font-size: 1.6rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2.5rem;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 1rem;
+            position: relative;
+            padding: 0.5rem 0;
+            transition: color 0.3s ease;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: var(--text-main);
+        }
+
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+            transition: width 0.3s ease;
+            border-radius: 2px;
+        }
+
+        .nav-links a:hover::after, .nav-links a.active::after {
+            width: 100%;
+        }
+
+        /* --- Hero Section --- */
+        .hero {
+            padding: 160px 5% 80px;
+            text-align: center;
+            position: relative;
+        }
+
+        .hero h1 {
+            font-size: 4rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            line-height: 1.2;
+            background: linear-gradient(to right, #ffffff, #a1a1aa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -1px;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        .hero p.date {
+            display: inline-block;
+            background: rgba(255, 64, 129, 0.1);
+            border: 1px solid rgba(255, 64, 129, 0.2);
+            padding: 8px 24px;
+            border-radius: 30px;
+            color: var(--primary-color);
+            font-weight: 600;
+            font-size: 1rem;
+            letter-spacing: 1px;
+            animation: fadeInUp 0.8s ease-out 0.2s backwards;
+        }
+
+        /* --- Content Container --- */
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 5% 100px;
+        }
+
+        .policy-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 3rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            transform: translateY(30px);
+            opacity: 0;
+            animation: fadeUpIn 0.8s forwards;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .policy-section:hover {
+            transform: translateY(-5px);
+            border-color: rgba(124, 77, 255, 0.3);
+        }
+
+        /* Staggered animation for sections */
+        .policy-section:nth-child(1) { animation-delay: 0.1s; }
+        .policy-section:nth-child(2) { animation-delay: 0.2s; }
+        .policy-section:nth-child(3) { animation-delay: 0.3s; }
+        .policy-section:nth-child(4) { animation-delay: 0.4s; }
+        .policy-section:nth-child(5) { animation-delay: 0.5s; }
+        .policy-section:nth-child(6) { animation-delay: 0.6s; }
+        .policy-section:nth-child(7) { animation-delay: 0.7s; }
+        .policy-section:nth-child(8) { animation-delay: 0.8s; }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1.5rem;
+        }
+
+        .section-number {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 1.2rem;
+            color: white;
+            box-shadow: 0 8px 16px rgba(124, 77, 255, 0.3);
+        }
+
+        .policy-section h2 {
+            font-size: 1.8rem;
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .policy-section h3 {
+            font-size: 1.3rem;
+            color: #e4e4e7;
+            margin: 2rem 0 1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .policy-section h3::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: var(--secondary-color);
+            border-radius: 50%;
+        }
+
+        .policy-section p {
+            margin-bottom: 1.2rem;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+
+        .policy-section ul {
+            padding-left: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+
+        .policy-section li {
+            margin-bottom: 0.8rem;
+            position: relative;
+        }
+
+        .policy-section li::marker {
+            color: var(--secondary-color);
+        }
+
+        .policy-section strong {
+            color: #f4f4f5;
+            font-weight: 600;
+        }
+
+        .policy-section code {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 0.2rem 0.6rem;
+            border-radius: 6px;
+            font-family: 'Courier New', Courier, monospace;
+            color: #e4e4e7;
+            font-size: 0.9em;
+        }
+        
+        .contact-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white !important;
+            text-decoration: none;
+            padding: 12px 28px;
+            border-radius: 30px;
+            font-weight: 600;
+            margin-top: 15px;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px rgba(124, 77, 255, 0.2);
+        }
+        
+        .contact-link:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 25px rgba(124, 77, 255, 0.4);
+        }
+
+        .contact-link svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        /* --- Footer --- */
+        footer {
+            background: rgba(9, 9, 11, 0.95);
+            border-top: 1px solid var(--border-color);
+            padding: 3rem 5%;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        
+        .footer-content {
+            max-width: 900px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .footer-logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* --- Animations --- */
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeUpIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* --- Mobile Responsive --- */
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none; /* Hide standard links on mobile for simplicity */
+            }
+            .hero h1 {
+                font-size: 2.8rem;
+            }
+            .policy-section {
+                padding: 2rem 1.5rem;
+            }
+            .section-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            .section-number {
+                width: 35px;
+                height: 35px;
+                font-size: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navigation -->
+    <nav>
+        <a href="index.html" class="logo">Meethi Chaat</a>
+        <ul class="nav-links">
+            <li><a href="index.html">Home</a></li>
+            <li><a href="index.html#features">Features</a></li>
+            <li><a href="terms.html">Terms</a></li>
+            <li><a href="privacy.html" class="active">Privacy Policy</a></li>
+            <li><a href="contact.html">Contact</a></li>
+        </ul>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <h1>Privacy Policy</h1>
+        <p class="date">Effective Date: May 2, 2026</p>
+    </section>
+
+    <!-- Content Container -->
+    <main class="container">
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">1</div>
+                <h2>Introduction</h2>
+            </div>
+            <p>Welcome to <strong>Meethi Chaat</strong> ("we," "our," or "us"). We are committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use the Meethi Chaat mobile application (the "App").</p>
+            <p>By using the App, you agree to the collection and use of information in accordance with this policy.</p>
+        </section>
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">2</div>
+                <h2>Information We Collect</h2>
+            </div>
+
+            <h3>A. Microphone and Audio Data</h3>
+            <p>Because Meethi Chaat is a voice chat application, the App requires access to your device's microphone (<code>android.permission.RECORD_AUDIO</code>).</p>
+            <ul>
+                <li><strong>How we use it:</strong> We use the microphone strictly to enable real-time voice communication between users.</li>
+                <li><strong>Storage and Sharing:</strong> We <strong>do not</strong> record, store, or save your voice conversations on our servers. The audio data is processed in real-time to facilitate the voice chat and is handled securely by our real-time communication provider (Agora).</li>
+            </ul>
+
+            <h3>B. In-App Purchases and Billing</h3>
+            <p>The App allows users to make in-app purchases (<code>com.android.vending.BILLING</code>).</p>
+            <ul>
+                <li><strong>How we use it:</strong> All payments are processed securely through the Google Play Billing Library.</li>
+                <li><strong>Storage and Sharing:</strong> We do not collect or store your direct credit card information. We only receive purchase confirmation tokens to fulfill your in-app orders and manage premium features.</li>
+            </ul>
+
+            <h3>C. Automatically Collected Data</h3>
+            <p>When you use our App, we may automatically collect certain information, including:</p>
+            <ul>
+                <li>Device information (e.g., mobile device ID, model, and manufacturer)</li>
+                <li>Operating system and version</li>
+                <li>Network information to ensure stable voice call connectivity</li>
+                <li>App usage data and crash reports</li>
+            </ul>
+        </section>
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">3</div>
+                <h2>Third-Party Services</h2>
+            </div>
+            <p>We use third-party service providers to facilitate our App's core functionality. These providers have access to your personal information only to perform specific tasks on our behalf and are obligated not to disclose or use it for any other purpose:</p>
+            <ul>
+                <li><strong>Agora RTC:</strong> Used to process and transmit real-time audio data for voice chats.</li>
+                <li><strong>Google Play Services:</strong> Used for app distribution, billing, and core Android services.</li>
+                <li><strong>Firebase:</strong> Used for authentication, database management, and push notifications.</li>
+            </ul>
+        </section>
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">4</div>
+                <h2>How We Use Your Information</h2>
+            </div>
+            <p>We use the collected data for various purposes, including:</p>
+            <ul>
+                <li>To provide and maintain the App's voice chat functionality</li>
+                <li>To process in-app purchases and manage user accounts</li>
+                <li>To notify you about changes to our App or user interactions</li>
+                <li>To monitor the usage of the App and detect, prevent, and address technical issues</li>
+            </ul>
+        </section>
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">5</div>
+                <h2>Security of Your Data</h2>
+            </div>
+            <p>The security of your data is important to us. We strive to use commercially acceptable means to protect your personal information, but remember that no method of transmission over the internet or electronic storage is 100% secure.</p>
+        </section>
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">6</div>
+                <h2>Data Retention and Account Deletion</h2>
+            </div>
+            <p>We retain your personal data only for as long as is necessary for the purposes set out in this Privacy Policy.</p>
+            <br>
+            <p><strong>How to Request Account Deletion:</strong><br>You have the right to request the deletion of your account and any associated personal data.</p>
+            <ul>
+                <li><strong>In-App Deletion:</strong> You can delete your account directly within the App by navigating to Settings -> Account -> Delete Account.</li>
+                <li><strong>Email Request:</strong> Alternatively, you can request account deletion by emailing us at the contact email below with the subject line "Account Deletion Request". We will process your request within 30 days and completely remove your identifiable data from our Firebase database.</li>
+            </ul>
+            <p style="font-size: 0.95rem; color: #71717a; font-style: italic;">*Note: As stated in Section 2, audio conversations are never recorded or stored, so there are no voice logs to delete.*</p>
+        </section>
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">7</div>
+                <h2>Children's Privacy</h2>
+            </div>
+            <p>Our App is not intended for or targeted at children. We do not knowingly collect, solicit, or maintain personally identifiable information from anyone under the age of 13 (or under the age of 16 in certain European jurisdictions).</p>
+            <p>If you are under 13, please do not use this App or provide any personal information to us. If you are a parent or guardian and you are aware that your child has provided us with personal data without your consent, please contact us immediately. If we become aware that we have collected personal data from children without verification of parental consent, we will take immediate steps to remove that information from our servers.</p>
+        </section>
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">8</div>
+                <h2>Changes to This Policy</h2>
+            </div>
+            <p>We may update our Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page and updating the "Effective Date" at the top. You are advised to review this Privacy Policy periodically for any changes.</p>
+        </section>
+
+        <section class="policy-section">
+            <div class="section-header">
+                <div class="section-number">9</div>
+                <h2>Contact Us</h2>
+            </div>
+            <p>If you have any questions about this Privacy Policy or your data, please contact us at:</p>
+            <br>
+            <a href="mailto:support@mithichat.com" class="contact-link">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                support@mithichat.com
+            </a>
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-content">
+            <div class="footer-logo">Meethi Chaat</div>
+            <p>&copy; 2026 Meethi Chaat. All rights reserved.</p>
+        </div>
+    </footer>
+
+</body>
+</html>
