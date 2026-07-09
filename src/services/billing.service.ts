@@ -36,7 +36,7 @@ export class BillingService {
             }
 
             // 2. Idempotency Check: Is it already ended?
-            if ([CallStatus.ENDED, CallStatus.MISSED, CallStatus.REJECTED, CallStatus.CANCELLED, CallStatus.EXPIRED].includes(transaction.status)) {
+            if (transaction.status === CallStatus.ENDED || transaction.status === CallStatus.MISSED) {
                 await session.abortTransaction();
                 return {
                     success: true,
@@ -183,22 +183,7 @@ export class BillingService {
     static async processPulse(transactionId: string): Promise<boolean> {
         try {
             const now = new Date();
-            // Atomically update lastHeartbeat, transition status to CONNECTED, and set callStart if it doesn't exist
-            await CoinsTransaction.updateOne(
-                { 
-                    _id: transactionId,
-                    status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
-                },
-                [
-                    {
-                        $set: {
-                            status: CallStatus.CONNECTED,
-                            lastHeartbeat: now,
-                            callStart: { $ifNull: ["$callStart", now] }
-                        }
-                    }
-                ]
-            );
+            await CoinsTransaction.findByIdAndUpdate(transactionId, { lastHeartbeat: now });
             return true;
         } catch (e) {
             console.error("Pulse Failed:", e);

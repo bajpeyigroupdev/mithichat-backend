@@ -20,7 +20,7 @@ const coinsTransactionSchema = new Schema<ICoinsTransaction>(
     status: {
       type: String,
       enum: Object.values(CallStatus),
-      default: CallStatus.INITIATED,
+      default: CallStatus.PENDING,
     },
     lastHeartbeat: { type: Date },
     channelName: { type: String },

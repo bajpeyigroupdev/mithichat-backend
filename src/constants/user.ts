@@ -32,14 +32,9 @@ export enum TransactionType {
 }
 
 export enum CallStatus {
-  INITIATED = 'initiated',
-  RINGING = 'ringing',
-  ACCEPTED = 'accepted',
-  CONNECTING = 'connecting',
-  CONNECTED = 'connected',
-  ENDED = 'ended',
-  CANCELLED = 'cancelled',
-  MISSED = 'missed',
+  PENDING = 'pending',    // user ne call start kiya, host response pending
+  ONGOING = 'ongoing',    // host ne accept karke join kar liya
+  ENDED = 'ended',        // call ended
   REJECTED = 'rejected',
-  EXPIRED = 'expired',
+  MISSED = 'missed'  // host ne reject kar diya
 }
