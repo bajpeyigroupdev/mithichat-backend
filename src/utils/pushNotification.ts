@@ -51,6 +51,27 @@ export const sendPushNotification = async (
 
     const response = await admin.messaging().sendEachForMulticast(message);
 
+    if (response.failureCount > 0) {
+      const tokensToRemove: string[] = [];
+      response.responses.forEach((res, index) => {
+        if (!res.success && res.error) {
+          const code = res.error.code;
+          const msg = res.error.message || "";
+          if (code === 'messaging/registration-token-not-registered' ||
+              code === 'messaging/invalid-registration-token' ||
+              msg.includes('registration-token-not-registered') ||
+              msg.includes('invalid-registration-token')) {
+            tokensToRemove.push(deviceTokens[index]);
+          }
+        }
+      });
+      if (tokensToRemove.length > 0) {
+        console.log(`🧹 Removing invalid multicast FCM tokens from DB:`, tokensToRemove);
+        const { User } = require("../models/user.model");
+        await User.updateMany({ fcmToken: { $in: tokensToRemove } }, { $set: { fcmToken: "" } });
+      }
+    }
+
     return {
       success: true,
       successCount: response.successCount,
@@ -82,6 +103,27 @@ export const sendLoginRedirectNotification = async (
     };
 
     const response = await admin.messaging().sendEachForMulticast(message);
+
+    if (response.failureCount > 0) {
+      const tokensToRemove: string[] = [];
+      response.responses.forEach((res, index) => {
+        if (!res.success && res.error) {
+          const code = res.error.code;
+          const msg = res.error.message || "";
+          if (code === 'messaging/registration-token-not-registered' ||
+              code === 'messaging/invalid-registration-token' ||
+              msg.includes('registration-token-not-registered') ||
+              msg.includes('invalid-registration-token')) {
+            tokensToRemove.push(deviceTokens[index]);
+          }
+        }
+      });
+      if (tokensToRemove.length > 0) {
+        console.log(`🧹 Removing invalid multicast FCM tokens from DB (Login Redirect):`, tokensToRemove);
+        const { User } = require("../models/user.model");
+        await User.updateMany({ fcmToken: { $in: tokensToRemove } }, { $set: { fcmToken: "" } });
+      }
+    }
 
     return {
       success: true,
@@ -150,5 +192,13 @@ export const sendCallNotification = async (
     console.log(`Call notification sent to ${token}`);
   } catch (error: any) {
     console.error("sendCallNotification error:", error);
+    if (error.code === 'messaging/registration-token-not-registered' ||
+        error.code === 'messaging/invalid-registration-token' ||
+        error.message?.includes('registration-token-not-registered') ||
+        error.message?.includes('invalid-registration-token')) {
+      console.log(`🧹 FCM token is not registered or invalid. Removing from DB: ${token}`);
+      const { User } = require("../models/user.model");
+      await User.updateOne({ fcmToken: token }, { $set: { fcmToken: "" } });
+    }
   }
 };
