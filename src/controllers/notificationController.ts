@@ -84,3 +84,15 @@ export const markAllAsRead = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 500, false, error.message);
     }
 };
+
+// GET /system-messages
+export const getSystemMessages = async (req: AuthRequest, res: Response) => {
+    try {
+        const { id: userId } = req.user || {};
+        const messages = await Notification.find({ userId, type: 'system' }).sort({ createdAt: -1 });
+        return sendResponse(res, 200, true, "System messages fetched successfully", messages);
+    } catch (error: any) {
+        return sendResponse(res, 500, false, error.message);
+    }
+};
+

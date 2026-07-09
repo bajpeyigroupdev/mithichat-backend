@@ -9,9 +9,14 @@ import mongoSanitize from "express-mongo-sanitize";
 import errorHandler from "./middlewares/errorHnadler.middleware";
 import { connectDB } from "./utils/db";
 import { config } from "./configs/envConfig";
+import { checkPortAvailable } from "./utils/getAvailablePort";
 import { AuthRoutes, avatarRoute, callRoutes, chatRoutes, coinsPriceRoutes, frameRoute, hostRoutes, UserRoutes, adminRoutes, paymentRoutes, kycRoutes, withdrawalRoutes, giftRoutes, helpRoutes, UploadRoutes, notificationRoutes, upiRoutes, publicRoutes } from "./routes";
 import chatSocket from "./sockets";
 import path from "path";
+// Initialize Firebase Admin before routes are loaded
+import "./utils/pushNotification";
+import { verifyToken } from "./middlewares/authorize.middleware";
+import { getSystemMessages } from "./controllers/notificationController";
 
 const app: Application = express();
 
@@ -125,6 +130,8 @@ app.use("/api/upload", UploadRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/upi", upiRoutes);
 app.use("/api/public", publicRoutes);
+app.get("/api/system-messages", verifyToken, getSystemMessages);
+
 
 
 // Root Route
@@ -180,12 +187,19 @@ chatSocket(io);
 
 const startServer = async () => {
   try {
+    const port = Number(config.PORT || 3001);
+    const isAvailable = await checkPortAvailable(port);
+    if (!isAvailable) {
+      console.error(`❌ Port ${port} is already in use. Please check if another instance of MithiChat API is running.`);
+      process.exit(1);
+    }
     await connectDB(config.MONGO_URI!);
-    httpServer.listen(config.PORT, () => {
-      console.log(`🚀 Server running at http://localhost:${config.PORT}`);
+    httpServer.listen(port, () => {
+      console.log(`🚀 Server running at http://localhost:${port}`);
     });
   } catch (error) {
     console.error("Error starting the server:", error);
+    process.exit(1);
   }
 };
 

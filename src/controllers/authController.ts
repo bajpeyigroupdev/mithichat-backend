@@ -12,6 +12,7 @@ import { Logger } from "../utils/logger";
 import { generateSecureHash, verifySecureHash } from "../utils/passwordHelper";
 
 export const resetPassword = async (req: Request, res: Response) => {
+
   try {
     const { phoneNumber, newPassword } = req.body;
 
@@ -33,10 +34,22 @@ export const resetPassword = async (req: Request, res: Response) => {
     await user.save();
 
     return sendResponse(res, 200, true, "Password reset successfully");
-  } catch (error: any) {
-    await Logger("resetPassword", error);
-    return sendResponse(res, 500, false, error.message || "Internal Server Error");
-  }
+ } catch (error: any) {
+    console.log("========== GOOGLE AUTH ERROR ==========");
+    console.dir(error, { depth: null });
+
+    console.log("NAME:", error?.name);
+    console.log("MESSAGE:", error?.message);
+    console.log("CODE:", error?.code);
+    console.log("STACK:", error?.stack);
+
+    return sendResponse(
+      res,
+      500,
+      false,
+      error?.message || "Internal Server Error"
+    );
+}
 };
 
 export const checkPhoneAvailability = async (req: Request, res: Response, next: NextFunction) => {

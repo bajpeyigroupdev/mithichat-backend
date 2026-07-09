@@ -25,7 +25,7 @@ export const adminLogin = async (
         // Find admin user by email
         const admin = await User.findOne({
             email,
-            role: { $in: ['admin', 'superAdmin'] },
+            role: { $in: ['owner', 'admin', 'superAdmin'] },
             isDeleted: false
         }).select('+password');
         if (!admin) {

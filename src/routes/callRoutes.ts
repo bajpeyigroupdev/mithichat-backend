@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { verifyToken } from "../middlewares/authorize.middleware";
-import { endCall, getCallHistory, getHostLevels, getRanking, startCall, pulse } from "../controllers/callController";
+import { endCall, getCallHistory, getHostLevels, getRanking, startCall, pulse, getCallStatus } from "../controllers/callController";
 
 const router = Router();
 
@@ -12,6 +12,9 @@ router.post("/end", verifyToken, endCall);
 
 // ✅ Heartbeat Pulse
 router.post("/pulse", verifyToken, pulse);
+
+// ✅ Get Call Status Fallback
+router.get("/status/:transactionId", verifyToken, getCallStatus);
 
 // ✅ Get user call history
 router.get("/history", verifyToken, getCallHistory);

@@ -1,6 +1,8 @@
 export enum UserRole {
+  OWNER = "owner",
   SUPER_ADMIN = "superAdmin",
   ADMIN = "admin",
+  COIN_SELLER = "coinSeller",
   HOST = "host",
   USER = "user",
 }
@@ -30,9 +32,14 @@ export enum TransactionType {
 }
 
 export enum CallStatus {
-  PENDING = 'pending',    // user ne call start kiya, host response pending
-  ONGOING = 'ongoing',    // host ne accept karke join kar liya
-  ENDED = 'ended',        // call ended
+  INITIATED = 'initiated',
+  RINGING = 'ringing',
+  ACCEPTED = 'accepted',
+  CONNECTING = 'connecting',
+  CONNECTED = 'connected',
+  ENDED = 'ended',
+  CANCELLED = 'cancelled',
+  MISSED = 'missed',
   REJECTED = 'rejected',
-  MISSED = 'missed'  // host ne reject kar diya
+  EXPIRED = 'expired',
 }

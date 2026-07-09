@@ -28,3 +28,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+
+src/configs/serviceAccountKey.json

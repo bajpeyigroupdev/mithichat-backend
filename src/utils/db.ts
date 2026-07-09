@@ -13,7 +13,7 @@ export const connectDB = async (MONGO_URI: string) => {
       family: 4 // Use IPv4, skip trying IPv6
     });
     console.log("MongoDB Connected Successfully");
-    // initializeSuperAdmin()
+    initializeSuperAdmin();
     // Log connection events for monitoring
     mongoose.connection.on('error', (err) => {
       console.error('MongoDB connection error:', err);

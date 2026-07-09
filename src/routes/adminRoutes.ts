@@ -77,4 +77,86 @@ import { getPendingWithdrawals, processWithdrawal } from '../controllers/withdra
 router.get('/withdrawals/pending', verifyToken, getPendingWithdrawals);
 router.post('/withdrawals/process', verifyToken, processWithdrawal);
 
+// ============ Enterprise Management Panel Routes ============
+import {
+    getAllRooms,
+    createRoom,
+    toggleLockRoom,
+    deleteRoom,
+    kickUserFromRoom,
+    muteUserInRoom,
+    getAllBanners,
+    createBanner,
+    deleteBanner,
+    updateBannerPriority,
+    getAllAds,
+    createAd,
+    deleteAd,
+    updateAd,
+    getReferralStats,
+    getPromoCodes,
+    createPromoCode,
+    deletePromoCode,
+    getVipPlans,
+    createVipPlan,
+    deleteVipPlan,
+    getVipSubscribers,
+    getAllAgencies,
+    createAgency,
+    blockAgency,
+    assignHostToAgency,
+    getBlockedWords,
+    addBlockedWord,
+    deleteBlockedWord,
+    getAuditLogs,
+    getSystemLogs
+} from '../controllers/managementController';
+
+// Rooms Management
+router.get('/rooms', verifyToken, getAllRooms);
+router.post('/rooms', verifyToken, createRoom);
+router.delete('/rooms/:id', verifyToken, deleteRoom);
+router.patch('/rooms/:id/lock', verifyToken, toggleLockRoom);
+router.post('/rooms/:id/kick', verifyToken, kickUserFromRoom);
+router.post('/rooms/:id/mute', verifyToken, muteUserInRoom);
+
+// Banners Management
+router.get('/banners', verifyToken, getAllBanners);
+router.post('/banners', verifyToken, createBanner);
+router.delete('/banners/:id', verifyToken, deleteBanner);
+router.patch('/banners/:id', verifyToken, updateBannerPriority);
+
+// Ads Management
+router.get('/ads', verifyToken, getAllAds);
+router.post('/ads', verifyToken, createAd);
+router.delete('/ads/:id', verifyToken, deleteAd);
+router.patch('/ads/:id', verifyToken, updateAd);
+
+// Referrals & Promo Codes
+router.get('/referrals/stats', verifyToken, getReferralStats);
+router.get('/referrals/promo-codes', verifyToken, getPromoCodes);
+router.post('/referrals/promo-code', verifyToken, createPromoCode);
+router.delete('/referrals/promo-code/:id', verifyToken, deletePromoCode);
+
+// VIP Management
+router.get('/vip/plans', verifyToken, getVipPlans);
+router.post('/vip/plans', verifyToken, createVipPlan);
+router.delete('/vip/plans/:id', verifyToken, deleteVipPlan);
+router.get('/vip/subscribers', verifyToken, getVipSubscribers);
+
+// Agency Management
+router.get('/agencies', verifyToken, getAllAgencies);
+router.post('/agencies', verifyToken, createAgency);
+router.patch('/agencies/:id', verifyToken, blockAgency);
+router.post('/agencies/assign-host', verifyToken, assignHostToAgency);
+
+// Content Moderation
+router.get('/moderation/blocked-words', verifyToken, getBlockedWords);
+router.post('/moderation/blocked-words', verifyToken, addBlockedWord);
+router.delete('/moderation/blocked-words/:id', verifyToken, deleteBlockedWord);
+
+// Security & Logs
+router.get('/security/audit-logs', verifyToken, getAuditLogs);
+router.get('/security/system-logs', verifyToken, getSystemLogs);
+
 export default router;

@@ -305,9 +305,11 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       userId,
       hostId,
       type: TransactionType.VOICE_CALL,
-      status: CallStatus.PENDING,
+      status: CallStatus.INITIATED,
+      channelName,
       meta: {
         channelName,
+        appId: APP_ID,
         callerAgoraUid,
         hostAgoraUid,
         callerToken,
@@ -325,9 +327,14 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       callerName: name,
       callerId: userId,
       agora: {
+        appId: APP_ID,
+
         hostToken,
+
         hostAgoraUid,
+
         callerToken,
+
         callerAgoraUid,
       },
       maxMinutes,
@@ -335,10 +342,17 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       calleeImage: host.image,
     };
 
+    console.log(`[CALL_INITIATED] Timestamp: ${new Date().toISOString()} | UserID: ${userId} | HostID: ${hostId} | Channel: ${channelName} | TxID: ${transaction._id}`);
     console.log('📤 Emitting incomingCall to room:', hostRoom);
 
     // Broadcast to Host's Room
     io.to(hostRoom).emit("incomingCall", callPayload);
+
+    // Transition status to RINGING since socket/notification is dispatched
+    transaction.status = CallStatus.RINGING;
+    await transaction.save();
+
+    console.log(`[CALL_RINGING] Timestamp: ${new Date().toISOString()} | TxID: ${transaction._id} | Status: RINGING`);
 
     // 🔔 Send FCM Push to Host (VOIP Wake-up)
     // ONLY check if host is 'isActive' (Live)
@@ -768,5 +782,47 @@ export const pulse = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 200, true, "Pulse ack");
   } catch (error) {
     return sendResponse(res, 500, false, "Pulse failed");
+  }
+};
+
+// Get Call Status Fallback
+export const getCallStatus = async (req: AuthRequest, res: Response) => {
+  try {
+    const { transactionId } = req.params;
+    if (!transactionId) {
+      return sendResponse(res, 400, false, "Transaction ID required");
+    }
+
+    if (!Types.ObjectId.isValid(transactionId)) {
+      console.warn(`[CALL_STATUS_WARN] Invalid ObjectId format: ${transactionId}`);
+      return sendResponse(res, 400, false, "Invalid Transaction ID format");
+    }
+
+    const transaction = await CoinsTransaction.findById(transactionId);
+    if (!transaction) {
+      console.warn(`[CALL_STATUS_WARN] Call transaction not found in DB: ${transactionId}`);
+      return sendResponse(res, 404, false, "Transaction not found");
+    }
+
+    const meta = transaction.meta as any;
+    const channelName = transaction.channelName || meta?.channelName;
+
+    console.log(`[CALL_STATUS_CHECK] Timestamp: ${new Date().toISOString()} | TxID: ${transactionId} | Status: ${transaction.status} | Channel: ${channelName}`);
+
+    return sendResponse(res, 200, true, "Call status fetched successfully", {
+      status: transaction.status,
+      transactionId: transaction._id,
+      channelName,
+      agora: {
+        callerToken: meta?.callerToken,
+        callerAgoraUid: meta?.callerAgoraUid,
+        hostToken: meta?.hostToken,
+        hostAgoraUid: meta?.hostAgoraUid,
+        appId: meta?.appId || APP_ID, // Use fallback APP_ID if not saved in meta
+      },
+    });
+  } catch (error: any) {
+    console.error(`[CALL_STATUS_ERROR] Timestamp: ${new Date().toISOString()} | Error:`, error);
+    return sendResponse(res, 500, false, error.message || "Failed to fetch call status");
   }
 };

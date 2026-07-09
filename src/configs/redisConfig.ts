@@ -1,19 +1,17 @@
 import Redis from 'ioredis';
 import { config } from './envConfig';
 
-const redisConfig = {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-};
-
-const redis = new Redis(config.REDIS_URL, redisConfig);
+const redis = new Redis(config.REDIS_URL, {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
+});
 
 redis.on('connect', () => {
-    console.log('✅ Redis Connected');
+  console.log('Redis Connected');
 });
 
 redis.on('error', (err) => {
-    console.error('❌ Redis Connection Error:', err);
+  console.error('Redis Error:', err);
 });
 
 export default redis;
