@@ -127,7 +127,7 @@ const chatSocket = (io: Server) => {
 
             const txn = await CoinsTransaction.findByIdAndUpdate(
                 transactionId,
-                { status: CallStatus.ONGOING, callStart: new Date() },
+                { status: CallStatus.ACCEPTED, lastHeartbeat: new Date() },
                 { new: true }
             );
 
@@ -140,24 +140,80 @@ const chatSocket = (io: Server) => {
             socket.data.transactionId = transactionId;
 
             const meta = txn.meta as any;
-            const channelName = txn.channelName;
+            const channelName = txn.channelName || meta?.channelName;
 
             // Notify Caller (Target Room)
             io.to(getUserRoom(String(txn.userId))).emit("callAccepted", {
                 transactionId,
                 channelName,
-                agoraToken: meta.callerToken,
-                uid: meta.callerAgoraUid,
-                host: { hostAgoraUid: meta.hostAgoraUid },
+
+                agora: {
+                    callerToken: meta.callerToken,
+                    callerAgoraUid: meta.callerAgoraUid,
+
+                    hostToken: meta.hostToken,
+                    hostAgoraUid: meta.hostAgoraUid,
+
+                    appId: meta.appId,
+                },
             });
 
             // Confirm to Host
             socket.emit("acceptedBySystem", {
                 transactionId,
                 channelName,
-                agoraToken: meta.hostToken,
-                uid: meta.hostAgoraUid,
+
+                agora: {
+                    hostToken: meta.hostToken,
+                    hostAgoraUid: meta.hostAgoraUid,
+
+                    callerToken: meta.callerToken,
+                    callerAgoraUid: meta.callerAgoraUid,
+
+                    appId: meta.appId,
+                },
             });
+        });
+
+        socket.on("joinChannel", async ({ transactionId }: { transactionId: string }) => {
+            const callRoom = `call:${transactionId}`;
+            console.log(`👤 Socket ${socket.id} joining call room: ${callRoom}`);
+            socket.join(callRoom);
+
+            try {
+                const sockets = await io.in(callRoom).allSockets();
+                console.log(`📞 Room ${callRoom} size: ${sockets.size}`);
+
+                const txn = await CoinsTransaction.findById(transactionId);
+                if (txn) {
+                    if (sockets.size === 2) {
+                        // Both joined! Transition status to CONNECTED
+                        txn.status = CallStatus.CONNECTED;
+                        txn.callStart = txn.callStart || new Date();
+                        txn.lastHeartbeat = new Date();
+                        await txn.save();
+
+                        console.log(`🚀 Call ${transactionId} is now CONNECTED. Emitting callConnected to room.`);
+                        io.to(callRoom).emit("callConnected", {
+                            transactionId,
+                            callStart: txn.callStart,
+                        });
+                    } else if (txn.status === CallStatus.ACCEPTED) {
+                        // Only one joined. Transition status to CONNECTING
+                        txn.status = CallStatus.CONNECTING;
+                        await txn.save();
+                        console.log(`⏳ Call ${transactionId} status set to CONNECTING.`);
+                    }
+                }
+            } catch (err: any) {
+                console.error("❌ Error in joinChannel status update:", err.message);
+            }
+        });
+
+        socket.on("leaveChannel", async ({ transactionId }: { transactionId: string }) => {
+            const callRoom = `call:${transactionId}`;
+            console.log(`👤 Socket ${socket.id} leaving call room: ${callRoom}`);
+            socket.leave(callRoom);
         });
 
         socket.on("rejectCall", async ({ transactionId }) => {
@@ -182,7 +238,7 @@ const chatSocket = (io: Server) => {
 
             const txn = await CoinsTransaction.findByIdAndUpdate(
                 transactionId,
-                { status: "missed", callEnd: new Date() }, // Or CallStatus.MISSED
+                { status: CallStatus.MISSED, callEnd: new Date() }, // Or CallStatus.MISSED
                 { new: true }
             );
 
@@ -270,6 +326,7 @@ const handleEndCall = async (io: Server, transactionId: string) => {
             // Broadcast to Rooms
             io.to(getUserRoom(String(userId))).emit("callEnded", payload);
             io.to(getUserRoom(String(hostId))).emit("callEnded", payload);
+            io.to(`call:${transactionId}`).emit("callEnded", payload);
         } else {
             console.error(`❌ Call End Failed for ${transactionId}: ${result.message}`);
         }

@@ -31,9 +31,9 @@ export const startCallCleanupJob = () => {
             const fiveMinutesAgo = new Date(now.getTime() - 5 * 60000);
             const twoMinutesAgo = new Date(now.getTime() - 2 * 60000);
 
-            // 1. Fix Stuck PENDING Calls
+            // 1. Fix Stuck INITIATED/RINGING Calls
             const stuckPending = await CoinsTransaction.find({
-                status: CallStatus.PENDING,
+                status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
                 createdAt: { $lt: fiveMinutesAgo }
             });
 
@@ -46,16 +46,24 @@ export const startCallCleanupJob = () => {
 
                     // Release host
                     await User.findByIdAndUpdate(txn.hostId, { isBusy: false });
-                    console.log(`❌ Auto-closed Stuck PENDING: ${txn._id}`);
+                    console.log(`❌ Auto-closed Stuck INITIATED/RINGING: ${txn._id}`);
                 }
             }
 
-            // 2. Fix Zombie ONGOING Calls (No heartbeat)
+            // 2. Fix Zombie Calls (No heartbeat in active states)
             const zombies = await CoinsTransaction.find({
-                status: CallStatus.ONGOING,
-                lastHeartbeat: { $lt: twoMinutesAgo }, // Heart stopped beating
-                // Note: If lastHeartbeat is null (legacy calls), we might kill them if created > 2 mins ago? 
-                // Better safety:createdAt < twoMinutesAgo AND lastHeartbeat does not exist
+                status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
+                $or: [
+                    { lastHeartbeat: { $lt: twoMinutesAgo } },
+                    {
+                        lastHeartbeat: { $exists: false },
+                        createdAt: { $lt: twoMinutesAgo }
+                    },
+                    {
+                        lastHeartbeat: null,
+                        createdAt: { $lt: twoMinutesAgo }
+                    }
+                ]
             });
 
             if (zombies.length > 0) {
