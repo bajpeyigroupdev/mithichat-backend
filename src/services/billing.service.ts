@@ -16,7 +16,8 @@ export class BillingService {
      */
     static async processCallEnd(
         transactionId: string | Types.ObjectId,
-        callEndTime: Date = new Date()
+        callEndTime: Date = new Date(),
+        retryAttempt: number = 0
     ): Promise<{
         success: boolean;
         data?: any;
@@ -102,9 +103,9 @@ export class BillingService {
                 const userUpdate = await User.findOneAndUpdate(
                     {
                         _id: transaction.userId,
-                        coins: { $gte: coinsSpent },
+                        diamonds: { $gte: coinsSpent },
                     },
-                    { $inc: { coins: -coinsSpent } },
+                    { $inc: { diamonds: -coinsSpent } },
                     { session, new: true }
                 );
 
@@ -112,12 +113,12 @@ export class BillingService {
                     // RETRY STRATEGY: Partial Deduction
                     // If full amount failed, take whatever is left.
                     const user = await User.findById(transaction.userId).session(session);
-                    const availableCoins = user?.coins || 0;
+                    const availableCoins = user?.diamonds || 0;
 
                     if (availableCoins > 0) {
                         await User.findByIdAndUpdate(
                             transaction.userId,
-                            { $setOnInsert: { coins: 0 }, $inc: { coins: -availableCoins } },
+                            { $setOnInsert: { diamonds: 0 }, $inc: { diamonds: -availableCoins } },
                             { session }
                         );
 
@@ -134,11 +135,13 @@ export class BillingService {
                         transaction.coinsSpent = 0;
                         transaction.hostEarning = 0;
                     }
-                } else {
-                    // Normal Success - Add to Host
+                }
+
+                // Receiver earnings are always Coins, including partial payments.
+                if (transaction.hostEarning > 0) {
                     await User.findByIdAndUpdate(
                         transaction.hostId,
-                        { $inc: { coins: hostEarning } },
+                        { $inc: { coins: transaction.hostEarning } },
                         { session }
                     );
                 }
@@ -168,7 +171,16 @@ export class BillingService {
             };
 
         } catch (error: any) {
-            await session.abortTransaction();
+            if (session.inTransaction()) await session.abortTransaction();
+            const isTransient =
+                error?.errorLabels?.includes('TransientTransactionError') ||
+                [112, 251].includes(Number(error?.code)) ||
+                /WriteConflict|TransientTransactionError/i.test(error?.message || '');
+
+            if (isTransient && retryAttempt < 2) {
+                await new Promise(resolve => setTimeout(resolve, 80 * (retryAttempt + 1)));
+                return BillingService.processCallEnd(transactionId, callEndTime, retryAttempt + 1);
+            }
             console.error('Processing Call End Failed:', error);
             return {
                 success: false,

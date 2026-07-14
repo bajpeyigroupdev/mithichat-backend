@@ -42,7 +42,7 @@ export const getAllHostsService = async ({
   }
 
   let fields =
-    "userId name image isOnline audio audioPrice videoPrice language languages hobbies isActive";
+    "userId name image isOnline audio audioPrice videoPrice language languages hobbies isActive bio country role";
 
   // Role-based access
   switch (role) {

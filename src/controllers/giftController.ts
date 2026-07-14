@@ -7,6 +7,7 @@ import { User } from "../models/user.model";
 import { CoinsTransaction } from "../models/spentCoinModel";
 import { TransactionType, CallStatus } from "../constants/user";
 import mongoose from "mongoose";
+import { getIO, getUserRoom } from "../sockets";
 
 // Get All Gifts
 export const getAllGifts = async (req: AuthRequest, res: Response) => {
@@ -23,8 +24,10 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const { userId } = req.user || {};
-        let { giftId, receiverId, callId } = req.body;
+        // Use req.user.id (MongoDB _id) NOT req.user.userId (numeric custom ID like 330003)
+        const senderId = req.user?.id;
+        let { giftId, receiverId, callId, count } = req.body;
+        const qty = Math.max(1, parseInt(count as string) || 1);
 
         // Fallback: If no receiverId, find it from the active transaction (callId)
         if (!receiverId && callId) {
@@ -45,36 +48,56 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, "Gift not found");
         }
 
-        const sender = await User.findById(userId).session(session);
-        if (!sender || (sender.coins || 0) < gift.cost) {
+        const sender = await User.findById(senderId).session(session);
+        const totalCost = gift.cost * qty;
+        if (!sender || (sender.diamonds || 0) < totalCost) {
             await session.abortTransaction();
             return sendResponse(res, 400, false, "Insufficient coins");
         }
 
         // Deduct from Sender
-        sender.coins = (sender.coins || 0) - gift.cost; // Safely deduct
+        sender.diamonds = (sender.diamonds || 0) - totalCost;
         await sender.save({ session });
 
         // Add to Receiver
-        await User.findByIdAndUpdate(receiverId, { $inc: { coins: gift.cost } }, { session });
+        await User.findByIdAndUpdate(receiverId, { $inc: { coins: totalCost } }, { session });
 
         // Record Transaction
         await CoinsTransaction.create([{
             userId: sender._id,
             hostId: receiverId,
             type: TransactionType.GIFT_SENT || 'gift_sent', // Ensure enum has this or use string
-            coinsSpent: gift.cost,
-            hostEarning: gift.cost, // Host gets full value? Or split? assuming full for now
+            coinsSpent: totalCost,
+            hostEarning: totalCost, // Host gets full value? Or split? assuming full for now
             status: CallStatus.ENDED, // Immediate transaction
-            meta: { giftId: gift._id, giftName: gift.name, callId }
+            meta: { giftId: gift._id, giftName: gift.name, callId, count: qty }
         }], { session });
 
         await session.commitTransaction();
 
+        const giftPayload = {
+            callId: callId ? String(callId) : '',
+            senderId: String(sender._id),
+            receiverId: String(receiverId),
+            giftId: String(gift._id),
+            name: gift.name,
+            icon: gift.icon,
+            animationUrl: gift.animationUrl || '',
+            mediaType: gift.mediaType || 'image',
+            count: qty,
+            totalCost,
+        };
+
+        // Both call participants receive the same real-time payload. This
+        // keeps the animation synchronized on sender and receiver screens.
+        const io = getIO();
+        io.to(getUserRoom(String(receiverId))).emit('giftReceived', giftPayload);
+        io.to(getUserRoom(String(sender._id))).emit('giftReceived', giftPayload);
+
         return sendResponse(res, 200, true, "Gift sent successfully", {
-            newBalance: sender.coins,
+            newBalance: sender.diamonds,
             giftName: gift.name,
-            icon: gift.icon
+            ...giftPayload,
         });
 
     } catch (error: any) {
@@ -88,8 +111,8 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
 // Admin: Add Gift
 export const createGift = async (req: AuthRequest, res: Response) => {
     try {
-        const { name, icon, cost, category } = req.body;
-        const gift = await Gift.create({ name, icon, cost, category });
+        const { name, icon, animationUrl, mediaType, cost, category } = req.body;
+        const gift = await Gift.create({ name, icon, animationUrl, mediaType, cost, category });
         return sendResponse(res, 201, true, "Gift created", gift);
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);

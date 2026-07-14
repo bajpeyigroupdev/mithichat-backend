@@ -52,6 +52,44 @@ export const resetPassword = async (req: Request, res: Response) => {
 }
 };
 
+// ==================== FORGOT PASSWORD ====================
+export const forgotPassword = async (req: Request, res: Response) => {
+  try {
+    const rawPhone = req.body?.phoneNumber;
+
+    if (!rawPhone) {
+      return sendResponse(res, 400, false, "Phone number is required");
+    }
+
+    // Trim + normalize: remove all spaces
+    const phoneNumber = String(rawPhone).trim().replace(/\s+/g, "");
+
+    console.log(`[forgotPassword] Looking up phone: "${phoneNumber}"`);
+
+    // Query: match phoneNumber AND (isDeleted is false OR isDeleted field doesn't exist)
+    const user = await User.findOne({
+      phoneNumber,
+      $or: [{ isDeleted: false }, { isDeleted: { $exists: false } }],
+    });
+
+    console.log(`[forgotPassword] User found: ${user ? `userId=${user.userId}` : "NOT FOUND"}`);
+
+    if (!user) {
+      return sendResponse(res, 404, false, "No account found with this phone number. Please check and try again.");
+    }
+
+    if (user.isBlocked) {
+      return sendResponse(res, 403, false, "Your account is currently blocked. Please contact support.");
+    }
+
+    // Phone found — frontend will navigate to OTP screen
+    return sendResponse(res, 200, true, "Phone number verified. OTP sent successfully.");
+  } catch (error: any) {
+    await Logger("forgotPassword", error);
+    return sendResponse(res, 500, false, error.message || "Internal Server Error");
+  }
+};
+
 export const checkPhoneAvailability = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const phone = req.body?.phoneNumber?.trim();
@@ -97,7 +135,7 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
 // ==================== REGISTER ====================
 export const userRegister = async (req: AuthRequest, res: Response) => {
   try {
-    const { phoneNumber, password, gender, deviceId, userFrom, language } = req.body;
+    const { phoneNumber, password, gender, deviceId, userFrom, language, country } = req.body;
 
     if (!phoneNumber || !password || !gender) {
       return sendResponse(res, 400, false, "Phone number, password and gender are required");
@@ -145,6 +183,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       name,
       image,
       language,
+      country,
       authType: "phone",
       device: {
         createdDeviceId: deviceId || "",   // fixed at signup
@@ -293,7 +332,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
   const client = new OAuth2Client(config.GOOGLE_CLIENT_ID);
 
   try {
-    const { googleIdToken, deviceId, userFrom, gender, language } = req.body;
+    const { googleIdToken, deviceId, userFrom, gender, language, country } = req.body;
 
     if (!googleIdToken) return sendResponse(res, 400, false, "Google token required");
 
@@ -339,14 +378,34 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
     }
 
     // 2️⃣ New user → require gender & language
-    if (!gender || !language) {
-      return sendResponse(res, 400, false, "Gender and language required for signup");
+    if (!gender || !Array.isArray(language) || language.length < 2 || !country?.name) {
+      return sendResponse(res, 428, false, "Complete gender, country and 2 languages to create your account");
     }
 
     // Check duplicate email
     const existingEmailUser = await User.findOne({ email: googleUserInfo.email });
     if (existingEmailUser) {
-      return sendResponse(res, 409, false, "User with this email already exists");
+      if (!payload.email_verified) {
+        return sendResponse(res, 403, false, "Google email must be verified");
+      }
+      existingEmailUser.googleId = googleUserInfo.googleId;
+      existingEmailUser.device = existingEmailUser.device || { createdDeviceId: "", currentDeviceId: "", loggedInDeviceIds: [] };
+      if (!existingEmailUser.device.createdDeviceId) existingEmailUser.device.createdDeviceId = deviceId || '';
+      if (deviceId && !existingEmailUser.device.loggedInDeviceIds.includes(deviceId)) {
+        existingEmailUser.device.loggedInDeviceIds.push(deviceId);
+      }
+      existingEmailUser.device.currentDeviceId = deviceId || existingEmailUser.device.currentDeviceId;
+      const accessToken = await generateToken(existingEmailUser.userId.toString(), "access");
+      const refreshToken = await generateToken(existingEmailUser.userId.toString(), "refresh");
+      existingEmailUser.refreshToken = refreshToken;
+      await existingEmailUser.save();
+      return sendResponse(res, 200, true, "Google account linked successfully", {
+        accessToken,
+        refreshToken,
+        role: existingEmailUser.role,
+        gender: existingEmailUser.gender,
+        isAccount: true,
+      });
     }
     let image;
     switch (gender) {
@@ -373,6 +432,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       authType: "google",
       emailVerified: payload.email_verified || false,
       language,
+      country,
       device: userFrom === "app" ? { createdDeviceId: deviceId, currentDeviceId: deviceId, loggedInDeviceIds: [deviceId] } : {},
     });
 

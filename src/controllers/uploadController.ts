@@ -42,8 +42,12 @@ export const getUploadSignature = async (req: AuthRequest, res: Response) => {
             case 'hosts':
                 folderName = 'hosts';
                 break;
+            case 'banner':
+            case 'banners':
+                folderName = 'banners';
+                break;
             default:
-                return sendResponse(res, 400, false, `Invalid upload type: ${type}. Allowed: kyc, avatar, frame, help, chat, host`);
+                return sendResponse(res, 400, false, `Invalid upload type: ${type}. Allowed: kyc, avatar, frame, help, chat, host, banner`);
         }
 
         // Generate a unique public_id on the backend

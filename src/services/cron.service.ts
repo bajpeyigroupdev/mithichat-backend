@@ -5,6 +5,9 @@ import { User } from '../models/user.model';
 import { CallStatus } from '../constants/user';
 import { BillingService } from './billing.service';
 import { ChatQueueService } from './chatQueue.service';
+import { getIO, getUserRoom } from '../sockets';
+import { createNotification } from '../controllers/notificationController';
+import { sendMissedCallNotification } from '../utils/pushNotification';
 
 /**
  * Chat Persistent Worker (Runs every 1s)
@@ -22,10 +25,8 @@ export const startChatWorker = () => {
  * 2. ONGOING calls with no heartbeat for 2 minutes (Connection lost)
  */
 export const startCallCleanupJob = () => {
-    // Run every minute
-    cron.schedule('* * * * *', async () => {
-        console.log('🧹 Running Call Cleanup Janitor...');
-
+    // Run every five seconds so ringing calls respect the 40-second SLA.
+    cron.schedule('*/5 * * * * *', async () => {
         try {
             const now = new Date();
             const fiveMinutesAgo = new Date(now.getTime() - 5 * 60000);
@@ -34,7 +35,10 @@ export const startCallCleanupJob = () => {
             // 1. Fix Stuck INITIATED/RINGING Calls
             const stuckPending = await CoinsTransaction.find({
                 status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
-                createdAt: { $lt: fiveMinutesAgo }
+                $or: [
+                    { ringExpiresAt: { $lte: now } },
+                    { ringExpiresAt: { $exists: false }, createdAt: { $lt: fiveMinutesAgo } }
+                ]
             });
 
             if (stuckPending.length > 0) {
@@ -46,6 +50,33 @@ export const startCallCleanupJob = () => {
 
                     // Release host
                     await User.findByIdAndUpdate(txn.hostId, { isBusy: false });
+                    const payload = { transactionId: String(txn._id), reason: 'no_answer' };
+                    const io = getIO();
+                    io.to(getUserRoom(String(txn.userId))).emit('callEnded', payload);
+                    io.to(getUserRoom(String(txn.hostId))).emit('callEnded', payload);
+                    const [caller, host] = await Promise.all([
+                        User.findById(txn.userId).select('name image fcmToken').lean(),
+                        User.findById(txn.hostId).select('name image fcmToken').lean(),
+                    ]);
+                    await Promise.all([
+                        createNotification(
+                            String(txn.userId),
+                            'Missed call',
+                            `${host?.name || 'Host'} did not answer your call`,
+                            'call',
+                            { transactionId: String(txn._id), targetUserId: String(txn.hostId), targetName: host?.name, targetImage: host?.image }
+                        ),
+                        createNotification(
+                            String(txn.hostId),
+                            'Missed call',
+                            `You missed a call from ${caller?.name || 'User'}`,
+                            'call',
+                            { transactionId: String(txn._id), targetUserId: String(txn.userId), targetName: caller?.name, targetImage: caller?.image }
+                        ),
+                    ]);
+                    if (host?.fcmToken) {
+                        sendMissedCallNotification(host.fcmToken, caller?.name || 'User', caller?.image || '', String(txn.userId));
+                    }
                     console.log(`❌ Auto-closed Stuck INITIATED/RINGING: ${txn._id}`);
                 }
             }

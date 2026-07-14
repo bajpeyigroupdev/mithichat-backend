@@ -182,14 +182,14 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
       case "host":
         const host = await User.findOne({ userId })
-          .select("userId name email phoneNumber gender role bio image audio coins isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level")
+          .select("userId name email phoneNumber gender role bio image audio coins diamonds isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level")
           .lean();
         if (host && host.level === undefined) host.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user: host });
 
       case "user":
         const user = await User.findOne({ userId })
-          .select("userId name email gender phoneNumber role bio image coins isBlocked emailVerified phoneVerified language isUserName userName isActive level")
+          .select("userId name email gender phoneNumber role bio image coins diamonds isBlocked emailVerified phoneVerified language isUserName userName isActive level")
           .lean();
         if (user && user.level === undefined) user.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user });
@@ -886,3 +886,60 @@ export const getBlockedContacts = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 500, false, error.message);
   }
 };
+
+// 🔄 Exchange Coins to Diamonds
+const EXCHANGE_PACKAGES: Record<number, number> = {
+  1000: 900,
+  2000: 1800,
+  5000: 4500,
+  10000: 9000,
+  20000: 18000,
+  50000: 45000,
+  100000: 90000,
+  200000: 180000,
+  500000: 450000
+};
+
+export const exchangeCoinsToDiamonds = async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+    const { coins } = req.body;
+
+    if (!userId) return sendResponse(res, 401, false, "Unauthorized");
+    
+    const coinsNum = Number(coins);
+    if (isNaN(coinsNum) || coinsNum <= 0) {
+      return sendResponse(res, 400, false, "Invalid coins amount");
+    }
+
+    const diamondYield = EXCHANGE_PACKAGES[coinsNum];
+    if (!diamondYield) {
+      return sendResponse(res, 400, false, "Invalid exchange package");
+    }
+
+    const updatedUser = await User.findOneAndUpdate(
+      { userId, isDeleted: false, coins: { $gte: coinsNum } },
+      {
+        $inc: {
+          coins: -coinsNum,
+          diamonds: diamondYield
+        }
+      },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      const exists = await User.exists({ userId, isDeleted: false });
+      return sendResponse(res, exists ? 400 : 404, false, exists ? "Insufficient coins balance" : "User not found");
+    }
+
+    return sendResponse(res, 200, true, "Exchange successful", {
+      coins: updatedUser.coins,
+      diamonds: updatedUser.diamonds
+    });
+  } catch (error: any) {
+    console.error("❌ Exchange coins backend error:", error);
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+

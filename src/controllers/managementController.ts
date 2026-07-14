@@ -236,14 +236,19 @@ export const deleteBanner = async (req: Request, res: Response, next: NextFuncti
 export const updateBannerPriority = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
-        const { priority, isActive } = req.body;
+        const { title, imageUrl, linkUrl, priority, startDate, endDate, isActive } = req.body;
 
         const banner = await Banner.findById(id);
         if (!banner) {
             return sendResponse(res, 404, false, 'Banner not found');
         }
 
+        if (title !== undefined) banner.title = title;
+        if (imageUrl !== undefined) banner.imageUrl = imageUrl;
+        if (linkUrl !== undefined) banner.linkUrl = linkUrl;
         if (priority !== undefined) banner.priority = parseInt(priority);
+        if (startDate !== undefined) banner.startDate = startDate ? new Date(startDate) : undefined;
+        if (endDate !== undefined) banner.endDate = endDate ? new Date(endDate) : undefined;
         if (isActive !== undefined) banner.isActive = isActive;
 
         await banner.save();

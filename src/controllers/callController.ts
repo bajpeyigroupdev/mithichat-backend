@@ -209,29 +209,57 @@ const APP_CERTIFICATE = config.AGORA_APP_CERTIFICATE!;
 
 // FIXED startCall function
 export const startCall = async (req: AuthRequest, res: Response) => {
+  let reservedHostId: string | undefined;
   try {
-    const { hostId } = req.body || {};
-    const { id: userId, coins, name, image: callerImage } = req.user || {};
+    const { randomMatch = false } = req.body || {};
+    let hostId = req.body?.hostId as string | undefined;
+    const { id: userId, diamonds, name, image: callerImage } = req.user || {};
 
-    console.log('🔵 START CALL REQUEST:', { userId, hostId, coins });
+    console.log('🔵 START CALL REQUEST:', { userId, hostId, diamonds });
 
     const settings = await getCachedSettings();
     const CALL_RATE_PER_MINUTE = settings.callRatePerMinute || 100;
 
-    if (!userId || !hostId || coins == null) {
-      return sendResponse(res, 400, false, "all things required");
+    if (!userId || diamonds == null || (!hostId && !randomMatch)) {
+      return sendResponse(res, 400, false, "Required call details are missing");
     }
-    if (coins < CALL_RATE_PER_MINUTE) {
+    if (diamonds < CALL_RATE_PER_MINUTE) {
       return sendResponse(res, 400, false, "Insufficient balance to start a call");
     }
 
-    // Check if host exists
-    const host = await User.findById(hostId);
+    let host: any = null;
+    if (randomMatch) {
+      const candidates = await User.aggregate([
+        { $match: { _id: { $ne: new Types.ObjectId(userId) }, role: 'host', isDeleted: { $ne: true }, isActive: true, isBusy: false } },
+        { $sample: { size: 12 } },
+        { $project: { _id: 1 } },
+      ]);
+      for (const candidate of candidates) {
+        host = await User.findOneAndUpdate(
+          { _id: candidate._id, isActive: true, isBusy: false, isDeleted: { $ne: true } },
+          { $set: { isBusy: true } },
+          { new: true }
+        );
+        if (host) {
+          hostId = String(host._id);
+          reservedHostId = hostId;
+          break;
+        }
+      }
+      if (!host || !hostId) {
+        return sendResponse(res, 404, false, "No active host is available right now");
+      }
+    } else {
+      host = await User.findById(hostId);
+    }
     if (!host) {
       return sendResponse(res, 404, false, "Host not found");
     }
+    if (!hostId) {
+      return sendResponse(res, 404, false, "No host is available right now");
+    }
 
-    if (host.isBusy) {
+    if (!randomMatch && host.isBusy) {
       return sendResponse(res, 400, false, "Host busy, try again");
     }
 
@@ -262,8 +290,8 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     }
 
     // Set host as busy ATOMICALLY
-    const updatedHost = await User.findOneAndUpdate(
-      { _id: hostId, isBusy: false },
+    const updatedHost = randomMatch ? host : await User.findOneAndUpdate(
+      { _id: hostId, isBusy: false, isActive: true },
       { $set: { isBusy: true } },
       { new: true }
     );
@@ -273,7 +301,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "Host became busy, try again");
     }
 
-    const maxMinutes = Math.floor(coins / CALL_RATE_PER_MINUTE);
+    const maxMinutes = Math.floor(diamonds / CALL_RATE_PER_MINUTE);
     const expirationTimeInSeconds = maxMinutes * 60;
     const channelName = `call${Date.now()}${uuidv4().replace(/-/g, '').slice(0, 6)}`;
 
@@ -306,6 +334,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       hostId,
       type: TransactionType.VOICE_CALL,
       status: CallStatus.INITIATED,
+      ringExpiresAt: new Date(Date.now() + 40_000),
       channelName,
       meta: {
         channelName,
@@ -357,8 +386,8 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     // 🔔 Send FCM Push to Host (VOIP Wake-up)
     // ONLY check if host is 'isActive' (Live)
     const hostAny = host as any;
-    if (hostAny.fcmToken && hostAny.isActive) {
-      sendCallNotification(
+    if (hostAny.fcmToken) {
+      const pushResult = await sendCallNotification(
         hostAny.fcmToken,
         name || "Unknown User",
         callerImage || "",
@@ -376,7 +405,11 @@ export const startCall = async (req: AuthRequest, res: Response) => {
           })
         }
       );
+      console.log(`[CALL_PUSH] TxID: ${transaction._id} | Success: ${pushResult?.success === true} | Error: ${pushResult?.error || "none"}`);
+    } else {
+      console.warn(`[CALL_PUSH] TxID: ${transaction._id} | Host has no FCM token; socket delivery only`);
     }
+    reservedHostId = String(hostId);
 
     return sendResponse(res, 201, true, "Call started successfully", {
       transactionId: transaction._id,
@@ -389,12 +422,18 @@ export const startCall = async (req: AuthRequest, res: Response) => {
         hostToken,
         hostAgoraUid,
       },
+      matchedHost: {
+        id: String(host._id),
+        name: host.name || 'Host',
+        image: host.image || '',
+        gender: host.gender,
+      },
     });
 
   } catch (error: any) {
     console.error('❌ START CALL ERROR:', error);
-    if (req.body?.hostId) {
-      await User.findByIdAndUpdate(req.body.hostId, { $set: { isBusy: false } });
+    if (reservedHostId) {
+      await User.findByIdAndUpdate(reservedHostId, { $set: { isBusy: false } });
     }
     return sendResponse(res, 500, false, error.message || "Failed to start call");
   }
@@ -406,11 +445,27 @@ export const startCall = async (req: AuthRequest, res: Response) => {
 export const endCall = async (req: AuthRequest, res: Response) => {
   try {
     const { transactionId } = req.body || {};
+    const participantId = req.user?.id;
     if (!transactionId) {
       return sendResponse(res, 400, false, "Required field: transactionId");
     }
 
+    const transaction = await CoinsTransaction.findOne({
+      _id: transactionId,
+      $or: [{ userId: participantId }, { hostId: participantId }]
+    });
+    if (!transaction) {
+      return sendResponse(res, 404, false, "Call not found");
+    }
+
     const result = await BillingService.processCallEnd(transactionId);
+
+    if (result.success) {
+      const payload = { transactionId };
+      const io = getIO();
+      io.to(getUserRoom(String(transaction.userId))).emit("callEnded", payload);
+      io.to(getUserRoom(String(transaction.hostId))).emit("callEnded", payload);
+    }
 
     return sendResponse(
       res,
@@ -423,6 +478,103 @@ export const endCall = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     console.log('error : ', error);
     return sendResponse(res, 500, false, error.message || "Failed to end call");
+  }
+};
+
+export const acceptIncomingCall = async (req: AuthRequest, res: Response) => {
+  try {
+    const { transactionId } = req.body || {};
+    const hostId = req.user?.id;
+    if (!transactionId || !hostId) {
+      return sendResponse(res, 400, false, "transactionId is required");
+    }
+
+    const buildCallData = (record: any) => {
+      const meta = record?.meta as any;
+      return {
+        transactionId,
+        channelName: record?.channelName || meta?.channelName,
+        agora: {
+          callerToken: meta?.callerToken,
+          callerAgoraUid: meta?.callerAgoraUid,
+          hostToken: meta?.hostToken,
+          hostAgoraUid: meta?.hostAgoraUid,
+          appId: meta?.appId,
+        }
+      };
+    };
+
+    // Notification actions may be delivered once by the Android headless task
+    // and again when the Activity starts. Treat a repeated accept by the same
+    // host as success so the app can go straight to the ongoing call.
+    const alreadyAccepted = await CoinsTransaction.findOne({
+      _id: transactionId,
+      hostId,
+      status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
+    });
+    if (alreadyAccepted) {
+      return sendResponse(res, 200, true, "Call already accepted", buildCallData(alreadyAccepted));
+    }
+
+    const transaction = await CoinsTransaction.findOneAndUpdate(
+      {
+        _id: transactionId,
+        hostId,
+        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] }
+      },
+      { status: CallStatus.ACCEPTED, lastHeartbeat: new Date() },
+      { new: true }
+    );
+
+    if (!transaction) {
+      const racedAccept = await CoinsTransaction.findOne({
+        _id: transactionId,
+        hostId,
+        status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
+      });
+      if (racedAccept) {
+        return sendResponse(res, 200, true, "Call already accepted", buildCallData(racedAccept));
+      }
+      return sendResponse(res, 409, false, "Call is no longer available");
+    }
+
+    await User.findByIdAndUpdate(hostId, { $set: { isBusy: true } });
+    const callData = buildCallData(transaction);
+
+    getIO().to(getUserRoom(String(transaction.userId))).emit("callAccepted", callData);
+    return sendResponse(res, 200, true, "Call accepted", callData);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message || "Failed to accept call");
+  }
+};
+
+export const rejectIncomingCall = async (req: AuthRequest, res: Response) => {
+  try {
+    const { transactionId } = req.body || {};
+    const hostId = req.user?.id;
+    if (!transactionId || !hostId) {
+      return sendResponse(res, 400, false, "transactionId is required");
+    }
+
+    const transaction = await CoinsTransaction.findOneAndUpdate(
+      {
+        _id: transactionId,
+        hostId,
+        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] }
+      },
+      { status: CallStatus.REJECTED, callEnd: new Date() },
+      { new: true }
+    );
+
+    if (!transaction) {
+      return sendResponse(res, 409, false, "Call is no longer available");
+    }
+
+    await User.findByIdAndUpdate(hostId, { $set: { isBusy: false } });
+    getIO().to(getUserRoom(String(transaction.userId))).emit("callRejected", { transactionId });
+    return sendResponse(res, 200, true, "Call rejected");
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message || "Failed to reject call");
   }
 };
 

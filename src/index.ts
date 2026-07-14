@@ -76,6 +76,11 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
+app.use((req, res, next) => {
+  console.log(`📡 Incoming Request: ${req.method} ${req.url}`);
+  next();
+});
+
 // Security Middleware
 // 1. Helmet - Secure HTTP headers
 app.use(helmet({
@@ -194,7 +199,7 @@ const startServer = async () => {
       process.exit(1);
     }
     await connectDB(config.MONGO_URI!);
-    httpServer.listen(port, () => {
+    httpServer.listen(port, '0.0.0.0', () => {
       console.log(`🚀 Server running at http://localhost:${port}`);
     });
   } catch (error) {
@@ -205,6 +210,8 @@ const startServer = async () => {
 
 import { startCallCleanupJob, startChatWorker } from "./services/cron.service";
 
-startServer();
-startCallCleanupJob();
-startChatWorker();
+startServer().then(() => {
+  // Database-backed workers start only after MongoDB is ready.
+  startCallCleanupJob();
+  startChatWorker();
+});

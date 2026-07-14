@@ -17,6 +17,7 @@ import { Types } from "mongoose";
 import { User } from "../models/user.model";
 import { updateBalance } from "../services/coins.service";
 import { getCachedSettings } from "./settingsController";
+import { sendPushNotification } from '../utils/pushNotification';
 
 export const sendMessageController = async (req: AuthRequest, res: Response) => {
   try {
@@ -34,7 +35,7 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
       const settings = await getCachedSettings();
       const MESSAGE_COST = settings.chatMessageCost || 10; // Dynamic config cost
 
-      if (!dbUser || (dbUser.coins || 0) < MESSAGE_COST) {
+      if (!dbUser || (dbUser.diamonds || 0) < MESSAGE_COST) {
         return sendResponse(res, 400, false, "Insufficient balance to send message");
       }
 
@@ -65,6 +66,23 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
       conversationId: conversationId || "pending",
       message: mockMessage,
     });
+
+    User.findById(receiverId).select('fcmToken').lean().then(async receiver => {
+      if (!receiver?.fcmToken) return;
+      const sender = await User.findById(userId).select('name image').lean();
+      await sendPushNotification([receiver.fcmToken], {
+        title: sender?.name || 'New message',
+        body: content.length > 90 ? `${content.slice(0, 87)}...` : content,
+        data: {
+          type: 'message',
+          action: 'open_chat',
+          conversationId: String(conversationId || 'pending'),
+          senderId: String(userId),
+          senderName: sender?.name || 'User',
+          senderImage: sender?.image || '',
+        },
+      });
+    }).catch(error => console.error('Message push failed:', error.message));
 
     return sendResponse(res, 201, true, "Message queued", {
       message: mockMessage,

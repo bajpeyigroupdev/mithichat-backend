@@ -18,6 +18,7 @@ export interface UserInterface extends Document {
   role?: UserRole;
   authType?: AuthType;
   coins?: number;
+  diamonds?: number;
   image?: string;
   createdBy?: Types.ObjectId;
   isDeleted?: boolean;
@@ -31,6 +32,7 @@ export interface UserInterface extends Document {
   };
   googleId?: string;
   language?: string[];
+  country?: { name?: string; code?: string; flag?: string };
   frameId?: string;
   refreshToken?: string;
   audio?: string;

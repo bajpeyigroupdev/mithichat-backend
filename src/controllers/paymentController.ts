@@ -43,11 +43,11 @@ const verifyGoogleReceipt = async (purchaseToken: string, productId: string, pac
 export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
     try {
         const { userId } = req.user || {};
-        const { purchaseToken, productId, coins, packageName } = req.body;
+        const { purchaseToken, productId, diamonds, packageName } = req.body;
 
         const effectivePackageName = packageName || "com.umang.app"; // Fallback or env var
 
-        if (!userId || !purchaseToken || !productId || !coins) {
+        if (!userId || !purchaseToken || !productId || !diamonds) {
             return sendResponse(res, 400, false, "Missing required fields");
         }
 
@@ -70,21 +70,21 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, "User not found");
         }
 
-        user.coins = (user.coins || 0) + Number(coins);
+        user.diamonds = (user.diamonds || 0) + Number(diamonds);
         await user.save();
 
         // 4. Create History Record
         await RechargeHistory.create({
             userId,
             type: RechargeType.GOOGLE_PLAY,
-            coins: Number(coins),
+            coins: Number(diamonds), // legacy history column; represents purchased diamonds
             date: new Date(),
             sellerId: undefined,
             transactionId: purchaseToken, // Store token to prevent duplicates
         });
 
-        return sendResponse(res, 200, true, "Purchase verified and coins added", {
-            newBalance: user.coins
+        return sendResponse(res, 200, true, "Purchase verified and diamonds added", {
+            newBalance: user.diamonds
         });
 
     } catch (error: any) {

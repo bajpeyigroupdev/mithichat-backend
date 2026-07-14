@@ -6,6 +6,7 @@ export interface INotification extends Document {
     message: string;
     type: 'system' | 'promo' | 'transaction' | 'call';
     isRead: boolean;
+    data?: Record<string, unknown>;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -21,6 +22,7 @@ const notificationSchema = new Schema<INotification>(
             default: 'system',
         },
         isRead: { type: Boolean, default: false },
+        data: { type: Schema.Types.Mixed, default: {} },
     },
     { timestamps: true }
 );
