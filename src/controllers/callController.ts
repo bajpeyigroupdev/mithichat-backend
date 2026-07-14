@@ -426,6 +426,90 @@ export const endCall = async (req: AuthRequest, res: Response) => {
   }
 };
 
+const buildAcceptedCallData = (transactionId: string, record: any) => {
+  const meta = record?.meta as any;
+  return {
+    transactionId,
+    channelName: record?.channelName || meta?.channelName,
+    agora: {
+      callerToken: meta?.callerToken,
+      callerAgoraUid: meta?.callerAgoraUid,
+      hostToken: meta?.hostToken,
+      hostAgoraUid: meta?.hostAgoraUid,
+      appId: meta?.appId,
+    },
+  };
+};
+
+export const acceptIncomingCall = async (req: AuthRequest, res: Response) => {
+  try {
+    const { transactionId } = req.body || {};
+    const hostId = req.user?.id;
+    if (!transactionId || !hostId) {
+      return sendResponse(res, 400, false, 'transactionId is required');
+    }
+
+    let transaction = await CoinsTransaction.findOne({
+      _id: transactionId,
+      hostId,
+      status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
+    });
+
+    if (!transaction) {
+      transaction = await CoinsTransaction.findOneAndUpdate(
+        {
+          _id: transactionId,
+          hostId,
+          status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
+        },
+        { status: CallStatus.ACCEPTED, lastHeartbeat: new Date() },
+        { new: true },
+      );
+    }
+
+    if (!transaction) {
+      return sendResponse(res, 409, false, 'Call is no longer available');
+    }
+
+    await User.findByIdAndUpdate(hostId, { $set: { isBusy: true } });
+    const callData = buildAcceptedCallData(transactionId, transaction);
+    getIO().to(getUserRoom(String(transaction.userId))).emit('callAccepted', callData);
+    return sendResponse(res, 200, true, 'Call accepted', callData);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message || 'Failed to accept call');
+  }
+};
+
+export const rejectIncomingCall = async (req: AuthRequest, res: Response) => {
+  try {
+    const { transactionId } = req.body || {};
+    const hostId = req.user?.id;
+    if (!transactionId || !hostId) {
+      return sendResponse(res, 400, false, 'transactionId is required');
+    }
+
+    const transaction = await CoinsTransaction.findOneAndUpdate(
+      {
+        _id: transactionId,
+        hostId,
+        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
+      },
+      { status: CallStatus.REJECTED, callEnd: new Date() },
+      { new: true },
+    );
+
+    if (!transaction) {
+      return sendResponse(res, 409, false, 'Call is no longer available');
+    }
+
+    await User.findByIdAndUpdate(hostId, { $set: { isBusy: false } });
+    getIO().to(getUserRoom(String(transaction.userId))).emit('callRejected', { transactionId });
+    return sendResponse(res, 200, true, 'Call rejected');
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message || 'Failed to reject call');
+  }
+};
+
 
 export const getCallHistory = async (req: AuthRequest, res: Response) => {
   try {
