@@ -20,6 +20,7 @@ import {
   getBlockedContacts,
   getCoinHistory,
   exchangeCoinsToDiamonds,
+  requestDeletion,
 } from "../controllers/userController";
 
 import { verifyToken } from "../middlewares/authorize.middleware";
@@ -76,6 +77,9 @@ router.patch("/:userId", validationUpdateUserLimited, requestValidator, verifyTo
 
 // delete user by id
 router.delete("/:userId", verifyToken, deleteUser);
+
+// request account deletion
+router.post("/request-deletion", verifyToken, requestDeletion);
 
 // block user by id (only superAdmin/admin)
 router.patch("/block/:userId", verifyToken, blockUser);

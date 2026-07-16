@@ -8,6 +8,7 @@ export interface IRechargeHistory extends Document {
   sellerId?: number;                     // Seller (if offline)
   type: RechargeType;                    // Recharge type
   coins: number;                         // Coins recharged
+  diamonds?: number;                     // Diamonds recharged
   date: Date;                             // Recharge date
   transactionId?: string;                 // Google/Apple Transaction ID
 }
@@ -21,7 +22,8 @@ const rechargeHistorySchema = new Schema<IRechargeHistory>(
       enum: Object.values(RechargeType),
       required: true,
     },
-    coins: { type: Number, required: true },
+    coins: { type: Number, default: 0 },
+    diamonds: { type: Number, default: 0 },
     date: { type: Date, default: Date.now },
     transactionId: { type: String, unique: true, sparse: true }, // Sparse: allowed to be null/missing
   },

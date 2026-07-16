@@ -14,6 +14,8 @@ import { getIO } from '../sockets';
 import sendResponse from '../utils/reponse';
 import AppError from '../utils/errorHandler';
 import dayjs from 'dayjs';
+import HelpRequest from '../models/help.model';
+import DeletionRequest from '../models/deletionRequest.model';
 
 // Helper to log administrative actions
 const logAudit = async (req: Request, action: string, target: string, details: string) => {
@@ -639,5 +641,102 @@ export const getSystemLogs = async (req: Request, res: Response, next: NextFunct
         return sendResponse(res, 200, true, 'System logs fetched successfully', mockLogs);
     } catch (error: any) {
         next(new AppError(error.message || 'Error fetching system logs', 500));
+    }
+};
+
+export const getHelpTickets = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { search = '', status = '' } = req.query;
+        const query: any = {};
+        if (status) {
+            query.status = status;
+        }
+        if (search) {
+            query.$or = [
+                { reason: { $regex: search, $options: 'i' } },
+                { message: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const tickets = await HelpRequest.find(query).sort({ createdAt: -1 });
+        return sendResponse(res, 200, true, 'Help tickets fetched successfully', tickets);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error fetching help tickets', 500));
+    }
+};
+
+export const replyHelpTicket = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const { reply } = req.body;
+        if (!reply) {
+            return sendResponse(res, 400, false, 'Reply text is required');
+        }
+
+        const ticket = await HelpRequest.findByIdAndUpdate(
+            id,
+            { adminReply: reply, status: 'resolved' },
+            { new: true }
+        );
+
+        if (!ticket) {
+            return sendResponse(res, 404, false, 'Help ticket not found');
+        }
+
+        await logAudit(req, 'REPLY_HELP_TICKET', String(ticket._id), `Reply: ${reply}`);
+        return sendResponse(res, 200, true, 'Help ticket resolved successfully', ticket);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error replying to help ticket', 500));
+    }
+};
+
+export const getDeletionRequests = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const requests = await DeletionRequest.find().sort({ createdAt: -1 });
+        return sendResponse(res, 200, true, 'Deletion requests fetched successfully', requests);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error fetching deletion requests', 500));
+    }
+};
+
+export const processDeletionRequest = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const { action } = req.body; // 'approve' | 'reject'
+        if (!['approve', 'reject'].includes(action)) {
+            return sendResponse(res, 400, false, 'Action must be approve or reject');
+        }
+
+        const delReq = await DeletionRequest.findById(id);
+        if (!delReq) {
+            return sendResponse(res, 404, false, 'Deletion request not found');
+        }
+
+        if (action === 'approve') {
+            delReq.status = 'approved';
+            await delReq.save();
+
+            // Find user and soft-delete them
+            const user = await User.findById(delReq.userId);
+            if (user) {
+                const suffix = `_deleted_${Date.now()}`;
+                if (user.phoneNumber) user.phoneNumber = user.phoneNumber + suffix;
+                if (user.email) user.email = user.email + suffix;
+                if (user.userName) user.userName = user.userName + suffix;
+                user.isDeleted = true;
+                await user.save();
+            }
+
+            await logAudit(req, 'APPROVE_DELETION', String(delReq.userId), `Approved deletion request ID: ${id}`);
+            return sendResponse(res, 200, true, 'User deletion approved and soft deleted successfully');
+        } else {
+            delReq.status = 'rejected';
+            await delReq.save();
+
+            await logAudit(req, 'REJECT_DELETION', String(delReq.userId), `Rejected deletion request ID: ${id}`);
+            return sendResponse(res, 200, true, 'User deletion request rejected successfully');
+        }
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error processing deletion request', 500));
     }
 };

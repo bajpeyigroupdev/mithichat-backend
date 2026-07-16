@@ -154,11 +154,11 @@ export const addCoinsToUser = async (req: AuthRequest, res: Response) => {
         }
 
         if (!userId || !coins) {
-            return sendResponse(res, 400, false, "UserId and coins are required");
+            return sendResponse(res, 400, false, "Coins and UserId are required");
         }
 
-        const coinsToAdd = Number(coins);
-        if (isNaN(coinsToAdd) || coinsToAdd <= 0) {
+        const amountToAdd = Number(coins);
+        if (isNaN(amountToAdd) || amountToAdd <= 0) {
             return sendResponse(res, 400, false, "Invalid coins amount");
         }
 
@@ -168,25 +168,75 @@ export const addCoinsToUser = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, "User not found");
         }
 
-        // Update user coins
-        user.coins = (user.coins || 0) + coinsToAdd;
+        user.coins = (user.coins || 0) + amountToAdd;
         await user.save();
 
         // Create recharge history
         await RechargeHistory.create({
             userId: user.userId,
             type: RechargeType.OFFLINE,
-            coins: coinsToAdd,
+            coins: amountToAdd,
+            diamonds: 0,
             date: new Date(),
             sellerId: req.user?.userId
         });
 
         return sendResponse(res, 200, true, "Coins added successfully", {
-            currentCoins: user.coins
+            currentCoins: user.coins,
+            currentDiamonds: user.diamonds
         });
 
     } catch (error: any) {
         await Logger("addCoinsToUser", error);
+        return sendResponse(res, 500, false, error.message);
+    }
+};
+
+// admin add diamonds in user account
+export const addDiamondsToUser = async (req: AuthRequest, res: Response) => {
+    try {
+        const { userId, diamonds } = req.body;
+        const { role } = req.user || {};
+
+        if (role !== "superAdmin" && role !== "admin") {
+            return sendResponse(res, 403, false, "Access Denied");
+        }
+
+        if (!userId || !diamonds) {
+            return sendResponse(res, 400, false, "Diamonds and UserId are required");
+        }
+
+        const amountToAdd = Number(diamonds);
+        if (isNaN(amountToAdd) || amountToAdd <= 0) {
+            return sendResponse(res, 400, false, "Invalid diamonds amount");
+        }
+
+        const user = await User.findOne({ userId });
+
+        if (!user) {
+            return sendResponse(res, 404, false, "User not found");
+        }
+
+        user.diamonds = (user.diamonds || 0) + amountToAdd;
+        await user.save();
+
+        // Create recharge history
+        await RechargeHistory.create({
+            userId: user.userId,
+            type: RechargeType.OFFLINE,
+            coins: 0,
+            diamonds: amountToAdd,
+            date: new Date(),
+            sellerId: req.user?.userId
+        });
+
+        return sendResponse(res, 200, true, "Diamonds added successfully", {
+            currentCoins: user.coins,
+            currentDiamonds: user.diamonds
+        });
+
+    } catch (error: any) {
+        await Logger("addDiamondsToUser", error);
         return sendResponse(res, 500, false, error.message);
     }
 };

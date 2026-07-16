@@ -16,6 +16,7 @@ import { getAllHostsService, invalidateHostCache } from "../services/user.servic
 import { getIO } from "../sockets";
 import { Gender } from "../constants/user";
 import HelpRequest from "../models/help.model";
+import DeletionRequest from "../models/deletionRequest.model";
 import { deleteImageFromCloudinary } from "../utils/cloudinary";
 
 // set user name by authorized users
@@ -403,7 +404,17 @@ export const deleteUser = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, "User not found");
     }
 
-    // ✅ Soft delete by setting isDeleted = true
+    // ✅ Soft delete by setting isDeleted = true and freeing unique keys
+    const suffix = `_deleted_${Date.now()}`;
+    if (userToDelete.phoneNumber) {
+      userToDelete.phoneNumber = userToDelete.phoneNumber + suffix;
+    }
+    if (userToDelete.email) {
+      userToDelete.email = userToDelete.email + suffix;
+    }
+    if (userToDelete.userName) {
+      userToDelete.userName = userToDelete.userName + suffix;
+    }
     userToDelete.isDeleted = true;
     await userToDelete.save();
 
@@ -940,6 +951,59 @@ export const exchangeCoinsToDiamonds = async (req: AuthRequest, res: Response) =
   } catch (error: any) {
     console.error("❌ Exchange coins backend error:", error);
     return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const getMyHelpRequests = async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+    if (!userId) {
+      return sendResponse(res, 401, false, "Unauthorized");
+    }
+
+    const helpRequests = await HelpRequest.find({ userId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return sendResponse(res, 200, true, "Help requests fetched successfully", helpRequests);
+  } catch (error: any) {
+    console.error("❌ Get my help requests backend error:", error);
+    return sendResponse(res, 500, false, error.message || "Failed to fetch help requests");
+  }
+};
+
+export const requestDeletion = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id: requesterObjectId } = req.user || {};
+    const { reason } = req.body;
+
+    if (!requesterObjectId) {
+      return sendResponse(res, 401, false, "Unauthorized");
+    }
+
+    if (!reason || !reason.trim()) {
+      return sendResponse(res, 400, false, "Reason for deletion is required");
+    }
+
+    const userDoc = await User.findById(requesterObjectId);
+    if (!userDoc) {
+      return sendResponse(res, 404, false, "User not found");
+    }
+
+    const request = await DeletionRequest.create({
+      userId: requesterObjectId,
+      meethiId: String(userDoc.userId),
+      name: userDoc.name || "User",
+      role: userDoc.role || "user",
+      phoneNumber: userDoc.phoneNumber || "",
+      reason,
+      status: "pending"
+    });
+
+    return sendResponse(res, 201, true, "Deletion request submitted successfully", request);
+  } catch (error: any) {
+    await Logger("requestDeletion", error);
+    return sendResponse(res, 500, false, error.message || "Failed to request deletion");
   }
 };
 

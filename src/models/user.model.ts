@@ -56,7 +56,7 @@ const userSchema = new Schema<UserInterface>(
     isActive: { type: Boolean, default: false },
     isBusy: { type: Boolean, default: false },
     meethiId: { type: String, default: "" },
-    level: { type: Number, default: 6 }
+    level: { type: Number, default: 1 }
   },
   {
     timestamps: true,

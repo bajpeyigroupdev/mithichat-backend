@@ -6,6 +6,7 @@ import {
     getAdminProfile,
     updateAdminProfile,
     addCoinsToUser,
+    addDiamondsToUser,
 } from '../controllers/adminAuthController';
 import {
     getDashboardStats,
@@ -29,6 +30,7 @@ router.post('/logout', verifyToken, adminLogout);
 router.get('/profile', verifyToken, getAdminProfile);
 router.patch('/profile', verifyToken, updateAdminProfile);
 router.post('/users/add-coins', verifyToken, addCoinsToUser);
+router.post('/users/add-diamonds', verifyToken, addDiamondsToUser);
 
 import { createAgencyAdmin, getAllAdmins, toggleBlockAdmin } from '../controllers/adminAuthController';
 // SuperAdmin Only: Manage Agency Admins
@@ -109,7 +111,11 @@ import {
     addBlockedWord,
     deleteBlockedWord,
     getAuditLogs,
-    getSystemLogs
+    getSystemLogs,
+    getHelpTickets,
+    replyHelpTicket,
+    getDeletionRequests,
+    processDeletionRequest
 } from '../controllers/managementController';
 
 // Rooms Management
@@ -158,5 +164,13 @@ router.delete('/moderation/blocked-words/:id', verifyToken, deleteBlockedWord);
 // Security & Logs
 router.get('/security/audit-logs', verifyToken, getAuditLogs);
 router.get('/security/system-logs', verifyToken, getSystemLogs);
+
+// Help Desk Support
+router.get('/help', verifyToken, getHelpTickets);
+router.patch('/help/:id/reply', verifyToken, replyHelpTicket);
+
+// User Deletion Approval Management
+router.get('/deletion-requests', verifyToken, getDeletionRequests);
+router.post('/deletion-requests/:id/process', verifyToken, processDeletionRequest);
 
 export default router;
