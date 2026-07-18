@@ -10,6 +10,44 @@ import { generateRandomName, generateToken, generateUniqueId } from "../utils/ge
 import { OAuth2Client } from 'google-auth-library';
 import { Logger } from "../utils/logger";
 import { generateSecureHash, verifySecureHash } from "../utils/passwordHelper";
+import { sendPhoneOtp, verifyPhoneOtp } from "../utils/smsOtp";
+
+// ==================== SEND PHONE OTP ====================
+export const sendOtpToPhone = async (req: Request, res: Response) => {
+  try {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber) {
+      return sendResponse(res, 400, false, "Phone number is required");
+    }
+    const result = await sendPhoneOtp(phoneNumber);
+    if (!result.success) {
+      return sendResponse(res, 500, false, result.message);
+    }
+    return sendResponse(res, 200, true, result.message);
+  } catch (error: any) {
+    await Logger("sendOtpToPhone", error);
+    return sendResponse(res, 500, false, error.message || "Internal Server Error");
+  }
+};
+
+// ==================== VERIFY PHONE OTP ====================
+export const verifyOtpFromPhone = async (req: Request, res: Response) => {
+  try {
+    const { phoneNumber, otp } = req.body;
+    if (!phoneNumber || !otp) {
+      return sendResponse(res, 400, false, "Phone number and OTP are required");
+    }
+    const result = await verifyPhoneOtp(phoneNumber, otp);
+    if (!result.success) {
+      return sendResponse(res, 400, false, result.message);
+    }
+    return sendResponse(res, 200, true, result.message);
+  } catch (error: any) {
+    await Logger("verifyOtpFromPhone", error);
+    return sendResponse(res, 500, false, error.message || "Internal Server Error");
+  }
+};
+
 
 export const resetPassword = async (req: Request, res: Response) => {
 
@@ -35,14 +73,8 @@ export const resetPassword = async (req: Request, res: Response) => {
 
     return sendResponse(res, 200, true, "Password reset successfully");
  } catch (error: any) {
-    console.log("========== GOOGLE AUTH ERROR ==========");
-    console.dir(error, { depth: null });
-
-    console.log("NAME:", error?.name);
-    console.log("MESSAGE:", error?.message);
-    console.log("CODE:", error?.code);
-    console.log("STACK:", error?.stack);
-
+    // BUG-08 FIX: Removed copy-paste "GOOGLE AUTH ERROR" label (this is resetPassword, not Google auth)
+    console.error("resetPassword error:", error?.message);
     return sendResponse(
       res,
       500,

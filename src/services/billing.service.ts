@@ -118,7 +118,7 @@ export class BillingService {
                     if (availableCoins > 0) {
                         await User.findByIdAndUpdate(
                             transaction.userId,
-                            { $setOnInsert: { diamonds: 0 }, $inc: { diamonds: -availableCoins } },
+                            { $inc: { diamonds: -availableCoins } },
                             { session }
                         );
 
@@ -171,6 +171,8 @@ export class BillingService {
             };
 
         } catch (error: any) {
+            // BUG-05 FIX: Check inTransaction() before aborting — calling abort on an already-aborted
+            // session throws and overwrites the original error, making debugging impossible
             if (session.inTransaction()) await session.abortTransaction();
             const isTransient =
                 error?.errorLabels?.includes('TransientTransactionError') ||

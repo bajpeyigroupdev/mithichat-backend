@@ -312,19 +312,23 @@ const chatSocket = (io: Server) => {
 };
 
 // -------------------- 🔑 Common Call End Logic --------------------
+// BUG-01 FIX: Fetch userId/hostId BEFORE processCallEnd commits the transaction,
+// so we are guaranteed to have the data for socket emission — no second DB read needed.
 const handleEndCall = async (io: Server, transactionId: string) => {
     try {
+        // Fetch participant IDs before billing so they are always available for routing
+        const txRef = await CoinsTransaction.findById(transactionId).select('userId hostId').lean() as any;
+
         const result = await BillingService.processCallEnd(transactionId);
 
-        if (result.success && result.data) {
+        if (result.success) {
+            const payload = result.data ?? { transactionId };
 
-            const { userId, hostId } = await CoinsTransaction.findById(transactionId).select('userId hostId').lean() as any;
-
-            const payload = result.data;
-
-            // Broadcast to Rooms
-            io.to(getUserRoom(String(userId))).emit("callEnded", payload);
-            io.to(getUserRoom(String(hostId))).emit("callEnded", payload);
+            if (txRef) {
+                // Broadcast to both participant rooms and the call room
+                io.to(getUserRoom(String(txRef.userId))).emit("callEnded", payload);
+                io.to(getUserRoom(String(txRef.hostId))).emit("callEnded", payload);
+            }
             io.to(`call:${transactionId}`).emit("callEnded", payload);
         } else {
             console.error(`❌ Call End Failed for ${transactionId}: ${result.message}`);

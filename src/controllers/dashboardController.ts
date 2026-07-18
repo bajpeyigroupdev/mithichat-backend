@@ -81,7 +81,9 @@ export const getDashboardStats = async (
             createdAt: { $gte: todayStart, $lte: todayEnd },
         });
 
-        // Total minutes today
+        // BUG-09 FIX: 'duration' in CoinsTransaction is stored in SECONDS.
+        // The field was misnamed 'totalMinutes' and then divided by 60 again —
+        // producing hours instead of minutes. Now correctly named and divided once.
         const callAggregation = await CoinsTransaction.aggregate([
             {
                 $match: {
@@ -94,13 +96,13 @@ export const getDashboardStats = async (
             {
                 $group: {
                     _id: null,
-                    totalMinutes: { $sum: '$duration' },
+                    totalSeconds: { $sum: '$duration' }, // duration is in seconds
                     totalCoins: { $sum: '$coinsSpent' },
                 },
             },
         ]);
 
-        const minutesToday = callAggregation[0]?.totalMinutes || 0;
+        const minutesToday = Math.round((callAggregation[0]?.totalSeconds || 0) / 60); // convert seconds → minutes
         const coinsSpentToday = callAggregation[0]?.totalCoins || 0;
 
         // Revenue & Earnings
@@ -176,7 +178,7 @@ export const getDashboardStats = async (
             activeCalls,
             stats: {
                 callsToday,
-                minutesToday: Math.round(minutesToday / 60),
+                minutesToday, // BUG-09 FIX: already in minutes, no further division needed
                 coinsSpentToday,
                 revenueToday: parseFloat(revenueToday.toFixed(2)),
                 hostEarningsToday: parseFloat(hostEarningsToday.toFixed(2)),

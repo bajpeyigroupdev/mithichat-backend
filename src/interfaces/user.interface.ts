@@ -43,4 +43,9 @@ export interface UserInterface extends Document {
   meethiId?: string;
   blockedUsers?: Types.ObjectId[];
   level?: number;
+  employeeCode?: string;
+  parentId?: Types.ObjectId;
+  referredBy?: Types.ObjectId;
+  documents?: string[];
+  sourceForm?: string;
 }

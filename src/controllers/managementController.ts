@@ -160,6 +160,52 @@ export const kickUserFromRoom = async (req: Request, res: Response, next: NextFu
     }
 };
 
+export const broadcastEvent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { title, body } = req.body;
+        if (!title || !body) {
+            return sendResponse(res, 400, false, 'Title and body are required for event broadcast');
+        }
+
+        const users = await User.find({ isDeleted: false, fcmToken: { $ne: null } }).select('fcmToken _id');
+        const tokens = users.map(u => u.fcmToken).filter(Boolean) as string[];
+
+        // 1. Save generic notifications in DB for all these users
+        // Note: For 100k+ users this should be done via a background job, but keeping it simple for now
+        const notifications = users.map(user => ({
+            userId: user._id,
+            title,
+            message: body,
+            type: 'event',
+            data: { action: 'open_activity' },
+        }));
+        
+        if (notifications.length > 0) {
+            const { default: Notification } = await import('../models/notification.model');
+            await Notification.insertMany(notifications, { ordered: false }).catch(() => {});
+        }
+
+        // 2. Send FCM Multicast
+        if (tokens.length > 0) {
+            const { sendPushNotification } = await import('../utils/pushNotification');
+            // send in chunks of 500 (firebase limit)
+            for (let i = 0; i < tokens.length; i += 500) {
+                const chunk = tokens.slice(i, i + 500);
+                await sendPushNotification(chunk, {
+                    title,
+                    body,
+                    data: { type: 'event', action: 'open_activity' }
+                });
+            }
+        }
+
+        await logAudit(req as any, 'BROADCAST_EVENT', 'ALL', `Broadcasted event: ${title}`);
+        return sendResponse(res, 200, true, 'Event broadcasted successfully');
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error broadcasting event', 500));
+    }
+};
+
 export const muteUserInRoom = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
@@ -476,7 +522,20 @@ export const getVipSubscribers = async (req: Request, res: Response, next: NextF
 
 export const getAllAgencies = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const agencies = await Agency.find()
+        const adminUser = (req as any).user;
+        const adminRole = adminUser?.role;
+        const adminMongoId = adminUser?.id;
+
+        const query: any = {};
+        // Data isolation: admin/agency only see their own sub-agencies
+        if (adminRole === 'admin' || adminRole === 'agency') {
+            // Find agencies whose owner was referred by this admin
+            const mySubUsers = await User.find({ referredBy: adminMongoId, isDeleted: false }).select('_id');
+            const mySubIds = mySubUsers.map(u => u._id);
+            query.ownerId = { $in: mySubIds };
+        }
+
+        const agencies = await Agency.find(query)
             .populate('ownerId', 'name email userId image')
             .sort({ createdAt: -1 });
 
@@ -503,8 +562,8 @@ export const createAgency = async (req: Request, res: Response, next: NextFuncti
             commissionRate: commissionRate ? parseFloat(commissionRate) : 10
         });
 
-        // Set the owner role as host/admin if required
-        await User.findByIdAndUpdate(ownerId, { role: 'admin' });
+        // Set the owner role as an agency-level admin so it stays separate from standard admins.
+        await User.findByIdAndUpdate(ownerId, { role: 'agency' });
 
         await logAudit(req, 'CREATE_AGENCY', agency.code, `Agency Name: ${name}`);
         return sendResponse(res, 201, true, 'Agency profile created successfully', agency);
@@ -647,6 +706,10 @@ export const getSystemLogs = async (req: Request, res: Response, next: NextFunct
 export const getHelpTickets = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { search = '', status = '' } = req.query;
+        const adminUser = (req as any).user;
+        const adminRole = adminUser?.role;
+        const adminMongoId = adminUser?.id;
+
         const query: any = {};
         if (status) {
             query.status = status;
@@ -654,11 +717,21 @@ export const getHelpTickets = async (req: Request, res: Response, next: NextFunc
         if (search) {
             query.$or = [
                 { reason: { $regex: search, $options: 'i' } },
-                { message: { $regex: search, $options: 'i' } }
+                { message: { $regex: search, $options: 'i' } },
+                { ticketNumber: { $regex: search, $options: 'i' } }
             ];
         }
 
-        const tickets = await HelpRequest.find(query).sort({ createdAt: -1 });
+        // Data isolation: admins only see tickets from their sub-users
+        if (adminRole === 'admin' || adminRole === 'agency') {
+            const mySubUsers = await User.find({ referredBy: adminMongoId, isDeleted: false }).select('userId');
+            const mySubUserIds = mySubUsers.map(u => u.userId);
+            query.userId = { $in: mySubUserIds };
+        }
+
+        const tickets = await HelpRequest.find(query)
+            .populate('userId', 'name email userId image role meethiId employeeCode')
+            .sort({ createdAt: -1 });
         return sendResponse(res, 200, true, 'Help tickets fetched successfully', tickets);
     } catch (error: any) {
         next(new AppError(error.message || 'Error fetching help tickets', 500));
@@ -668,23 +741,24 @@ export const getHelpTickets = async (req: Request, res: Response, next: NextFunc
 export const replyHelpTicket = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
-        const { reply } = req.body;
+        const { reply, status } = req.body;
         if (!reply) {
             return sendResponse(res, 400, false, 'Reply text is required');
         }
 
-        const ticket = await HelpRequest.findByIdAndUpdate(
-            id,
-            { adminReply: reply, status: 'resolved' },
-            { new: true }
-        );
-
+        const ticket = await HelpRequest.findById(id);
         if (!ticket) {
             return sendResponse(res, 404, false, 'Help ticket not found');
         }
 
+        // Push admin reply to thread
+        ticket.replies.push({ sender: 'admin', message: reply, createdAt: new Date() } as any);
+        ticket.adminReply = reply;
+        ticket.status = status || 'resolved';
+        await ticket.save();
+
         await logAudit(req, 'REPLY_HELP_TICKET', String(ticket._id), `Reply: ${reply}`);
-        return sendResponse(res, 200, true, 'Help ticket resolved successfully', ticket);
+        return sendResponse(res, 200, true, 'Help ticket replied successfully', ticket);
     } catch (error: any) {
         next(new AppError(error.message || 'Error replying to help ticket', 500));
     }

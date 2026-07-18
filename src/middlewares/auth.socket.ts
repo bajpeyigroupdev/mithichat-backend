@@ -11,7 +11,7 @@ interface DecodedToken {
 
 export interface AuthenticatedSocket extends Socket {
     user?: {
-        role: "owner" | "superAdmin" | "admin" | "coinSeller" | "host" | "user";
+        role: "owner" | "operator" | "superAdmin" | "admin" | "agency" | "coinSeller" | "host" | "user";
         userId: number;
         id: Types.ObjectId;
         name: string;

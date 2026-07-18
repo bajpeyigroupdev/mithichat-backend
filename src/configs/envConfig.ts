@@ -25,4 +25,5 @@ export const config = {
     WEB_HOOK_PORT: process.env.WEB_HOOK_PORT || 4000,
     GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
     REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
+    FAST2SMS_API_KEY: process.env.FAST2SMS_API_KEY || '',
 }

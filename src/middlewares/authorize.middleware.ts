@@ -10,7 +10,7 @@ import { config } from "../configs/envConfig";
 
 export interface AuthRequest extends Request {
   user?: {
-    role: "owner" | "superAdmin" | "admin" | "coinSeller" | "host" | "user";
+    role: "owner" | "operator" | "superAdmin" | "admin" | "agency" | "coinSeller" | "host" | "user";
     userId: number;
     id: Types.ObjectId;
     name: string;
@@ -20,6 +20,8 @@ export interface AuthRequest extends Request {
     userName: string;
     isUserName: boolean;
     image: string;
+    meethiId?: string;
+    employeeCode?: string;
   };
 }
 
@@ -57,7 +59,7 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
       await user.save();
     }
 
-    req.user = { role: user.role ?? "user", userId: user.userId, id: user.id, name: user.name as any, gender: user?.gender as any, coins: user?.coins || 0, diamonds: user?.diamonds || 0, userName: user?.userName as any, isUserName: user?.isUserName as any, image: user?.image as string };
+    req.user = { role: user.role ?? "user", userId: user.userId, id: user.id, name: user.name as any, gender: user?.gender as any, coins: user?.coins || 0, diamonds: user?.diamonds || 0, userName: user?.userName as any, isUserName: user?.isUserName as any, image: user?.image as string, meethiId: user?.meethiId as string, employeeCode: user?.employeeCode as string };
     next();
   } catch (error) {
 

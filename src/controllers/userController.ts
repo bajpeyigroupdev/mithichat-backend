@@ -18,6 +18,7 @@ import { Gender } from "../constants/user";
 import HelpRequest from "../models/help.model";
 import DeletionRequest from "../models/deletionRequest.model";
 import { deleteImageFromCloudinary } from "../utils/cloudinary";
+import { getAccessibleUserFilter } from "./formsController";
 
 // set user name by authorized users
 export const setUserName = async (req: AuthRequest, res: Response) => {
@@ -37,7 +38,8 @@ export const setUserName = async (req: AuthRequest, res: Response) => {
       await User.findOneAndUpdate({ userId: targetId }, { userName, isUserName: true }, { new: true });
       return sendResponse(res, 200, true, "UserName updated successfully");
     }
-    return sendResponse(res, 400, true, "Not Available");
+    // BUG-04 FIX: success must be false when username is taken
+    return sendResponse(res, 400, false, "Not Available");
 
   } catch (error: any) {
     await Logger("Set Name Error", error)
@@ -150,6 +152,8 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
     let totalUsers = 0;
 
     switch (role) {
+      case "owner":
+      case "operator":
       case "superAdmin":
         totalUsers = await User.countDocuments({
           isDeleted: false,
@@ -159,21 +163,20 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
           isDeleted: false,
           role: { $ne: "superAdmin" },
         })
-          .select("userId name coins isBlocked createdAt role email phoneNumber image") // Added isBlocked field
+          .select("userId name coins isBlocked createdAt role email phoneNumber image")
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limitNumber);
         break;
 
       case "admin":
-        totalUsers = await User.countDocuments({
-          isDeleted: false,
-          isBlocked: false, // Exclude blocked users
-        });
-        usersQuery = User.find({
+      case "agency":
+        const scopedFilter = await getAccessibleUserFilter(req.user, {
           isDeleted: false,
           isBlocked: false,
-        })
+        });
+        totalUsers = await User.countDocuments(scopedFilter);
+        usersQuery = User.find(scopedFilter)
           .select("userId name coins diamonds createdAt role email phoneNumber image")
           .sort({ createdAt: -1 })
           .skip(skip)
@@ -226,8 +229,8 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 
     let query: any = { isDeleted: false };
 
-    // If superAdmin, allow searching by name, email, or phoneNumber
-    if (role === "superAdmin") {
+    // If owner/operator/superAdmin, allow searching by name, email, or phoneNumber
+    if (["owner", "operator", "superAdmin"].includes(role || "")) {
       if (userId) query.userId = userId;
       if (name) query.name = name;
       if (email) query.email = email;
@@ -242,11 +245,14 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 
     // Role-based filtering
     switch (role) {
+      case "owner":
+      case "operator":
       case "superAdmin":
         break; // SuperAdmin can see all users
 
       case "admin":
-        query.isBlocked = false; // Admin cannot fetch blocked users
+      case "agency":
+        query = await getAccessibleUserFilter(req.user, { ...query, isBlocked: false });
         break;
 
 
@@ -913,11 +919,17 @@ const EXCHANGE_PACKAGES: Record<number, number> = {
 
 export const exchangeCoinsToDiamonds = async (req: AuthRequest, res: Response) => {
   try {
+
+    console.log("===== EXCHANGE REQUEST =====");
+    console.log("req.user =", req.user);
+    console.log("req.body =", req.body);
+
+
     const { userId } = req.user || {};
     const { coins } = req.body;
 
     if (!userId) return sendResponse(res, 401, false, "Unauthorized");
-    
+
     const coinsNum = Number(coins);
     if (isNaN(coinsNum) || coinsNum <= 0) {
       return sendResponse(res, 400, false, "Invalid coins amount");
@@ -969,6 +981,43 @@ export const getMyHelpRequests = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     console.error("❌ Get my help requests backend error:", error);
     return sendResponse(res, 500, false, error.message || "Failed to fetch help requests");
+  }
+};
+
+// User replies to or reopens a ticket
+export const replyToHelpTicket = async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+    if (!userId) return sendResponse(res, 401, false, "Unauthorized");
+
+    const { id } = req.params;
+    const { message, reopen } = req.body;
+
+    if (!message?.trim()) {
+      return sendResponse(res, 400, false, "Message is required");
+    }
+
+    const ticket = await HelpRequest.findOne({ _id: id, userId });
+    if (!ticket) return sendResponse(res, 404, false, "Ticket not found");
+
+    // Push user reply to thread
+    ticket.replies.push({ sender: 'user', message: message.trim(), createdAt: new Date() } as any);
+
+    // If reopening
+    if (reopen && ticket.status === 'resolved') {
+      ticket.status = 'reopened';
+      ticket.reopenCount = (ticket.reopenCount || 0) + 1;
+    } else if (ticket.status === 'resolved' || ticket.status === 'rejected') {
+      // Any reply on resolved = reopen
+      ticket.status = 'reopened';
+      ticket.reopenCount = (ticket.reopenCount || 0) + 1;
+    }
+
+    await ticket.save();
+    return sendResponse(res, 200, true, "Reply submitted successfully", ticket);
+  } catch (error: any) {
+    console.error("❌ Reply to ticket error:", error);
+    return sendResponse(res, 500, false, error.message || "Failed to submit reply");
   }
 };
 

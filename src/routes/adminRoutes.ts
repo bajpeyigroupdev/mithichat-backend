@@ -32,8 +32,13 @@ router.patch('/profile', verifyToken, updateAdminProfile);
 router.post('/users/add-coins', verifyToken, addCoinsToUser);
 router.post('/users/add-diamonds', verifyToken, addDiamondsToUser);
 
-import { createAgencyAdmin, getAllAdmins, toggleBlockAdmin } from '../controllers/adminAuthController';
-// SuperAdmin Only: Manage Agency Admins
+import { createAgencyAdmin, getAllAdmins, toggleBlockAdmin, createEmployee, listEmployees, toggleBlockEmployee, overrideEmployeeLinkage } from '../controllers/adminAuthController';
+// Role Hierarchy: Create/List/Block employees
+router.post('/employees/create', verifyToken, createEmployee);
+router.get('/employees/list', verifyToken, listEmployees);
+router.patch('/employees/block/:id', verifyToken, toggleBlockEmployee);
+router.patch('/employees/override/:id', verifyToken, overrideEmployeeLinkage);
+// Legacy routes (kept for backward compat)
 router.post('/create-admin', verifyToken, createAgencyAdmin);
 router.get('/list-admins', verifyToken, getAllAdmins);
 router.patch('/block-admin/:id', verifyToken, toggleBlockAdmin);
@@ -172,5 +177,16 @@ router.patch('/help/:id/reply', verifyToken, replyHelpTicket);
 // User Deletion Approval Management
 router.get('/deletion-requests', verifyToken, getDeletionRequests);
 router.post('/deletion-requests/:id/process', verifyToken, processDeletionRequest);
+
+// ============ Level Management Routes ============
+import { getLevels, createLevel, updateLevel, deleteLevel } from '../controllers/levelController';
+router.get('/levels', verifyToken, getLevels);
+router.post('/levels', verifyToken, createLevel);
+router.patch('/levels/:id', verifyToken, updateLevel);
+router.delete('/levels/:id', verifyToken, deleteLevel);
+
+// ============ Event/Offer Broadcast Route ============
+import { broadcastEvent } from '../controllers/managementController';
+router.post('/events/broadcast', verifyToken, broadcastEvent);
 
 export default router;

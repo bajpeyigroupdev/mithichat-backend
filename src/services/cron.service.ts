@@ -101,16 +101,26 @@ export const startCallCleanupJob = () => {
                 console.log(`found ${zombies.length} zombie calls`);
                 for (const txn of zombies) {
                     // Force End
-                    console.log(`💀 Auto-ending ZOMBIE Call: ${txn._id} (Last HB: ${txn.lastHeartbeat})`);
+                    console.log(`💥 Auto-ending ZOMBIE Call: ${txn._id} (Last HB: ${txn.lastHeartbeat})`);
 
-                    // We use processCallEnd but with the time of last heartbeat + buffer? 
-                    // Or just NOW? If we use NOW, user pays for dead air.
-                    // Making them pay for dead air is 'unfair' but motivates proper disconnection.
-                    // Better: Pay until lastHeartbeat.
+                    // Bill until last heartbeat (not now) — fairer to user
+                    const endTime = txn.lastHeartbeat || new Date();
 
-                    const endTime = txn.lastHeartbeat || now;
+                    // Fetch participant IDs before billing so socket routing is available
+                    const txRef = { userId: txn.userId, hostId: txn.hostId };
 
-                    await BillingService.processCallEnd(txn._id as any, endTime);
+                    const result = await BillingService.processCallEnd(txn._id as any, endTime);
+
+                    // BUG-03 + BUG-11 FIX: Emit callEnded so both app screens dismiss
+                    if (result.success) {
+                        const io = getIO();
+                        const payload = result.data ?? { transactionId: String(txn._id) };
+                        io.to(getUserRoom(String(txRef.userId))).emit('callEnded', payload);
+                        io.to(getUserRoom(String(txRef.hostId))).emit('callEnded', payload);
+                        io.to(`call:${String(txn._id)}`).emit('callEnded', payload);
+                    } else {
+                        console.error(`❌ Zombie billing failed for ${txn._id}: ${result.message}`);
+                    }
                 }
             }
 

@@ -56,7 +56,12 @@ const userSchema = new Schema<UserInterface>(
     isActive: { type: Boolean, default: false },
     isBusy: { type: Boolean, default: false },
     meethiId: { type: String, default: "" },
-    level: { type: Number, default: 1 }
+    level: { type: Number, default: 1 },
+    employeeCode: { type: String, unique: true, sparse: true },
+    parentId: { type: Schema.Types.ObjectId, ref: "User" },
+    referredBy: { type: Schema.Types.ObjectId, ref: "User" },
+    documents: { type: [String], default: [] },
+    sourceForm: { type: String, default: "" }
   },
   {
     timestamps: true,

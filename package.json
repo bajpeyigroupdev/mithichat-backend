@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "script:updateLevels": "ts-node src/scripts/updateLevels.ts"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +17,7 @@
     "@socket.io/redis-adapter": "^8.3.0",
     "@types/mongoose": "^5.11.96",
     "agora-token": "^2.0.5",
+    "axios": "^1.18.1",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.9.0",
     "cors": "^2.8.5",

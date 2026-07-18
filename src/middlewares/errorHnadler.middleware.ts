@@ -1,8 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
+import AppError from '../utils/errorHandler';
 
-const errorHandler = (err: Error, req: Request, res: Response, next: NextFunction) => {
+const errorHandler = (err: any, req: Request, res: Response, next: NextFunction) => {
   console.error(err.stack);
-  res.status(500).send('Something broke!');
+  
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Something broke!';
+  
+  res.status(statusCode).json({
+    success: false,
+    message: message,
+    error: err.name || 'Error'
+  });
 };
 
 export default errorHandler;

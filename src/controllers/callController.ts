@@ -16,7 +16,7 @@ import { updateBalance } from '../services/coins.service';
 import { convertToHMS } from '../utils/time.util';
 import { User } from '../models/user.model';
 import { BillingService } from '../services/billing.service';
-import { sendCallNotification } from '../utils/pushNotification';
+import { sendCallNotification, sendMissedCallNotification } from '../utils/pushNotification';
 import { getCachedSettings } from './settingsController';
 
 const APP_ID = config.AGORA_APP_ID!;
@@ -301,6 +301,12 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "Host became busy, try again");
     }
 
+    // BUG-06 FIX: Set reservedHostId immediately after we acquire the lock so the
+    // catch block can always release the host — regardless of where an error occurs below
+    if (!randomMatch) {
+      reservedHostId = String(hostId);
+    }
+
     const maxMinutes = Math.floor(diamonds / CALL_RATE_PER_MINUTE);
     const expirationTimeInSeconds = maxMinutes * 60;
     const channelName = `call${Date.now()}${uuidv4().replace(/-/g, '').slice(0, 6)}`;
@@ -409,8 +415,6 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     } else {
       console.warn(`[CALL_PUSH] TxID: ${transaction._id} | Host has no FCM token; socket delivery only`);
     }
-    reservedHostId = String(hostId);
-
     return sendResponse(res, 201, true, "Call started successfully", {
       transactionId: transaction._id,
       channelName,
@@ -465,6 +469,21 @@ export const endCall = async (req: AuthRequest, res: Response) => {
       const io = getIO();
       io.to(getUserRoom(String(transaction.userId))).emit("callEnded", payload);
       io.to(getUserRoom(String(transaction.hostId))).emit("callEnded", payload);
+
+      // Missed Call Notification
+      if (!transaction.callStart && String(transaction.userId) === String(participantId)) {
+        // Caller hung up before host answered
+        const host = await User.findById(transaction.hostId);
+        const caller = await User.findById(transaction.userId);
+        if (host && host.fcmToken && caller) {
+          await sendMissedCallNotification(
+            host.fcmToken,
+            caller.name || 'User',
+            caller.image || '',
+            String(caller._id)
+          );
+        }
+      }
     }
 
     return sendResponse(
@@ -593,7 +612,7 @@ export const getCallHistory = async (req: AuthRequest, res: Response) => {
     const query: any = {
       ...filter,
       type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT] },
-      status: "ended",
+      status: CallStatus.ENDED, // BUG-02 FIX: use enum, not hardcoded string
     };
 
     // 🗓️ Date Filtering
@@ -779,7 +798,7 @@ export const getRanking = async (req: AuthRequest, res: Response) => {
 
 
 
-import LevelModel from '../models/level.model';
+import HostLevel from '../models/hostLevel.model';
 
 export const getHostLevels = async (req: AuthRequest, res: Response) => {
   try {
@@ -796,45 +815,92 @@ export const getHostLevels = async (req: AuthRequest, res: Response) => {
     const transactions = await CoinsTransaction.find({
       hostId: userId,
       type: TransactionType.VOICE_CALL,
-      status: "ended",
-    }).lean();
+      status: CallStatus.ENDED, // BUG-02 FIX: use enum, not hardcoded string
+    }).select('duration').lean(); // BUG-07 FIX: only fetch duration, not full docs with Agora tokens
 
     const totalCalls = transactions.length;
     const totalDurationSeconds = transactions.reduce(
       (sum, t) => sum + Number(t.duration || 0),
       0
     );
+    const totalMinutes = Math.floor(totalDurationSeconds / 60);
 
-    const levelData = await LevelModel.find().sort({ level: -1 }).lean();
+    // ✅ Fetch ALL host levels from DB sorted ascending (1 → 8, new levels included)
+    const now = new Date();
+    const allLevels = await HostLevel.find({
+      $or: [
+        { expiresAt: { $exists: false } },
+        { expiresAt: null },
+        { expiresAt: { $gt: now } }
+      ]
+    }).sort({ level: 1 }).lean();
 
-    const thresholds = [
-      { level: 1, minCalls: 1000, minDuration: 57600 },
-      { level: 2, minCalls: 500, minDuration: 28800 },
-      { level: 3, minCalls: 200, minDuration: 14400 },
-      { level: 4, minCalls: 100, minDuration: 7200 },
-      { level: 5, minCalls: 50, minDuration: 3600 },
-      { level: 6, minCalls: 0, minDuration: 0 },
-    ];
+    // Fetch the host's level, coins, and diamonds to calculate stats and level targets
+    const userDoc = await User.findById(userId).select('level coins diamonds').lean();
+    const existingLevel = userDoc?.level || 0;
 
-    let currentLevelNum = 6;
+    // ✅ Determine current level dynamically from DB thresholds
+    // Only consider real levels (> 0) for qualification — level 0 is a promo, not earnable
+    const realLevels = allLevels.filter(lvl => lvl.level > 0);
 
-    for (const thr of thresholds) {
-      if (
-        totalCalls >= thr.minCalls &&
-        totalDurationSeconds >= thr.minDuration
-      ) {
-        currentLevelNum = thr.level;
+    // Default: lowest real level (usually 1)
+    let qualifiedLevelNum = realLevels.length > 0 ? realLevels[0].level : 1;
+
+    const sortedDesc = [...realLevels].sort((a, b) => b.level - a.level);
+    for (const lvl of sortedDesc) {
+      if (totalCalls >= (lvl.minCalls || 0) && totalMinutes >= (lvl.minMinutes || 0)) {
+        qualifiedLevelNum = lvl.level;
         break;
       }
     }
 
-    await User.findByIdAndUpdate(userId, { level: currentLevelNum });
+    // Never allow downgrade below the stored level (protects hosts from losing earned status)
+    const currentLevelNum = Math.max(existingLevel, qualifiedLevelNum);
+
+    // ✅ Find next level target (for progress bar) — only from real levels
+    const nextLevelEntry = realLevels.find(lvl => lvl.level > currentLevelNum);
+    const targetCalls = nextLevelEntry?.minCalls ?? 0;
+    const targetMinutes = nextLevelEntry?.minMinutes ?? 0;
+
+    // ✅ Build levelData array — exclude level 0 (Preview/promo level) from display
+    // Level 0 is a temporary promo; it has no real call/minute requirements and
+    // pollutes the table rendering and benefits lookups in the mobile app.
+    const displayLevels = allLevels.filter(lvl => lvl.level > 0);
+
+    const levelData = displayLevels.map((lvl) => {
+      const isCurrentLevel = lvl.level === currentLevelNum;
+      const isPast = lvl.level < currentLevelNum;
+      const status = isPast ? "completed" : isCurrentLevel ? "current" : "locked";
+      return {
+        level: lvl.level,
+        name: lvl.name,
+        minCalls: lvl.minCalls,
+        minMinutes: lvl.minMinutes,
+        coinPerMinute: lvl.coinPerMinute,
+        // Extra display fields the app uses
+        call: `${lvl.minCalls.toLocaleString()} Calls`,
+        time: `${lvl.minMinutes.toLocaleString()} Min`,
+        earning: `${lvl.coinPerMinute} Coins/Min`,
+        status,
+      };
+    });
+
+    // BUG-07 FIX: Only write to DB if the level has actually changed — avoid unconditional writes on every API call
+    if (currentLevelNum !== existingLevel) {
+        await User.findByIdAndUpdate(userId, { level: currentLevelNum });
+    }
 
     return sendResponse(res, 200, true, "Host level fetched successfully", {
       levelData,
       totalCalls,
       totalDuration: totalDurationSeconds,
+      totalMinutes,
+      totalCoins: userDoc?.coins ?? 0,
+      totalDiamonds: userDoc?.diamonds ?? 0,
       currentLevel: currentLevelNum,
+      // Next level targets for progress bars
+      targetCalls,
+      targetTime: targetMinutes,
     });
 
   } catch (error: any) {
@@ -863,7 +929,7 @@ export const getAllCallHistory = async (req: AuthRequest, res: Response) => {
 
     const transactions = await CoinsTransaction.find({
       type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT] },
-      status: "ended",
+      status: CallStatus.ENDED, // BUG-02 FIX: use enum, not hardcoded string
     })
       .populate("userId", "name")
       .populate("hostId", "name")
@@ -874,7 +940,7 @@ export const getAllCallHistory = async (req: AuthRequest, res: Response) => {
 
     const totalTransactions = await CoinsTransaction.countDocuments({
       type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT] },
-      status: "ended",
+      status: CallStatus.ENDED, // BUG-02 FIX: use enum, not hardcoded string
     });
 
     // Format records for UI
