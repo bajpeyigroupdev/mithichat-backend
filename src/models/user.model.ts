@@ -71,7 +71,11 @@ const userSchema = new Schema<UserInterface>(
     adminId: { type: Schema.Types.ObjectId, ref: "User" },
     agencyId: { type: Schema.Types.ObjectId, ref: "User" },
     referralCode: { type: String, unique: true, sparse: true },
-    specialCode: { type: String, unique: true, sparse: true }
+    specialCode: { type: String, unique: true, sparse: true },
+    orgId: { type: Schema.Types.ObjectId, ref: "Organization" },
+    branchId: { type: Schema.Types.ObjectId, ref: "BranchRegion" },
+    departmentId: { type: Schema.Types.ObjectId, ref: "Department" },
+    teamId: { type: Schema.Types.ObjectId, ref: "Team" }
   },
   {
     timestamps: true,

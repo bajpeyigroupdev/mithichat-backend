@@ -58,4 +58,8 @@ export interface UserInterface extends Document {
   agencyId?: Types.ObjectId;
   referralCode?: string;
   specialCode?: string;
+  orgId?: Types.ObjectId;
+  branchId?: Types.ObjectId;
+  departmentId?: Types.ObjectId;
+  teamId?: Types.ObjectId;
 }

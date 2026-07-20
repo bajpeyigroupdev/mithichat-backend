@@ -10,7 +10,7 @@ import errorHandler from "./middlewares/errorHnadler.middleware";
 import { connectDB } from "./utils/db";
 import { config } from "./configs/envConfig";
 import { checkPortAvailable } from "./utils/getAvailablePort";
-import { AuthRoutes, avatarRoute, callRoutes, chatRoutes, coinsPriceRoutes, frameRoute, hostRoutes, UserRoutes, adminRoutes, paymentRoutes, kycRoutes, withdrawalRoutes, giftRoutes, helpRoutes, UploadRoutes, notificationRoutes, upiRoutes, publicRoutes, emsRoutes } from "./routes";
+import { AuthRoutes, avatarRoute, callRoutes, chatRoutes, coinsPriceRoutes, frameRoute, hostRoutes, UserRoutes, adminRoutes, paymentRoutes, kycRoutes, withdrawalRoutes, giftRoutes, helpRoutes, UploadRoutes, notificationRoutes, upiRoutes, publicRoutes, emsRoutes, recruitmentRoutes } from "./routes";
 import chatSocket from "./sockets";
 import path from "path";
 // Initialize Firebase Admin before routes are loaded
@@ -39,6 +39,12 @@ const allowedOrigins = [
   'https://admin.mithichat.live',
   'http://admin.mithichat.live',
 
+  'https://agency.meethichat.live',
+  'https://operator.meethichat.live',
+  'https://adminjoin.meethichat.live',
+  'https://support.meethichat.live',
+  'https://superadmin.meethichat.live',
+
   'https://management.mithichat.live',
   'http://management.mithichat.live',
 
@@ -46,13 +52,12 @@ const allowedOrigins = [
   'http://management.meethichat.com',
 
   'https://danilo-syngamic-unterrifically.ngrok-free.dev',
-  // Add your production URLs to .env as CORS_ORIGIN
 ].filter(Boolean);
 
 const isLocalhostOrigin = (origin: string) => {
   try {
     const url = new URL(origin);
-    return ['localhost', '127.0.0.1'].includes(url.hostname);
+    return ['localhost', '127.0.0.1'].includes(url.hostname) || url.hostname.endsWith('.meethichat.live') || url.hostname.endsWith('.mithichat.live');
   } catch {
     return false;
   }
@@ -118,14 +123,18 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // );
 // Routes
 app.use("/api/user", UserRoutes);
+app.use("/api/v1/user", UserRoutes);
 app.use("/api/auth", AuthRoutes);
+app.use("/api/v1/auth", AuthRoutes);
 app.use("/api/host", hostRoutes);
+app.use("/api/v1/host", hostRoutes);
 app.use("/api/coinsPrice", coinsPriceRoutes);
 app.use("/api/call", callRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/frames", frameRoute);
 app.use("/api/avatar", avatarRoute);
 app.use("/api/admin", adminRoutes);
+app.use("/api/v1/admin", adminRoutes);
 app.use("/api/ems", emsRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/kyc", kycRoutes);
@@ -137,6 +146,37 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/upi", upiRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/teamleader", publicRoutes);
+import { globalSearch } from "./controllers/searchController";
+import { getSystemHealth } from "./controllers/monitoringController";
+import { getActivityFeed } from "./controllers/activityFeedController";
+import { generateCustomReport } from "./controllers/reportBuilderController";
+import { getAllPlugins, togglePluginStatus } from "./controllers/pluginController";
+import { getTasks, createTask, updateTaskStatus } from "./controllers/taskController";
+import { generateAIPlatformInsights } from "./services/aiInsightsService";
+
+app.use("/api/recruitment", recruitmentRoutes);
+app.use("/api/v1/recruitment", recruitmentRoutes);
+app.get("/api/v1/search", globalSearch);
+app.get("/api/v1/monitoring/health", getSystemHealth);
+app.get("/api/v1/activity-feed", getActivityFeed);
+app.get("/api/v1/reports", generateCustomReport);
+app.get("/api/v1/plugins", getAllPlugins);
+app.patch("/api/v1/plugins/:pluginId", togglePluginStatus);
+app.get("/api/v1/tasks", getTasks);
+app.post("/api/v1/tasks", createTask);
+app.patch("/api/v1/tasks/:id/status", updateTaskStatus);
+import { getBIDrilldownOverview } from "./controllers/biController";
+import { analyzeProcessMiningBottlenecks } from "./services/processMiningService";
+
+app.get("/api/v1/bi/overview", getBIDrilldownOverview);
+app.get("/api/v1/process-mining/bottlenecks", async (_req, res) => {
+    const data = await analyzeProcessMiningBottlenecks();
+    res.status(200).json(data);
+});
+app.get("/api/v1/analytics/ai-insights", async (_req, res) => {
+    const data = await generateAIPlatformInsights();
+    res.status(200).json(data);
+});
 app.get("/api/system-messages", verifyToken, getSystemMessages);
 
 
