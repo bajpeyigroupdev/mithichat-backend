@@ -33,6 +33,7 @@ export interface UserInterface extends Document {
   googleId?: string;
   language?: string[];
   country?: { name?: string; code?: string; flag?: string };
+  age?: number;
   frameId?: string;
   refreshToken?: string;
   audio?: string;
@@ -48,4 +49,13 @@ export interface UserInterface extends Document {
   referredBy?: Types.ObjectId;
   documents?: string[];
   sourceForm?: string;
+  parentRole?: string;
+  createdByRole?: string;
+  ownerId?: Types.ObjectId;
+  operatorId?: Types.ObjectId;
+  superAdminId?: Types.ObjectId;
+  adminId?: Types.ObjectId;
+  agencyId?: Types.ObjectId;
+  referralCode?: string;
+  specialCode?: string;
 }

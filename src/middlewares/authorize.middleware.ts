@@ -60,7 +60,10 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
     }
 
     req.user = { role: user.role ?? "user", userId: user.userId, id: user.id, name: user.name as any, gender: user?.gender as any, coins: user?.coins || 0, diamonds: user?.diamonds || 0, userName: user?.userName as any, isUserName: user?.isUserName as any, image: user?.image as string, meethiId: user?.meethiId as string, employeeCode: user?.employeeCode as string };
-    next();
+    
+    // Apply field-level security checks dynamically on response payload
+    const { fieldSecurityFilter } = require("./fieldSecurity.middleware");
+    await fieldSecurityFilter(req, res, next);
   } catch (error) {
 
     if (error instanceof TokenExpiredError) {

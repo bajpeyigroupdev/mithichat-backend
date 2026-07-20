@@ -343,13 +343,13 @@ export const getHosts = async (req: AuthRequest, res: Response) => {
         if (role === "admin") {
             // Admin sees only their hosts
             // Assuming the Admin User has 'meethiId' in their profile which matches the Host's 'meethiId'
-            const adminUser = await User.findById(req.user?.userId);
+            const adminUser = await User.findOne({ userId: Number(req.user?.userId) });
             if (adminUser?.meethiId) {
                 filters.meethiId = adminUser.meethiId;
             } else {
                 return sendResponse(res, 403, false, "Admin account missing Meethi ID");
             }
-        } else if (role !== "superAdmin") {
+        } else if (!["owner", "operator", "superAdmin"].includes(role || "")) {
             return sendResponse(res, 403, false, "Unauthorized access");
         }
 
@@ -358,15 +358,27 @@ export const getHosts = async (req: AuthRequest, res: Response) => {
         const skip = (pageNumber - 1) * limitNumber;
 
         const [hosts, total] = await Promise.all([
-            Host.find(filters).skip(skip).limit(limitNumber).sort({ createdAt: -1 }),
+            Host.find(filters).skip(skip).limit(limitNumber).sort({ createdAt: -1 }).lean(),
             Host.countDocuments(filters),
         ]);
+
+        const hostsWithUsers = await Promise.all(hosts.map(async (host) => {
+            const user = await User.findOne({ userId: host.hostId }).lean() as any;
+            return {
+                ...host,
+                level: user?.level || 1,
+                gender: user?.gender || 'female',
+                coins: user?.coins || 0,
+                diamonds: user?.diamonds || 0,
+                createdAt: user?.createdAt || host.createdAt,
+            };
+        }));
 
         return sendResponse(res, 200, true, "Hosts fetched successfully", {
             total,
             page: pageNumber,
             limit: limitNumber,
-            data: hosts,
+            data: hostsWithUsers,
         });
     } catch (error: any) {
         await Logger("getHosts", error)

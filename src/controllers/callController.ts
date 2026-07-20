@@ -18,6 +18,7 @@ import { User } from '../models/user.model';
 import { BillingService } from '../services/billing.service';
 import { sendCallNotification, sendMissedCallNotification } from '../utils/pushNotification';
 import { getCachedSettings } from './settingsController';
+import { recalculateAndUpdateHostLevel } from '../services/user.service';
 
 const APP_ID = config.AGORA_APP_ID!;
 const APP_CERTIFICATE = config.AGORA_APP_CERTIFICATE!;
@@ -680,7 +681,12 @@ export const getCallHistory = async (req: AuthRequest, res: Response) => {
         id: partnerId,
         image: partnerImage,
         type: t.type,
-        voice: t.type === TransactionType.VOICE_CALL ? Number(t.coinsSpent) || 0 : 0,
+        voice:
+          t.type === TransactionType.VOICE_CALL
+            ? role === "host"
+              ? Number(t.hostEarning) || 0
+              : Number(t.coinsSpent) || 0
+            : 0,
         gift: t.type === TransactionType.GIFT ? Number(t.coinsSpent) || 0 : 0,
         commission:
           role === "host" && t.type === TransactionType.VOICE_CALL
@@ -835,27 +841,12 @@ export const getHostLevels = async (req: AuthRequest, res: Response) => {
       ]
     }).sort({ level: 1 }).lean();
 
-    // Fetch the host's level, coins, and diamonds to calculate stats and level targets
-    const userDoc = await User.findById(userId).select('level coins diamonds').lean();
-    const existingLevel = userDoc?.level || 0;
+    const userDoc = await User.findById(userId).select('coins diamonds').lean();
 
-    // ✅ Determine current level dynamically from DB thresholds
-    // Only consider real levels (> 0) for qualification — level 0 is a promo, not earnable
     const realLevels = allLevels.filter(lvl => lvl.level > 0);
 
-    // Default: lowest real level (usually 1)
-    let qualifiedLevelNum = realLevels.length > 0 ? realLevels[0].level : 1;
-
-    const sortedDesc = [...realLevels].sort((a, b) => b.level - a.level);
-    for (const lvl of sortedDesc) {
-      if (totalCalls >= (lvl.minCalls || 0) && totalMinutes >= (lvl.minMinutes || 0)) {
-        qualifiedLevelNum = lvl.level;
-        break;
-      }
-    }
-
-    // Never allow downgrade below the stored level (protects hosts from losing earned status)
-    const currentLevelNum = Math.max(existingLevel, qualifiedLevelNum);
+    // Recalculate & persist host level in DB
+    const currentLevelNum = await recalculateAndUpdateHostLevel(userId);
 
     // ✅ Find next level target (for progress bar) — only from real levels
     const nextLevelEntry = realLevels.find(lvl => lvl.level > currentLevelNum);
@@ -884,11 +875,6 @@ export const getHostLevels = async (req: AuthRequest, res: Response) => {
         status,
       };
     });
-
-    // BUG-07 FIX: Only write to DB if the level has actually changed — avoid unconditional writes on every API call
-    if (currentLevelNum !== existingLevel) {
-        await User.findByIdAndUpdate(userId, { level: currentLevelNum });
-    }
 
     return sendResponse(res, 200, true, "Host level fetched successfully", {
       levelData,
@@ -919,7 +905,7 @@ export const getAllCallHistory = async (req: AuthRequest, res: Response) => {
   try {
     const { role } = req.user || {};
 
-    if (!role || !["admin", "superAdmin"].includes(role)) {
+    if (!role || !["owner", "operator", "admin", "superAdmin"].includes(role)) {
       return sendResponse(res, 403, false, "Access Denied");
     }
 
@@ -927,10 +913,33 @@ export const getAllCallHistory = async (req: AuthRequest, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 10;
     const skip = (page - 1) * limit;
 
-    const transactions = await CoinsTransaction.find({
+    const query: any = {
       type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT] },
-      status: CallStatus.ENDED, // BUG-02 FIX: use enum, not hardcoded string
-    })
+      status: CallStatus.ENDED,
+    };
+
+    const targetUserId = req.query.userId || req.query.targetUserId;
+    if (targetUserId) {
+      let targetUserObj;
+      if (typeof targetUserId === 'string' && targetUserId.match(/^[0-9a-fA-F]{24}$/)) {
+        targetUserObj = await User.findById(targetUserId);
+      } else {
+        targetUserObj = await User.findOne({ userId: Number(targetUserId) });
+      }
+
+      if (targetUserObj) {
+        query.$or = [{ userId: targetUserObj._id }, { hostId: targetUserObj._id }];
+      } else {
+        return sendResponse(res, 200, true, "Call history fetched successfully", {
+          calls: [],
+          totalCalls: 0,
+          currentPage: page,
+          totalPages: 0,
+        });
+      }
+    }
+
+    const transactions = await CoinsTransaction.find(query)
       .populate("userId", "name")
       .populate("hostId", "name")
       .sort({ createdAt: -1 })
@@ -938,10 +947,7 @@ export const getAllCallHistory = async (req: AuthRequest, res: Response) => {
       .limit(limit)
       .lean();
 
-    const totalTransactions = await CoinsTransaction.countDocuments({
-      type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT] },
-      status: CallStatus.ENDED, // BUG-02 FIX: use enum, not hardcoded string
-    });
+    const totalTransactions = await CoinsTransaction.countDocuments(query);
 
     // Format records for UI
     const formattedCalls = transactions.map((t) => {

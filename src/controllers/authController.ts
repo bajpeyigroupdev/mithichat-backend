@@ -96,12 +96,22 @@ export const forgotPassword = async (req: Request, res: Response) => {
     // Trim + normalize: remove all spaces
     const phoneNumber = String(rawPhone).trim().replace(/\s+/g, "");
 
-    console.log(`[forgotPassword] Looking up phone: "${phoneNumber}"`);
+    // Extract last 10 digits for flexible matching (+91 / no +91)
+    const digitsOnly = phoneNumber.replace(/\D/g, "");
+    const tenDigits = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
+    const phoneRegex = new RegExp(`${tenDigits}$`);
 
-    // Query: match phoneNumber AND (isDeleted is false OR isDeleted field doesn't exist)
+    console.log(`[forgotPassword] Looking up phone: "${phoneNumber}" (last 10: "${tenDigits}")`);
+
+    // Query: match phoneNumber by exact string or 10-digit regex
     const user = await User.findOne({
-      phoneNumber,
-      $or: [{ isDeleted: false }, { isDeleted: { $exists: false } }],
+      $or: [
+        { phoneNumber },
+        { phoneNumber: { $regex: phoneRegex } },
+      ],
+      $and: [
+        { $or: [{ isDeleted: false }, { isDeleted: { $exists: false } }] }
+      ]
     });
 
     console.log(`[forgotPassword] User found: ${user ? `userId=${user.userId}` : "NOT FOUND"}`);
@@ -114,7 +124,12 @@ export const forgotPassword = async (req: Request, res: Response) => {
       return sendResponse(res, 403, false, "Your account is currently blocked. Please contact support.");
     }
 
-    // Phone found — frontend will navigate to OTP screen
+    // Phone found — send OTP for forgot password reset
+    const otpResult = await sendPhoneOtp(phoneNumber);
+    if (!otpResult.success) {
+      return sendResponse(res, 500, false, otpResult.message || "Failed to send OTP");
+    }
+
     return sendResponse(res, 200, true, "Phone number verified. OTP sent successfully.");
   } catch (error: any) {
     await Logger("forgotPassword", error);
@@ -171,6 +186,11 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
 
     if (!phoneNumber || !password || !gender) {
       return sendResponse(res, 400, false, "Phone number, password and gender are required");
+    }
+
+    const duplicatePhoneUser = await User.findOne({ phoneNumber, isDeleted: false });
+    if (duplicatePhoneUser) {
+      return sendResponse(res, 400, false, "Phone number already registered");
     }
 
     if (userFrom === "app") {
@@ -415,7 +435,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
     }
 
     // Check duplicate email
-    const existingEmailUser = await User.findOne({ email: googleUserInfo.email });
+    const existingEmailUser = await User.findOne({ email: googleUserInfo.email, isDeleted: false });
     if (existingEmailUser) {
       if (!payload.email_verified) {
         return sendResponse(res, 403, false, "Google email must be verified");

@@ -5,6 +5,8 @@ import { CallStatus, TransactionType } from '../constants/user';
 import { updateBalance } from './coins.service';
 import Conversation from '../models/conversation.model';
 import { getCachedSettings } from '../controllers/settingsController';
+import HostLevel from '../models/hostLevel.model';
+import { recalculateAndUpdateHostLevel } from './user.service';
 
 export class BillingService {
 
@@ -85,7 +87,16 @@ export class BillingService {
 
             const settings = await getCachedSettings();
             const CALL_RATE_PER_SECOND = (settings.callRatePerMinute || 100) / 60;
-            const HOST_SHARE_PER_SECOND = (settings.hostSharePerMinute || 28) / 60;
+
+            // ===== Level-based host earning =====
+            // Recalculate and update host's current level, then find coinPerMinute from HostLevel config
+            const hostLevel = await recalculateAndUpdateHostLevel(transaction.hostId, session);
+            const hostLevelConfig = await HostLevel.findOne({ level: hostLevel }).session(session).lean() as any;
+            // coinPerMinute from HostLevel table; fall back to global settings share
+            const hostSharePerMinute = hostLevelConfig?.coinPerMinute ?? (settings.hostSharePerMinute || 28);
+            const HOST_SHARE_PER_SECOND = hostSharePerMinute / 60;
+            console.log(`📊 Host Lv.${hostLevel} → coinPerMinute: ${hostSharePerMinute}`);
+            // ====================================
 
             const coinsSpent = Math.round(durationSec * CALL_RATE_PER_SECOND);
             const hostEarning = Math.round(durationSec * HOST_SHARE_PER_SECOND);

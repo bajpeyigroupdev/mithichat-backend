@@ -46,6 +46,7 @@ const userSchema = new Schema<UserInterface>(
       code: { type: String, default: '' },
       flag: { type: String, default: '' },
     },
+    age: { type: Number, default: 18 },
     frameId: { type: String, default: "" },
     blockedUsers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     refreshToken: { type: String, select: false },
@@ -61,7 +62,16 @@ const userSchema = new Schema<UserInterface>(
     parentId: { type: Schema.Types.ObjectId, ref: "User" },
     referredBy: { type: Schema.Types.ObjectId, ref: "User" },
     documents: { type: [String], default: [] },
-    sourceForm: { type: String, default: "" }
+    sourceForm: { type: String, default: "" },
+    parentRole: { type: String },
+    createdByRole: { type: String },
+    ownerId: { type: Schema.Types.ObjectId, ref: "User" },
+    operatorId: { type: Schema.Types.ObjectId, ref: "User" },
+    superAdminId: { type: Schema.Types.ObjectId, ref: "User" },
+    adminId: { type: Schema.Types.ObjectId, ref: "User" },
+    agencyId: { type: Schema.Types.ObjectId, ref: "User" },
+    referralCode: { type: String, unique: true, sparse: true },
+    specialCode: { type: String, unique: true, sparse: true }
   },
   {
     timestamps: true,

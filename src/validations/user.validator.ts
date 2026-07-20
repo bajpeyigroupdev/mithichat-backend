@@ -24,4 +24,14 @@ export const validationUpdateUserLimited = [
     .optional()
     .isString()
     .withMessage("Each language must be a string"),
+
+  body("age")
+    .optional()
+    .isInt({ min: 1, max: 120 })
+    .withMessage("Age must be a valid integer between 1 and 120"),
+
+  body("country")
+    .optional()
+    .isObject()
+    .withMessage("Country must be a valid object"),
 ];

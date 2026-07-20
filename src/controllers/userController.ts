@@ -6,6 +6,10 @@ import { AuthRequest } from "../middlewares/authorize.middleware";
 import { Query } from "mongoose";
 import { BlockedUser } from "../models/blockedUser.model";
 import { RechargeHistory } from "../models/RechargeHistory"; // Import Model
+import { Agency } from "../models/agency.model";
+import { CoinsTransaction } from "../models/spentCoinModel";
+import HostLevel from "../models/hostLevel.model";
+import mongoose from "mongoose";
 
 // import { deleteFromS3, uploadToS3 } from "../utils/uploadS3";
 import { generateOtp, sendCustomEmail, sendOtpForEmailVerification } from "../utils/otp";
@@ -13,12 +17,13 @@ import OtpModel from "../models/otp.model";
 import { Logger } from "../utils/logger";
 import { UserInterface } from "../interfaces/user.interface";
 import { getAllHostsService, invalidateHostCache } from "../services/user.service";
-import { getIO } from "../sockets";
+import { getIO, getUserRoom } from "../sockets";
 import { Gender } from "../constants/user";
 import HelpRequest from "../models/help.model";
 import DeletionRequest from "../models/deletionRequest.model";
 import { deleteImageFromCloudinary } from "../utils/cloudinary";
 import { getAccessibleUserFilter } from "./formsController";
+import { generateSecureHash } from "../utils/passwordHelper";
 
 // set user name by authorized users
 export const setUserName = async (req: AuthRequest, res: Response) => {
@@ -280,7 +285,7 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 // update user by userID with role based update 
 export const updateUser = async (req: AuthRequest, res: Response) => {
   try {
-    const { name, phoneNumber, bio, role, coins, language, gender, phoneVerified, image } = req.body;
+    const { name, phoneNumber, bio, role, coins, diamonds, language, gender, phoneVerified, image, country, age, password, level } = req.body;
     const { role: requesterRole, userId: requesterId } = req.user || {};
 
     let targetUserId: string;
@@ -292,10 +297,10 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 400, false, "Requester ID missing");
       }
       targetUserId = String(requesterId);
-    } else if (requesterRole === "superAdmin") {
-      // superAdmin and host can update any user by providing userId in params
+    } else if (["owner", "operator", "superAdmin", "admin"].includes(requesterRole || '')) {
+      // superAdmin, owner, operator, and admin can update any user by providing userId in params
       if (!req.params.userId) {
-        return sendResponse(res, 400, false, "User ID is required in URL for superAdmins");
+        return sendResponse(res, 400, false, "User ID is required in URL");
       }
       targetUserId = req.params.userId;
     } else {
@@ -317,7 +322,6 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     const updatedFields: Partial<UserInterface> = {};
 
     // 📞 Check for duplicate phoneNumber
-    // This check should always be performed if phoneNumber is being updated, regardless of role.
     if (phoneNumber && phoneNumber !== userToUpdate.phoneNumber) {
       const existingPhone = await User.findOne({ phoneNumber, isDeleted: false });
       if (existingPhone && existingPhone.userId !== userToUpdate.userId) { // Ensure it's not the same user
@@ -326,14 +330,17 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       updatedFields.phoneNumber = phoneNumber;
     }
 
-
     // 🛡 Role-based permissions for what fields can be updated
     switch (requesterRole) {
+      case "owner":
+      case "operator":
       case "superAdmin":
-        // SuperAdmin can update all fields for any user
+      case "admin":
+        // Admin staff can update all fields for any user
         if (name !== undefined) updatedFields.name = name;
         if (bio !== undefined) updatedFields.bio = bio;
         if (coins !== undefined) updatedFields.coins = coins;
+        if (diamonds !== undefined) updatedFields.diamonds = diamonds;
         if (role !== undefined) {
           updatedFields.role = role;
           if (role === 'host') {
@@ -343,6 +350,13 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
         if (gender !== undefined) updatedFields.gender = gender;
         if (language && Array.isArray(language)) updatedFields.language = language;
         if (phoneVerified !== undefined) updatedFields.phoneVerified = phoneVerified;
+        if (country !== undefined) updatedFields.country = country;
+        if (age !== undefined) updatedFields.age = age;
+        if (level !== undefined) updatedFields.level = level;
+        if (image !== undefined) updatedFields.image = image;
+        if (password !== undefined && password.trim() !== "") {
+          updatedFields.password = await generateSecureHash(password);
+        }
         break;
 
       case "host":
@@ -394,15 +408,15 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// user delete by userID with only role superAdmin
+// user delete by userID with administrative roles
 export const deleteUser = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.params;
     const { role, userId: requesterId } = req.user || {};
 
-    // Allow if superAdmin OR if user is deleting themselves
-    if (role !== "superAdmin" && String(requesterId) !== String(userId)) {
-      return sendResponse(res, 403, false, "Access Denied - You can only delete your own account");
+    // Allow if admin staff OR if user is deleting themselves
+    if (!["owner", "operator", "superAdmin", "admin"].includes(role || "") && String(requesterId) !== String(userId)) {
+      return sendResponse(res, 403, false, "Access Denied - Insufficient permissions to delete user");
     }
 
     const userToDelete = await User.findOne({ userId });
@@ -410,21 +424,135 @@ export const deleteUser = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, "User not found");
     }
 
-    // ✅ Soft delete by setting isDeleted = true and freeing unique keys
-    const suffix = `_deleted_${Date.now()}`;
-    if (userToDelete.phoneNumber) {
-      userToDelete.phoneNumber = userToDelete.phoneNumber + suffix;
+    // Ensure Firebase is initialized
+    if (!admin.apps.length) {
+      try {
+        await import("../utils/pushNotification");
+      } catch (e) {
+        console.warn("Firebase was not initialized at user delete, doing lazy initialize:", e);
+        admin.initializeApp();
+      }
     }
-    if (userToDelete.email) {
-      userToDelete.email = userToDelete.email + suffix;
-    }
-    if (userToDelete.userName) {
-      userToDelete.userName = userToDelete.userName + suffix;
-    }
-    userToDelete.isDeleted = true;
-    await userToDelete.save();
 
-    return sendResponse(res, 200, true, "User soft deleted successfully");
+    // 1. Delete Firebase Auth user if present
+    if (userToDelete.phoneNumber) {
+      try {
+        const firebaseUser = await admin.auth().getUserByPhoneNumber(userToDelete.phoneNumber);
+        if (firebaseUser) {
+          await admin.auth().deleteUser(firebaseUser.uid);
+          console.log(`Successfully deleted Firebase user for phone: ${userToDelete.phoneNumber}`);
+        }
+      } catch (err: any) {
+        if (err.code !== 'auth/user-not-found') {
+          console.error(`Firebase delete phone error: ${err.message}`);
+        }
+      }
+    }
+
+    if (userToDelete.email) {
+      try {
+        const firebaseUser = await admin.auth().getUserByEmail(userToDelete.email);
+        if (firebaseUser) {
+          await admin.auth().deleteUser(firebaseUser.uid);
+          console.log(`Successfully deleted Firebase user for email: ${userToDelete.email}`);
+        }
+      } catch (err: any) {
+        if (err.code !== 'auth/user-not-found') {
+          console.error(`Firebase delete email error: ${err.message}`);
+        }
+      }
+    }
+
+    // 2. Remove associated Kyc documents
+    try {
+      const { Kyc } = await import("../models/kyc.model");
+      await Kyc.deleteMany({ userId: userToDelete.userId });
+    } catch (e: any) {
+      console.warn("Could not clear KYC data:", e.message);
+    }
+
+    // 3. Remove associated Host records
+    try {
+      const HostModel = (await import("../models/host.model")).default;
+      await HostModel.deleteMany({ hostId: userToDelete.userId });
+    } catch (e: any) {
+      console.warn("Could not clear Host data:", e.message);
+    }
+
+    // 4. Remove associated TempHost records
+    try {
+      const TempHostModel = (await import("../models/temp.host.model")).default;
+      await TempHostModel.deleteMany({ userId: userToDelete.userId });
+    } catch (e: any) {
+      console.warn("Could not clear TempHost data:", e.message);
+    }
+
+    // 5. Remove associated BlockedUser records
+    try {
+      await BlockedUser.deleteMany({
+        $or: [
+          { userId: String(userToDelete.userId) },
+          { blockedBy: String(userToDelete.userId) }
+        ]
+      });
+    } catch (e: any) {
+      console.warn("Could not clear BlockedUser records:", e.message);
+    }
+
+    // 6. Remove associated Agency records
+    try {
+      const { Agency } = await import("../models/agency.model");
+      await Agency.deleteMany({ ownerId: userToDelete._id });
+    } catch (e: any) {
+      console.warn("Could not clear Agency records:", e.message);
+    }
+
+    // 7. Remove associated DeletionRequest records
+    try {
+      await DeletionRequest.deleteMany({ userId: userToDelete._id });
+    } catch (e: any) {
+      console.warn("Could not clear DeletionRequest records:", e.message);
+    }
+
+    // 8. Remove associated HelpRequest records
+    try {
+      await HelpRequest.deleteMany({ userId: userToDelete.userId });
+    } catch (e: any) {
+      console.warn("Could not clear HelpRequest records:", e.message);
+    }
+
+    // 9. Pull deleted user _id from all other users' blocked list
+    try {
+      await User.updateMany(
+        { blockedUsers: userToDelete._id },
+        { $pull: { blockedUsers: userToDelete._id } }
+      );
+    } catch (e: any) {
+      console.warn("Could not update other users' blocked lists:", e.message);
+    }
+
+    // 10. Clear Redis online state
+    try {
+      const redis = (await import("../configs/redisConfig")).default;
+      await redis.srem("online_users", String(userToDelete.userId));
+    } catch (e: any) {
+      console.warn("Could not srem from online_users:", e.message);
+    }
+
+    // 11. Broadcast force logout on Socket.IO
+    try {
+      const io = getIO();
+      const userRoom = getUserRoom(String(userToDelete.userId));
+      io.to(userRoom).emit("force_logout", { reason: "Account permanently deleted" });
+      io.in(userRoom).disconnectSockets(true);
+    } catch (e: any) {
+      console.warn("Socket force logout warning:", e.message);
+    }
+
+    // 12. Hard delete User document itself from MongoDB
+    await User.deleteOne({ _id: userToDelete._id });
+
+    return sendResponse(res, 200, true, "User and all associated records permanently deleted successfully");
   } catch (error: any) {
     await Logger("deleteUser", error)
     return sendResponse(res, 500, false, error.message);
@@ -572,6 +700,103 @@ export const getAllHosts = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// ============ Admin: Get all host-role users ============
+export const getAdminHostUsers = async (req: AuthRequest, res: Response) => {
+  try {
+    const { role } = req.user || {};
+    if (!["owner", "operator", "superAdmin", "admin"].includes(role || "")) {
+      return sendResponse(res, 403, false, "Unauthorized access");
+    }
+
+    const page = parseInt((req.query.page as string) || "1", 10);
+    const limit = parseInt((req.query.limit as string) || "20", 10);
+    const search = (req.query.search as string) || "";
+    const skip = (page - 1) * limit;
+
+    const filter: Record<string, any> = { role: "host", isDeleted: false };
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { phoneNumber: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const [hosts, total, maxLevelDoc] = await Promise.all([
+      User.find(filter)
+        .select("userId name image phoneNumber email gender level coins diamonds isBlocked isOnline isActive country language agencyId createdAt")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean() as any,
+      User.countDocuments(filter),
+      HostLevel.findOne().sort({ level: -1 }).lean(),
+    ]);
+
+    const maxLevel: number = (maxLevelDoc as any)?.level || 8;
+
+    // Enrich each host with agency name + call/gift coin stats
+    const enriched = await Promise.all(hosts.map(async (host: any) => {
+      // Agency name lookup
+      let agencyName: string | null = null;
+      if (host.agencyId) {
+        const agency = await Agency.findById(host.agencyId).select("name").lean() as any;
+        agencyName = agency?.name || null;
+      }
+
+      // Aggregate: coins received by host (coinsSpent by users on this host)
+      const hostObjectId = host._id;
+      const coinStats = await CoinsTransaction.aggregate([
+        { $match: { hostId: hostObjectId } },
+        {
+          $group: {
+            _id: "$type",
+            totalCoinsReceived: { $sum: "$coinsSpent" },
+            totalDiamondEarned: { $sum: "$hostEarning" },
+          },
+        },
+      ]);
+
+      let callCoinsReceived = 0;
+      let giftCoinsReceived = 0;
+      let callDiamondsEarned = 0;
+      let giftDiamondsEarned = 0;
+
+      for (const stat of coinStats) {
+        if (stat._id === "voice_call") {
+          callCoinsReceived = stat.totalCoinsReceived || 0;
+          callDiamondsEarned = stat.totalDiamondEarned || 0;
+        } else if (stat._id === "gift" || stat._id === "gift_sent") {
+          giftCoinsReceived += stat.totalCoinsReceived || 0;
+          giftDiamondsEarned += stat.totalDiamondEarned || 0;
+        }
+      }
+
+      return {
+        ...host,
+        agencyName,
+        callCoinsReceived,
+        giftCoinsReceived,
+        totalCoinsReceived: callCoinsReceived + giftCoinsReceived,
+        callDiamondsEarned,
+        giftDiamondsEarned,
+        totalDiamondsEarned: callDiamondsEarned + giftDiamondsEarned,
+      };
+    }));
+
+    return sendResponse(res, 200, true, "Host users fetched successfully", {
+      total,
+      page,
+      limit,
+      maxLevel,
+      data: enriched,
+    });
+  } catch (error: any) {
+    await Logger("getAdminHostUsers", error);
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
 // save fcm token
 export const saveFcmToken = async (req: AuthRequest, res: Response) => {
   try {
@@ -603,10 +828,15 @@ export const saveFcmToken = async (req: AuthRequest, res: Response) => {
 // get user recharge history
 export const getRechargeHistory = async (req: AuthRequest, res: Response) => {
   try {
-    const { userId } = req.user || {};
-    const { page = 1, limit = 10 } = req.query;
+    const { userId, role } = req.user || {};
+    const { page = 1, limit = 10, targetUserId } = req.query;
 
-    if (!userId) {
+    let finalUserId = userId;
+    if (["owner", "operator", "superAdmin", "admin"].includes(role || "") && targetUserId) {
+      finalUserId = Number(targetUserId);
+    }
+
+    if (!finalUserId) {
       return sendResponse(res, 400, false, "User ID is required");
     }
 
@@ -614,9 +844,9 @@ export const getRechargeHistory = async (req: AuthRequest, res: Response) => {
     const limitNumber = parseInt(limit as string, 10);
     const skip = (pageNumber - 1) * limitNumber;
 
-    const totalRecords = await RechargeHistory.countDocuments({ userId: Number(userId) });
+    const totalRecords = await RechargeHistory.countDocuments({ userId: Number(finalUserId) });
 
-    const history = await RechargeHistory.find({ userId: Number(userId) })
+    const history = await RechargeHistory.find({ userId: Number(finalUserId) })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limitNumber);
@@ -636,14 +866,19 @@ export const getRechargeHistory = async (req: AuthRequest, res: Response) => {
 // get coin transaction history (calls, gifts, messages)
 export const getCoinHistory = async (req: AuthRequest, res: Response) => {
   try {
-    const { userId } = req.user || {};
-    const { page = 1, limit = 50 } = req.query;
+    const { userId, role } = req.user || {};
+    const { page = 1, limit = 50, targetUserId } = req.query;
 
-    if (!userId) {
+    let finalUserId = userId;
+    if (["owner", "operator", "superAdmin", "admin"].includes(role || "") && targetUserId) {
+      finalUserId = Number(targetUserId);
+    }
+
+    if (!finalUserId) {
       return sendResponse(res, 400, false, "User ID is required");
     }
 
-    const user = await User.findOne({ userId, isDeleted: false });
+    const user = await User.findOne({ userId: finalUserId, isDeleted: false });
     if (!user) return sendResponse(res, 404, false, "User not found");
 
     const { CoinsTransaction } = await import("../models/spentCoinModel");
@@ -660,14 +895,22 @@ export const getCoinHistory = async (req: AuthRequest, res: Response) => {
       .limit(limitNumber)
       .lean();
 
-    // Map to a cleaner format for the app
-    const history = transactions.map(tx => ({
-      type: tx.type,
-      coinsSpent: tx.coinsSpent || 0,
-      coins: tx.coinsSpent || 0,
-      createdAt: tx.createdAt,
-      meta: tx.meta,
-    }));
+    const userIdStr = (user as any)._id.toString();
+    const history = transactions.map(tx => {
+      const isHost = tx.hostId && tx.hostId.toString() === userIdStr;
+      const amount = isHost ? (tx.hostEarning || 0) : (tx.coinsSpent || 0);
+      const isEarning = isHost || (tx.type as string) === "recharge";
+      const displayType = isHost && (tx.type as string) === "voice_call" ? "call_earning" : tx.type;
+
+      return {
+        type: displayType,
+        coinsSpent: amount,
+        coins: amount,
+        isEarning,
+        createdAt: tx.createdAt,
+        meta: tx.meta,
+      };
+    });
 
     return sendResponse(res, 200, true, "Coin history fetched", { history });
   } catch (error: any) {

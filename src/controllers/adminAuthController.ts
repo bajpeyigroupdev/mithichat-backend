@@ -149,7 +149,7 @@ export const addCoinsToUser = async (req: AuthRequest, res: Response) => {
         const { userId, coins } = req.body;
         const { role } = req.user || {};
 
-        if (role !== "superAdmin" && role !== "admin") {
+        if (!['owner', 'superAdmin', 'admin'].includes(role || '')) {
             return sendResponse(res, 403, false, "Access Denied");
         }
 
@@ -198,7 +198,7 @@ export const addDiamondsToUser = async (req: AuthRequest, res: Response) => {
         const { userId, diamonds } = req.body;
         const { role } = req.user || {};
 
-        if (role !== "superAdmin" && role !== "admin") {
+        if (!['owner', 'superAdmin', 'admin'].includes(role || '')) {
             return sendResponse(res, 403, false, "Access Denied");
         }
 

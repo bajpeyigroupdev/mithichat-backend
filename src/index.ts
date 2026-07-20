@@ -10,7 +10,7 @@ import errorHandler from "./middlewares/errorHnadler.middleware";
 import { connectDB } from "./utils/db";
 import { config } from "./configs/envConfig";
 import { checkPortAvailable } from "./utils/getAvailablePort";
-import { AuthRoutes, avatarRoute, callRoutes, chatRoutes, coinsPriceRoutes, frameRoute, hostRoutes, UserRoutes, adminRoutes, paymentRoutes, kycRoutes, withdrawalRoutes, giftRoutes, helpRoutes, UploadRoutes, notificationRoutes, upiRoutes, publicRoutes } from "./routes";
+import { AuthRoutes, avatarRoute, callRoutes, chatRoutes, coinsPriceRoutes, frameRoute, hostRoutes, UserRoutes, adminRoutes, paymentRoutes, kycRoutes, withdrawalRoutes, giftRoutes, helpRoutes, UploadRoutes, notificationRoutes, upiRoutes, publicRoutes, emsRoutes } from "./routes";
 import chatSocket from "./sockets";
 import path from "path";
 // Initialize Firebase Admin before routes are loaded
@@ -126,6 +126,7 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/frames", frameRoute);
 app.use("/api/avatar", avatarRoute);
 app.use("/api/admin", adminRoutes);
+app.use("/api/ems", emsRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/kyc", kycRoutes);
 app.use("/api/withdrawal", withdrawalRoutes);
@@ -135,6 +136,7 @@ app.use("/api/upload", UploadRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/upi", upiRoutes);
 app.use("/api/public", publicRoutes);
+app.use("/api/teamleader", publicRoutes);
 app.get("/api/system-messages", verifyToken, getSystemMessages);
 
 

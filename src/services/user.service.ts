@@ -1,5 +1,70 @@
 import { User } from "../models/user.model";
 import { cacheService } from "../utils/cache";
+import HostLevel from "../models/hostLevel.model";
+import { CoinsTransaction } from "../models/spentCoinModel";
+import { CallStatus, TransactionType } from "../constants/user";
+import { ClientSession, Types } from "mongoose";
+
+/**
+ * Recalculate and update host level dynamically in DB based on completed calls and minutes.
+ */
+export const recalculateAndUpdateHostLevel = async (
+  hostId: Types.ObjectId | string,
+  session?: ClientSession
+): Promise<number> => {
+  try {
+    const transactions = await CoinsTransaction.find({
+      hostId,
+      type: TransactionType.VOICE_CALL,
+      status: CallStatus.ENDED,
+    }).select('duration').session(session || null as any).lean();
+
+    const totalCalls = transactions.length;
+    const totalDurationSeconds = transactions.reduce(
+      (sum, t) => sum + Number(t.duration || 0),
+      0
+    );
+    const totalMinutes = Math.floor(totalDurationSeconds / 60);
+
+    const now = new Date();
+    const allLevels = await HostLevel.find({
+      $or: [
+        { expiresAt: { $exists: false } },
+        { expiresAt: null },
+        { expiresAt: { $gt: now } }
+      ]
+    }).session(session || null as any).sort({ level: -1 }).lean();
+
+    const realLevels = allLevels.filter(lvl => lvl.level > 0);
+    let qualifiedLevel = realLevels.length > 0 ? realLevels[realLevels.length - 1].level : 1;
+
+    for (const lvl of realLevels) {
+      if (totalCalls >= (lvl.minCalls || 0) && totalMinutes >= (lvl.minMinutes || 0)) {
+        qualifiedLevel = lvl.level;
+        break;
+      }
+    }
+
+    const hostUser = await User.findById(hostId).select('level').session(session || null as any).lean();
+    const currentStoredLevel = (hostUser as any)?.level || 0;
+    const targetLevel = Math.max(currentStoredLevel, qualifiedLevel);
+
+    if (currentStoredLevel !== targetLevel) {
+      await User.findByIdAndUpdate(
+        hostId,
+        { $set: { level: targetLevel } },
+        { session: session || null as any }
+      );
+      console.log(`🎉 Host ${hostId} level updated from ${currentStoredLevel} to ${targetLevel}`);
+    }
+
+    return targetLevel;
+  } catch (error) {
+    console.error(`Error in recalculateAndUpdateHostLevel for ${hostId}:`, error);
+    const fallbackUser = await User.findById(hostId).select('level').session(session || null as any).lean();
+    return (fallbackUser as any)?.level || 1;
+  }
+};
 
 interface GetAllHostsOptions {
   role: string;
