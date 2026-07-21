@@ -1,15 +1,23 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
+export interface IPermissionVersion {
+  version: number;
+  actions: string[];
+  fields: Record<string, boolean>;
+  updatedBy: string;
+  savedAt: Date;
+}
+
 export interface IPermission extends Document {
   targetType: 'role' | 'user';
-  targetId: string; // E.g., 'admin' or string representation of user's MongoDB ObjectId or userId
+  targetId: string;
   menus: string[];
   pages: string[];
   modules: string[];
   actions: string[];
-  fields: Map<string, boolean>; // Field-level visibility: e.g. Map { "coins": false, "email": false }
+  fields: Map<string, boolean>;
   buttons: string[];
-  columns: Map<string, string[]>; // Visible columns per table, e.g. Map { "user": ["UID", "Name", "Age"] }
+  columns: Map<string, string[]>;
   dashboardWidgets: string[];
   exports: string[];
   imports: string[];
@@ -20,6 +28,12 @@ export interface IPermission extends Document {
   developer: string[];
   isTemplate: boolean;
   templateName?: string;
+  isCustomRole?: boolean;
+  customRoleDescription?: string;
+  parentRoleInherit?: string;
+  expiresAt?: Date;
+  versionHistory?: IPermissionVersion[];
+  organizationId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,6 +59,20 @@ const permissionSchema = new Schema<IPermission>(
     developer: { type: [String], default: [] },
     isTemplate: { type: Boolean, default: false },
     templateName: { type: String },
+    isCustomRole: { type: Boolean, default: false },
+    customRoleDescription: { type: String },
+    parentRoleInherit: { type: String },
+    expiresAt: { type: Date },
+    versionHistory: [
+      {
+        version: { type: Number },
+        actions: { type: [String] },
+        fields: { type: Map, of: Boolean },
+        updatedBy: { type: String },
+        savedAt: { type: Date, default: Date.now },
+      },
+    ],
+    organizationId: { type: String },
   },
   { timestamps: true }
 );

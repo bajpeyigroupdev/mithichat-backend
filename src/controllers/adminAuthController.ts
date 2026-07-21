@@ -249,17 +249,17 @@ const generateEmployeeCode = (prefix: string, userId: number): string => {
 };
 
 // ============ Role Hierarchy: Who Can Create Whom ============
-// owner          -> operator, superAdmin, admin, agency, coinSeller
-// operator       -> superAdmin, admin, agency, coinSeller
-// superAdmin     -> admin, agency, coinSeller
-// admin          -> agency, coinSeller
-// agency         -> (cannot create other staff)
+// owner          -> operator, superAdmin, admin, agency, coinSeller, host, user
+// operator       -> superAdmin, admin, agency, coinSeller, host, user
+// superAdmin     -> admin, agency, coinSeller, host, user
+// admin          -> agency, coinSeller, host, user
+// agency         -> host, user
 const canCreate: Record<string, string[]> = {
-    owner:      ['operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'host'],
-    operator:   ['superAdmin', 'admin', 'agency', 'coinSeller', 'host'],
-    superAdmin: ['admin', 'agency', 'coinSeller', 'host'],
-    admin:      ['agency', 'coinSeller', 'host'],
-    agency:     ['host'],
+    owner:      ['operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'host', 'user'],
+    operator:   ['superAdmin', 'admin', 'agency', 'coinSeller', 'host', 'user'],
+    superAdmin: ['admin', 'agency', 'coinSeller', 'host', 'user'],
+    admin:      ['agency', 'coinSeller', 'host', 'user'],
+    agency:     ['host', 'user'],
 };
 
 const roleCodePrefix: Record<string, string> = {
@@ -269,9 +269,10 @@ const roleCodePrefix: Record<string, string> = {
     agency:     'AGN',
     coinSeller: 'CS',
     host:       'HST',
+    user:       'USR',
 };
 
-// ============ Create any sub-role employee ============
+// ============ Create any sub-role employee / user ============
 export const createEmployee = async (req: AuthRequest, res: Response) => {
     try {
         const { role: creatorRole, userId: creatorUserId, id: creatorId } = req.user || {};
@@ -279,22 +280,20 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
         const { name, email, password, phoneNumber, targetRole, documents } = req.body;
 
         if (!creatorRole || !canCreate[creatorRole]) {
-            return sendResponse(res, 403, false, 'Access Denied: You do not have permission to create employees.');
+            return sendResponse(res, 403, false, 'Access Denied: You do not have permission to create accounts.');
         }
 
         const allowedRoles = canCreate[creatorRole];
-        if (!allowedRoles.includes(targetRole)) {
-            return sendResponse(res, 403, false, `Access Denied: A "${creatorRole}" cannot create a "${targetRole}".`);
+        const roleToCreate = targetRole || 'user';
+        if (!allowedRoles.includes(roleToCreate)) {
+            return sendResponse(res, 403, false, `Access Denied: A "${creatorRole}" cannot create a "${roleToCreate}".`);
         }
 
         if (!name || !email || !password) {
             return sendResponse(res, 400, false, 'Name, Email, and Password are required.');
         }
 
-        // Documents required for all non-owner roles
-        if (!documents || !Array.isArray(documents) || documents.length === 0) {
-            return sendResponse(res, 400, false, 'At least one document URL is required.');
-        }
+        const docList = Array.isArray(documents) ? documents.filter(Boolean) : (documents ? [documents] : []);
 
         const existing = await User.findOne({ $or: [{ email }, phoneNumber ? { phoneNumber } : {}] });
         if (existing) {
@@ -303,21 +302,21 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
 
         const hashedPassword = await generateSecureHash(password);
         const newUserId = await generateUniqueId();
-        const employeeCode = generateEmployeeCode(roleCodePrefix[targetRole] || 'EMP', newUserId);
+        const employeeCode = generateEmployeeCode(roleCodePrefix[roleToCreate] || 'EMP', newUserId);
 
         const newEmployee = await User.create({
             name,
             email,
             password: hashedPassword,
             phoneNumber: phoneNumber || undefined,
-            role: targetRole,
+            role: roleToCreate,
             userId: newUserId,
             gender: 'other',
             emailVerified: true,
             isActive: true,
             employeeCode,
             referredBy: creatorId,
-            documents: documents || [],
+            documents: docList,
             device: {
                 createdDeviceId: 'ADMIN_PANEL',
                 currentDeviceId: 'ADMIN_PANEL'
@@ -327,12 +326,61 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
         const empData = newEmployee.toObject();
         delete empData.password;
 
-        return sendResponse(res, 201, true, `${targetRole} created successfully`, {
+        return sendResponse(res, 201, true, `${roleToCreate} created successfully`, {
             ...empData,
             employeeCode,
         });
     } catch (error: any) {
         await Logger('createEmployee', error);
+        return sendResponse(res, 500, false, error.message);
+    }
+};
+
+// ============ Admin fetch all recharge history logs ============
+export const getAdminRechargeHistory = async (req: AuthRequest, res: Response) => {
+    try {
+        const { role } = req.user || {};
+        if (!['owner', 'operator', 'superAdmin', 'admin'].includes(role || '')) {
+            return sendResponse(res, 403, false, "Access Denied");
+        }
+
+        const { page = 1, limit = 50, type, userId } = req.query;
+        const pageNumber = Math.max(1, parseInt(page as string, 10) || 1);
+        const limitNumber = Math.max(1, parseInt(limit as string, 10) || 50);
+        const skip = (pageNumber - 1) * limitNumber;
+
+        const query: any = {};
+        if (userId) {
+            query.userId = Number(userId);
+        }
+        if (type) {
+            query.type = type;
+        }
+
+        const totalRecords = await RechargeHistory.countDocuments(query);
+        const records = await RechargeHistory.find(query)
+            .sort({ date: -1, createdAt: -1 })
+            .skip(skip)
+            .limit(limitNumber)
+            .lean();
+
+        const userIds = [...new Set(records.map(r => r.userId))];
+        const users = await User.find({ userId: { $in: userIds } }).select('userId name email image').lean();
+        const userMap = new Map(users.map(u => [u.userId, u]));
+
+        const formattedHistory = records.map(rec => ({
+            ...rec,
+            user: userMap.get(rec.userId) || { name: `User #${rec.userId}`, email: '' }
+        }));
+
+        return sendResponse(res, 200, true, "Recharge history fetched successfully", {
+            history: formattedHistory,
+            totalRecords,
+            currentPage: pageNumber,
+            totalPages: Math.ceil(totalRecords / limitNumber)
+        });
+    } catch (error: any) {
+        await Logger("getAdminRechargeHistory", error);
         return sendResponse(res, 500, false, error.message);
     }
 };

@@ -33,6 +33,7 @@ router.get('/profile', verifyToken, getAdminProfile);
 router.patch('/profile', verifyToken, updateAdminProfile);
 router.post('/users/add-coins', verifyToken, addCoinsToUser);
 router.post('/users/add-diamonds', verifyToken, addDiamondsToUser);
+router.get('/recharges/history', verifyToken, getAdminRechargeHistory);
 
 // Self-promote to owner (superAdmin only, one-time setup)
 router.post('/promote-owner', verifyToken, async (req: any, res: any) => {
