@@ -7,6 +7,7 @@ import {
     updateAdminProfile,
     addCoinsToUser,
     addDiamondsToUser,
+    getAdminRechargeHistory,
 } from '../controllers/adminAuthController';
 import {
     getDashboardStats,
