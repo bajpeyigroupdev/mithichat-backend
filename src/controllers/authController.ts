@@ -182,7 +182,7 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
 // ==================== REGISTER ====================
 export const userRegister = async (req: AuthRequest, res: Response) => {
   try {
-    const { phoneNumber, password, gender, deviceId, userFrom, language, country } = req.body;
+    const { phoneNumber, password, gender, deviceId, userFrom, language, country, age } = req.body;
 
     if (!phoneNumber || !password || !gender) {
       return sendResponse(res, 400, false, "Phone number, password and gender are required");
@@ -237,6 +237,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       language,
       country,
       authType: "phone",
+      age: Number(age) || 18,
       device: {
         createdDeviceId: deviceId || "",   // fixed at signup
         currentDeviceId: deviceId || "",
@@ -384,7 +385,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
   const client = new OAuth2Client(config.GOOGLE_CLIENT_ID);
 
   try {
-    const { googleIdToken, deviceId, userFrom, gender, language, country } = req.body;
+    const { googleIdToken, deviceId, userFrom, gender, language, country, age } = req.body;
 
     if (!googleIdToken) return sendResponse(res, 400, false, "Google token required");
 
@@ -485,6 +486,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       emailVerified: payload.email_verified || false,
       language,
       country,
+      age: Number(age) || 18,
       device: userFrom === "app" ? { createdDeviceId: deviceId, currentDeviceId: deviceId, loggedInDeviceIds: [deviceId] } : {},
     });
 
