@@ -20,7 +20,7 @@ export const scheduleInterview = async (req: Request, res: Response) => {
             interviewerId: interviewerId || interviewerUser?._id,
             interviewerName: interviewerName || interviewerUser?.name || 'HR Interviewer',
             scheduledAt: new Date(scheduledAt),
-            meetingUrl: meetingUrl || `https://meet.jit.si/MeethiChat-Interview-${applicationId}`,
+            meetingUrl: meetingUrl || `https://meet.jit.si/MithiChat-Interview-${applicationId}`,
             status: 'scheduled'
         });
 
