@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { RecruitmentApplication, RecruitmentRole, ApplicationStatus } from '../models/recruitmentApplication.model';
 import { User } from '../models/user.model';
+import { Request as RequestModel } from '../models/request.model';
 import sendResponse from '../utils/reponse';
 import { Logger } from '../utils/logger';
 import { sendRecruitmentWorkflowNotification } from '../services/recruitmentNotification';
@@ -157,6 +158,57 @@ export const submitApplication = async (req: Request, res: Response) => {
                 timestamp: new Date()
             }]
         });
+
+        // Automatically sync to EMS Request Center for the role's Request Page (e.g. Operator Request, Admin Request, Super Admin Request)
+        const roleToRequestTypeMap: Record<string, string> = {
+            operator: 'Operator Request',
+            admin: 'Admin Request',
+            'super-admin': 'Super Admin Request',
+            agency: 'Agency Request',
+            'customer-service': 'Support Request',
+            host: 'Host Request',
+        };
+
+        const requestType = roleToRequestTypeMap[role];
+        if (requestType) {
+            try {
+                const resumeDoc = parsedDocs.find(d => d.documentType === 'Resume' || d.name?.toLowerCase().includes('resume'));
+                const adharFrontDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('front') || d.documentType === 'GovtID');
+                const adharBackDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('back'));
+                const panDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('pan') || d.documentType === 'Certificate');
+
+                await RequestModel.create({
+                    requestType,
+                    data: {
+                        name: applicantName,
+                        email: applicantEmail.toLowerCase(),
+                        phoneNumber: applicantPhone,
+                        gender: gender || 'other',
+                        country: country || 'India',
+                        city: city || '',
+                        address: address || '',
+                        experience: experienceYears || '',
+                        referralCode: referralCode || '',
+                        invitedBy: referrerData?.referrerName || referrerData?.code || 'Direct Recruitment Portal',
+                        parentOperator: referrerData?.code || '',
+                        parentOwner: referrerData?.code || '',
+                        mithiChatId: applicationId,
+                        meethiChatId: applicationId,
+                        resume: resumeDoc?.url || '',
+                        adharFront: adharFrontDoc?.url || '',
+                        adharBack: adharBackDoc?.url || '',
+                        pan: panDoc?.url || '',
+                        specialCode: roleSpecificFields.specialCode || roleSpecificFields.adminCode || roleSpecificFields.superAdminCode || roleSpecificFields.operatorCode || '',
+                        ...roleSpecificFields
+                    },
+                    status: 'pending',
+                    createdBy: referrerData?.referrerId || 'public_recruitment',
+                    createdByRole: referrerData?.referrerRole || 'public'
+                });
+            } catch (reqErr) {
+                await Logger('submitApplicationEMSRequestSyncError', reqErr);
+            }
+        }
 
         return sendResponse(res, 201, true, 'Recruitment application submitted successfully!', {
             applicationId: newApplication.applicationId,
