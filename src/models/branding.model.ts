@@ -15,7 +15,7 @@ export interface IBranding extends Document {
 
 const BrandingSchema = new Schema<IBranding>({
     orgId: { type: Schema.Types.ObjectId, ref: 'Organization', index: true },
-    companyName: { type: String, required: true, default: 'MeethiChat' },
+    companyName: { type: String, required: true, default: 'MithiChat' },
     logoUrl: { type: String, default: '' },
     faviconUrl: { type: String, default: '' },
     primaryColor: { type: String, default: '#4f46e5' },
