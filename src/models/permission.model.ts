@@ -2,10 +2,25 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IPermissionVersion {
   version: number;
-  actions: string[];
-  fields: Record<string, boolean>;
-  updatedBy: string;
-  savedAt: Date;
+  menus?: string[];
+  pages?: string[];
+  modules?: string[];
+  actions?: string[];
+  fields?: Record<string, boolean>;
+  buttons?: string[];
+  columns?: Record<string, string[]>;
+  changedBy: string;
+  changedAt: Date;
+  reason: string;
+}
+
+export interface IABACRule {
+  logical?: 'AND' | 'OR';
+  field?: string;
+  operator?: '==' | '!=' | '>' | '<' | '>=' | '<=' | 'contains' | 'startsWith' | 'endsWith';
+  value?: any;
+  conditions?: IABACRule[];
+  action?: string;
 }
 
 export interface IPermission extends Document {
@@ -34,6 +49,8 @@ export interface IPermission extends Document {
   expiresAt?: Date;
   versionHistory?: IPermissionVersion[];
   organizationId?: string;
+  orgId?: mongoose.Types.ObjectId;
+  abacRules?: IABACRule[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -66,13 +83,21 @@ const permissionSchema = new Schema<IPermission>(
     versionHistory: [
       {
         version: { type: Number },
+        menus: { type: [String] },
+        pages: { type: [String] },
+        modules: { type: [String] },
         actions: { type: [String] },
         fields: { type: Map, of: Boolean },
-        updatedBy: { type: String },
-        savedAt: { type: Date, default: Date.now },
+        buttons: { type: [String] },
+        columns: { type: Map, of: [String] },
+        changedBy: { type: String },
+        changedAt: { type: Date, default: Date.now },
+        reason: { type: String, default: '' },
       },
     ],
     organizationId: { type: String },
+    orgId: { type: Schema.Types.ObjectId, ref: 'Organization' },
+    abacRules: { type: Schema.Types.Mixed, default: [] }
   },
   { timestamps: true }
 );

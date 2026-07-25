@@ -39,17 +39,15 @@ const allowedOrigins = [
   'https://admin.mithichat.live',
   'http://admin.mithichat.live',
 
-  'https://agency.meethichat.live',
-  'https://operator.meethichat.live',
-  'https://adminjoin.meethichat.live',
-  'https://support.meethichat.live',
-  'https://superadmin.meethichat.live',
+  'https://agency.mithichat.live',
+  'https://operator.mithichat.live',
+  'https://host.mithichat.live',
+  'https://adminjoin.mithichat.live',
+  'https://support.mithichat.live',
+  'https://superadmin.mithichat.live',
 
   'https://management.mithichat.live',
   'http://management.mithichat.live',
-
-  'https://management.meethichat.com',
-  'http://management.meethichat.com',
 
   'https://danilo-syngamic-unterrifically.ngrok-free.dev',
 ].filter(Boolean);
@@ -57,7 +55,7 @@ const allowedOrigins = [
 const isLocalhostOrigin = (origin: string) => {
   try {
     const url = new URL(origin);
-    return ['localhost', '127.0.0.1'].includes(url.hostname) || url.hostname.endsWith('.meethichat.live') || url.hostname.endsWith('.mithichat.live');
+    return ['localhost', '127.0.0.1'].includes(url.hostname) || url.hostname.endsWith('.mithichat.live');
   } catch {
     return false;
   }

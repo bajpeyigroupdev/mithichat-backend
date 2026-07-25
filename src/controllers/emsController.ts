@@ -6,6 +6,8 @@ import { Request as RequestModel, RequestStatus, IRequest } from '../models/requ
 import { User } from '../models/user.model';
 import { AuditLog } from '../models/auditLog.model';
 import { Counter } from '../models/counter.model';
+import { PageRegistry } from '../models/pageRegistry.model';
+import { Role } from '../models/role.model';
 import sendResponse from '../utils/reponse';
 import { generateSecureHash } from '../utils/passwordHelper';
 import { generateUniqueId } from '../utils/generator';
@@ -17,7 +19,13 @@ export const logActivity = async (
   action: string,
   target: string,
   details: string,
-  ipAddress: string = '127.0.0.1'
+  ipAddress: string = '127.0.0.1',
+  userAgent: string = '',
+  browser: string = '',
+  device: string = '',
+  oldValue: any = null,
+  newValue: any = null,
+  reason: string = ''
 ) => {
   try {
     await AuditLog.create({
@@ -26,6 +34,12 @@ export const logActivity = async (
       target,
       ipAddress,
       details,
+      userAgent,
+      browser,
+      device,
+      oldValue,
+      newValue,
+      reason,
     });
   } catch (error) {
     console.error('[Audit Log Error]:', error);
@@ -234,18 +248,112 @@ export const getMyPermissions = async (req: AuthRequest, res: Response) => {
 
 export const updatePermissions = async (req: AuthRequest, res: Response) => {
   try {
-    const { targetType, targetId, permissions } = req.body;
+    const { targetType, targetId, permissions, reason, abacRules, orgId } = req.body;
     const actor = req.user!;
 
     if (!targetType || !targetId || !permissions) {
       return sendResponse(res, 400, false, 'targetType, targetId, and permissions data are required.');
     }
 
-    const updatedPermission = await Permission.findOneAndUpdate(
-      { targetType, targetId },
-      { ...permissions },
-      { new: true, upsert: true }
-    );
+    const oldPermission = await Permission.findOne({ targetType, targetId });
+    const oldValue = oldPermission ? {
+      menus: oldPermission.menus,
+      pages: oldPermission.pages,
+      modules: oldPermission.modules,
+      actions: oldPermission.actions,
+      fields: oldPermission.fields,
+      buttons: oldPermission.buttons,
+      columns: oldPermission.columns
+    } : null;
+
+    let permissionObj = await Permission.findOne({ targetType, targetId });
+    if (!permissionObj) {
+      permissionObj = new Permission({ targetType, targetId });
+    }
+
+    // Capture Snapshot Version History
+    const nextVersion = (permissionObj.versionHistory?.length || 0) + 1;
+    permissionObj.versionHistory = permissionObj.versionHistory || [];
+    
+    // Normalize maps/records for serialization
+    const fieldsSnapshot = permissions.fields instanceof Map 
+      ? Object.fromEntries(permissions.fields) 
+      : permissions.fields || {};
+    
+    const columnsSnapshot = permissions.columns instanceof Map 
+      ? Object.fromEntries(permissions.columns) 
+      : permissions.columns || {};
+
+    permissionObj.versionHistory.push({
+      version: nextVersion,
+      menus: permissions.menus || [],
+      pages: permissions.pages || [],
+      modules: permissions.modules || [],
+      actions: permissions.actions || [],
+      fields: fieldsSnapshot,
+      buttons: permissions.buttons || [],
+      columns: columnsSnapshot,
+      changedBy: actor.name || 'System Admin',
+      changedAt: new Date(),
+      reason: reason || 'Manual Admin Update'
+    });
+
+    // Update properties
+    permissionObj.menus = permissions.menus || [];
+    permissionObj.pages = permissions.pages || [];
+    permissionObj.modules = permissions.modules || [];
+    permissionObj.actions = permissions.actions || [];
+    permissionObj.fields = permissions.fields || new Map();
+    permissionObj.buttons = permissions.buttons || [];
+    permissionObj.columns = permissions.columns || new Map();
+    
+    if (permissions.expiresAt) {
+      permissionObj.expiresAt = new Date(permissions.expiresAt);
+    }
+    if (abacRules) {
+      permissionObj.abacRules = abacRules;
+    }
+    if (orgId) {
+      permissionObj.orgId = orgId;
+    }
+
+    const updatedPermission = await permissionObj.save();
+
+    const newValue = {
+      menus: updatedPermission.menus,
+      pages: updatedPermission.pages,
+      modules: updatedPermission.modules,
+      actions: updatedPermission.actions,
+      fields: updatedPermission.fields,
+      buttons: updatedPermission.buttons,
+      columns: updatedPermission.columns
+    };
+
+    // Invalidate high performance cache
+    const { PermissionCache } = require('../utils/permissionCache');
+    await PermissionCache.invalidate(targetType, targetId, orgId);
+
+    // Live Socket.IO Broadcast
+    try {
+      const { getIO, getUserRoom } = require('../sockets');
+      const io = getIO();
+      if (targetType === 'user') {
+        io.to(getUserRoom(targetId)).emit('permissionsUpdated', { targetType, targetId, permissions: newValue });
+      } else {
+        io.emit('rolePermissionsUpdated', { role: targetId, permissions: newValue });
+      }
+    } catch (err) {
+      console.warn('[Socket.IO] Broadcast failed (likely not initialized/standalone):', err);
+    }
+
+    const uaString = req.headers['user-agent'] || '';
+    let browser = 'Unknown';
+    let device = 'Desktop';
+    if (uaString.includes('Firefox')) browser = 'Firefox';
+    else if (uaString.includes('Chrome')) browser = 'Chrome';
+    else if (uaString.includes('Safari')) browser = 'Safari';
+    else if (uaString.includes('Edge')) browser = 'Edge';
+    if (uaString.includes('Mobi') || uaString.includes('Android') || uaString.includes('iPhone')) device = 'Mobile';
 
     // Audit Log
     await logActivity(
@@ -253,7 +361,14 @@ export const updatePermissions = async (req: AuthRequest, res: Response) => {
       actor.role,
       'Permission Changed',
       `${targetType}:${targetId}`,
-      `Permissions updated by ${actor.name} for ${targetType} ID: ${targetId}`
+      `Permissions updated by ${actor.name} for ${targetType} ID: ${targetId} (Version ${nextVersion})`,
+      req.ip || '127.0.0.1',
+      uaString,
+      browser,
+      device,
+      oldValue,
+      newValue,
+      reason || 'Manual Admin Update'
     );
 
     return sendResponse(res, 200, true, 'Permissions updated successfully', updatedPermission);
@@ -889,11 +1004,378 @@ export const restorePermissionVersion = async (req: AuthRequest, res: Response) 
       return sendResponse(res, 404, false, `Version ${versionNumber} not found.`);
     }
 
+    perm.menus = targetVersion.menus || [];
+    perm.pages = targetVersion.pages || [];
+    perm.modules = targetVersion.modules || [];
     perm.actions = targetVersion.actions || [];
-    perm.buttons = targetVersion.actions || [];
-    await perm.save();
+    perm.buttons = targetVersion.buttons || [];
+    perm.fields = new Map(Object.entries(targetVersion.fields || {}));
+    perm.columns = new Map(Object.entries(targetVersion.columns || {}));
 
-    return sendResponse(res, 200, true, `Successfully restored ${targetId} to Version ${versionNumber}.`, perm);
+    const restored = await perm.save();
+
+    // Invalidate Cache
+    const { PermissionCache } = require('../utils/permissionCache');
+    await PermissionCache.invalidate(targetType, targetId, perm.orgId?.toString());
+
+    // Live Socket.IO Broadcast
+    try {
+      const { getIO, getUserRoom } = require('../sockets');
+      const io = getIO();
+      if (targetType === 'user') {
+        io.to(getUserRoom(targetId)).emit('permissionsUpdated', { targetType, targetId, permissions: restored });
+      } else {
+        io.emit('rolePermissionsUpdated', { role: targetId, permissions: restored });
+      }
+    } catch (err) {
+      console.warn('[Socket.IO] Broadcast failed during version restore:', err);
+    }
+
+    return sendResponse(res, 200, true, `Successfully restored ${targetId} to Version ${versionNumber}.`, restored);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const registerPage = async (req: AuthRequest, res: Response) => {
+  try {
+    const {
+      pageId,
+      name,
+      category,
+      icon,
+      actions,
+      fields,
+      columns,
+      buttons,
+      tabs,
+      cards,
+      widgets,
+      filters,
+      metadata
+    } = req.body;
+
+    if (!pageId || !name) {
+      return sendResponse(res, 400, false, 'pageId and name are required.');
+    }
+
+    const updatedPage = await PageRegistry.findOneAndUpdate(
+      { pageId },
+      {
+        pageId,
+        name,
+        category: category || 'General',
+        icon,
+        actions: actions || [],
+        fields: fields || [],
+        columns: columns || [],
+        buttons: buttons || [],
+        tabs: tabs || [],
+        cards: cards || [],
+        widgets: widgets || [],
+        filters: filters || [],
+        metadata: metadata || {}
+      },
+      { new: true, upsert: true }
+    );
+
+    return sendResponse(res, 200, true, 'Page registered successfully', updatedPage);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const listRegisteredPages = async (req: AuthRequest, res: Response) => {
+  try {
+    let pages = await PageRegistry.find({}).sort({ category: 1, name: 1 });
+    if (pages.length === 0) {
+      // Seed with some standard dashboard pages automatically
+      const initialPages = [
+        {
+          pageId: 'dashboard',
+          name: 'Dashboard Console',
+          category: 'Analytics',
+          actions: ['View Dashboard', 'View Statistics', 'View Revenue', 'View Charts', 'Export Dashboard'],
+          widgets: [
+            { key: 'minutesToday', label: "Today's Minutes" },
+            { key: 'coinsSpentToday', label: 'Coins Spent Today' },
+            { key: 'hostEarningsToday', label: 'Host Earnings Today' },
+            { key: 'revenueToday', label: "Today's Revenue" }
+          ]
+        },
+        {
+          pageId: 'users',
+          name: 'User Management',
+          category: 'General',
+          actions: ['View Users', 'Create User', 'Edit User', 'Delete User', 'Suspend User', 'Reset Password', 'Change Coins', 'Change Diamonds', 'Change Level', 'View Wallet', 'View KYC', 'View Call History'],
+          fields: [
+            { key: 'No', label: 'Serial No (No)' },
+            { key: 'Image', label: 'Profile Image' },
+            { key: 'Name', label: 'Display Name' },
+            { key: 'Username', label: 'Username' },
+            { key: 'UniqueId', label: 'Unique ID' },
+            { key: 'Email', label: 'Email / Phone' },
+            { key: 'Role', label: 'System Role' },
+            { key: 'Gender', label: 'Gender' },
+            { key: 'Rcoin', label: 'Coins Balance' },
+            { key: 'Diamond', label: 'Diamonds Balance' },
+            { key: 'Country', label: 'Country' },
+            { key: 'Age', label: 'Age' },
+            { key: 'Level', label: 'User Level' },
+            { key: 'isVIP', label: 'VIP Membership' },
+            { key: 'isHost', label: 'Host Mode' },
+            { key: 'Joined', label: 'Date Joined' },
+            { key: 'Status', label: 'Account Status' }
+          ],
+          columns: [
+            { key: 'No', label: 'Serial No (No)' },
+            { key: 'Image', label: 'Profile Image' },
+            { key: 'Name', label: 'Display Name' },
+            { key: 'Username', label: 'Username' },
+            { key: 'UniqueId', label: 'Unique ID' },
+            { key: 'Email', label: 'Email / Phone' },
+            { key: 'Role', label: 'System Role' },
+            { key: 'Gender', label: 'Gender' },
+            { key: 'Rcoin', label: 'Coins Balance' },
+            { key: 'Diamond', label: 'Diamonds Balance' },
+            { key: 'Country', label: 'Country' },
+            { key: 'Age', label: 'Age' },
+            { key: 'Level', label: 'User Level' },
+            { key: 'isVIP', label: 'VIP Membership' },
+            { key: 'isHost', label: 'Host Mode' },
+            { key: 'Joined', label: 'Date Joined' },
+            { key: 'Status', label: 'Account Status' }
+          ],
+          buttons: [
+            { key: 'Add', label: 'Add User Button' },
+            { key: 'Edit', label: 'Edit User Button' },
+            { key: 'Delete', label: 'Delete User Button' },
+            { key: 'Suspend', label: 'Suspend User Button' },
+            { key: 'Activate', label: 'Activate User Button' },
+            { key: 'Recharge', label: 'Recharge Balance Button' },
+            { key: 'Export', label: 'Export Data Button' }
+          ],
+          filters: [
+            { key: 'role', label: 'Filter by Role' },
+            { key: 'level', label: 'Filter by Level' },
+            { key: 'search', label: 'Filter by Search Query' }
+          ]
+        },
+        {
+          pageId: 'agency',
+          name: 'Agency Management',
+          category: 'Administration',
+          actions: ['View Agencies', 'Create Agency', 'Edit Agency', 'Delete Agency', 'Approve Agency', 'Reject Agency', 'View Earnings', 'Assign Hosts'],
+          fields: [
+            { key: 'agencyCode', label: 'Agency Code' },
+            { key: 'commissionRate', label: 'Commission Rate (%)' }
+          ]
+        },
+        {
+          pageId: 'seller',
+          name: 'Seller Management',
+          category: 'Financial',
+          actions: ['View Sellers', 'Create Seller', 'Edit Seller', 'Delete Seller', 'Approve Seller'],
+          fields: [
+            { key: 'sellerCode', label: 'Seller Code' },
+            { key: 'coinStock', label: 'Coin Stock Balance' }
+          ]
+        },
+        {
+          pageId: 'host',
+          name: 'Host Management',
+          category: 'General',
+          actions: ['View Hosts', 'Approve Host', 'Reject Host', 'Ban Host', 'Remove Host', 'View Earnings'],
+          fields: [
+            { key: 'hostCode', label: 'Host Code' },
+            { key: 'callRate', label: 'Call Rate (coins/min)' }
+          ]
+        }
+      ];
+      await PageRegistry.insertMany(initialPages);
+      pages = await PageRegistry.find({}).sort({ category: 1, name: 1 });
+    }
+    return sendResponse(res, 200, true, 'Registered pages retrieved successfully', pages);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const clonePermissions = async (req: AuthRequest, res: Response) => {
+  try {
+    const { sourceType, sourceId, targetType, targetId } = req.body;
+
+    if (!sourceType || !sourceId || !targetType || !targetId) {
+      return sendResponse(res, 400, false, 'sourceType, sourceId, targetType, and targetId are required.');
+    }
+
+    const sourcePerm = await Permission.findOne({ targetType: sourceType, targetId: sourceId });
+    if (!sourcePerm) {
+      return sendResponse(res, 404, false, 'Source permissions not found.');
+    }
+
+    const updatedPerm = await Permission.findOneAndUpdate(
+      { targetType, targetId },
+      {
+        menus: sourcePerm.menus,
+        pages: sourcePerm.pages,
+        modules: sourcePerm.modules,
+        actions: sourcePerm.actions,
+        fields: sourcePerm.fields,
+        buttons: sourcePerm.buttons,
+        columns: sourcePerm.columns,
+        dashboardWidgets: sourcePerm.dashboardWidgets,
+        exports: sourcePerm.exports,
+        imports: sourcePerm.imports,
+        reports: sourcePerm.reports,
+        notifications: sourcePerm.notifications,
+        finance: sourcePerm.finance,
+        settings: sourcePerm.settings,
+        developer: sourcePerm.developer
+      },
+      { new: true, upsert: true }
+    );
+
+    // Audit Log
+    const actor = req.user!;
+    await logActivity(
+      actor.id.toString(),
+      actor.role,
+      'Permission Cloned',
+      `${targetType}:${targetId}`,
+      `Permissions cloned from ${sourceType}:${sourceId} to ${targetType}:${targetId} by ${actor.name}`
+    );
+
+    return sendResponse(res, 200, true, 'Permissions cloned successfully', updatedPerm);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const duplicateRole = async (req: AuthRequest, res: Response) => {
+  try {
+    const { sourceRole, newRoleName, description } = req.body;
+
+    if (!sourceRole || !newRoleName) {
+      return sendResponse(res, 400, false, 'sourceRole and newRoleName are required.');
+    }
+
+    const existingRole = await Role.findOne({ roleName: newRoleName });
+    if (existingRole) {
+      return sendResponse(res, 400, false, `Role '${newRoleName}' already exists.`);
+    }
+
+    const newRole = await Role.create({
+      roleName: newRoleName,
+      description,
+      parentRoleInherit: sourceRole,
+      isCustom: true
+    });
+
+    const sourcePerm = await Permission.findOne({ targetType: 'role', targetId: sourceRole });
+    if (sourcePerm) {
+      await Permission.create({
+        targetType: 'role',
+        targetId: newRoleName,
+        menus: sourcePerm.menus,
+        pages: sourcePerm.pages,
+        modules: sourcePerm.modules,
+        actions: sourcePerm.actions,
+        fields: sourcePerm.fields,
+        buttons: sourcePerm.buttons,
+        columns: sourcePerm.columns,
+        dashboardWidgets: sourcePerm.dashboardWidgets,
+        exports: sourcePerm.exports,
+        imports: sourcePerm.imports,
+        reports: sourcePerm.reports,
+        notifications: sourcePerm.notifications,
+        finance: sourcePerm.finance,
+        settings: sourcePerm.settings,
+        developer: sourcePerm.developer,
+        isCustomRole: true,
+        customRoleDescription: description,
+        parentRoleInherit: sourceRole
+      });
+    }
+
+    const actor = req.user!;
+    await logActivity(
+      actor.id.toString(),
+      actor.role,
+      'Role Duplicated',
+      newRoleName,
+      `Role ${newRoleName} created by duplicating ${sourceRole} by ${actor.name}`
+    );
+
+    return sendResponse(res, 200, true, 'Role duplicated successfully', newRole);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const exportPermissions = async (req: AuthRequest, res: Response) => {
+  try {
+    const { targetType, targetId } = req.query;
+
+    if (!targetType || !targetId) {
+      return sendResponse(res, 400, false, 'targetType and targetId query params are required.');
+    }
+
+    const perm = await Permission.findOne({ targetType: String(targetType), targetId: String(targetId) });
+    if (!perm) {
+      return sendResponse(res, 404, false, 'Permissions not found.');
+    }
+
+    return sendResponse(res, 200, true, 'Permissions exported successfully', {
+      targetType: perm.targetType,
+      targetId: perm.targetId,
+      permissions: {
+        menus: perm.menus,
+        pages: perm.pages,
+        modules: perm.modules,
+        actions: perm.actions,
+        fields: perm.fields,
+        buttons: perm.buttons,
+        columns: perm.columns,
+        dashboardWidgets: perm.dashboardWidgets,
+        exports: perm.exports,
+        imports: perm.imports,
+        reports: perm.reports,
+        notifications: perm.notifications,
+        finance: perm.finance,
+        settings: perm.settings,
+        developer: perm.developer
+      }
+    });
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const importPermissions = async (req: AuthRequest, res: Response) => {
+  try {
+    const { targetType, targetId, permissions } = req.body;
+
+    if (!targetType || !targetId || !permissions) {
+      return sendResponse(res, 400, false, 'targetType, targetId, and permissions data are required.');
+    }
+
+    const updatedPerm = await Permission.findOneAndUpdate(
+      { targetType, targetId },
+      { ...permissions },
+      { new: true, upsert: true }
+    );
+
+    const actor = req.user!;
+    await logActivity(
+      actor.id.toString(),
+      actor.role,
+      'Permission Imported',
+      `${targetType}:${targetId}`,
+      `Permissions imported for ${targetType}:${targetId} by ${actor.name}`
+    );
+
+    return sendResponse(res, 200, true, 'Permissions imported successfully', updatedPerm);
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message);
   }

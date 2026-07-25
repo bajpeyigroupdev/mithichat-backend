@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from './authorize.middleware';
-import { Permission } from '../models/permission.model';
+import { PermissionEngine } from '../utils/permissionEngine';
 import sendResponse from '../utils/reponse';
 
 export type PermissionType = 
@@ -19,7 +19,7 @@ export type PermissionType =
   | 'developer';
 
 /**
- * Middleware: Dynamically verify a specific permission type and value
+ * Middleware: Dynamically verify a specific permission type and value using centralized PermissionEngine.
  */
 export const checkPermission = (type: PermissionType, value: string) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -29,34 +29,24 @@ export const checkPermission = (type: PermissionType, value: string) => {
         return sendResponse(res, 401, false, 'Unauthorized - No user attached');
       }
 
-      // Owner and superAdmin have full bypass access
-      if (user.role === 'owner' || user.role === 'superAdmin') {
+      if (user.role === 'owner') {
         return next();
       }
 
-
-      // 1. Check individual user override
-      let permission = await Permission.findOne({
-        targetType: 'user',
-        targetId: user.id.toString(),
-      });
-
-      // 2. Fall back to role permission if no user override exists
-      if (!permission) {
-        permission = await Permission.findOne({
-          targetType: 'role',
-          targetId: user.role,
-        });
+      let isAllowed = false;
+      if (type === 'pages' || type === 'modules' || type === 'menus') {
+        isAllowed = await PermissionEngine.canAccessPage(user, value);
+      } else if (type === 'actions') {
+        isAllowed = await PermissionEngine.canAccessAction(user, '', value);
+      } else if (type === 'buttons') {
+        isAllowed = await PermissionEngine.canAccessButton(user, '', value);
+      } else if (type === 'dashboardWidgets') {
+        isAllowed = await PermissionEngine.canAccessWidget(user, '', value);
+      } else {
+        isAllowed = await PermissionEngine.canAccessAction(user, '', value);
       }
 
-      // If no permission rule is configured, deny by default (except for owner)
-      if (!permission) {
-        return sendResponse(res, 403, false, `Access Denied: No permissions configured for role '${user.role}'`);
-      }
-
-      // 3. Evaluate the array permissions
-      const allowedList = (permission as any)[type] as string[];
-      if (allowedList && Array.isArray(allowedList) && allowedList.includes(value)) {
+      if (isAllowed) {
         return next();
       }
 

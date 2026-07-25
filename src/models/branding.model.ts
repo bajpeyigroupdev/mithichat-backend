@@ -20,7 +20,7 @@ const BrandingSchema = new Schema<IBranding>({
     faviconUrl: { type: String, default: '' },
     primaryColor: { type: String, default: '#4f46e5' },
     accentColor: { type: String, default: '#8b5cf6' },
-    customDomain: { type: String, default: 'meethichat.live' },
+    customDomain: { type: String, default: 'mithichat.live' },
     emailHeaderLogoUrl: { type: String, default: '' }
 }, { timestamps: true });
 

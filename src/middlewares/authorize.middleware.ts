@@ -22,6 +22,7 @@ export interface AuthRequest extends Request {
     image: string;
     meethiId?: string;
     employeeCode?: string;
+    orgId?: any;
   };
 }
 
@@ -59,8 +60,52 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
       await user.save();
     }
 
-    req.user = { role: user.role ?? "user", userId: user.userId, id: user.id, name: user.name as any, gender: user?.gender as any, coins: user?.coins || 0, diamonds: user?.diamonds || 0, userName: user?.userName as any, isUserName: user?.isUserName as any, image: user?.image as string, meethiId: user?.meethiId as string, employeeCode: user?.employeeCode as string };
-    
+    const originalUser = {
+      role: (user.role ?? "user") as any,
+      userId: user.userId,
+      id: user.id,
+      name: user.name as any,
+      gender: user?.gender as any,
+      coins: user?.coins || 0,
+      diamonds: user?.diamonds || 0,
+      userName: user?.userName as any,
+      isUserName: user?.isUserName as any,
+      image: user?.image as string,
+      meethiId: user?.meethiId as string,
+      employeeCode: user?.employeeCode as string,
+      orgId: (user as any).orgId
+    };
+
+    req.user = originalUser;
+
+    // Simulation Mode Check
+    const simUserId = req.headers['x-simulation-user-id'] as string;
+    if (simUserId && originalUser.role === 'owner') {
+      if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+        return sendResponse(res, 403, false, "Destructive actions are disabled during active permission simulation.");
+      }
+
+      const simUser = await User.findById(simUserId);
+      if (simUser) {
+        req.user = {
+          role: (simUser.role ?? "user") as any,
+          userId: simUser.userId,
+          id: simUser.id,
+          name: simUser.name as any,
+          gender: simUser.gender as any,
+          coins: simUser.coins || 0,
+          diamonds: simUser.diamonds || 0,
+          userName: simUser.userName as any,
+          isUserName: simUser.isUserName as any,
+          image: simUser.image as string,
+          meethiId: simUser.meethiId as string,
+          employeeCode: simUser.employeeCode as string,
+          orgId: (simUser as any).orgId
+        };
+        (req as any).isSimulated = true;
+      }
+    }
+
     // Apply field-level security checks dynamically on response payload
     const { fieldSecurityFilter } = require("./fieldSecurity.middleware");
     await fieldSecurityFilter(req, res, next);

@@ -198,14 +198,14 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 400, false, "deviceId is required for app users");
       }
 
-      // ✅ Device already registered with another user → block
-      const existingUser = await User.findOne({
-        "device.createdDeviceId": deviceId,
-        isDeleted: false,
-      });
-      if (existingUser) {
-        return sendResponse(res, 409, false, "This device already created an account");
-      }
+      // ❌ Temporarily disabled per user request: one device can create multiple accounts
+      // const existingUser = await User.findOne({
+      //   "device.createdDeviceId": deviceId,
+      //   isDeleted: false,
+      // });
+      // if (existingUser) {
+      //   return sendResponse(res, 409, false, "This device already created an account");
+      // }
     }
 
     // ✅ Unique ID and defaults

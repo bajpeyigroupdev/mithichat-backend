@@ -92,8 +92,20 @@ export class BillingService {
             // Recalculate and update host's current level, then find coinPerMinute from HostLevel config
             const hostLevel = await recalculateAndUpdateHostLevel(transaction.hostId, session);
             const hostLevelConfig = await HostLevel.findOne({ level: hostLevel }).session(session).lean() as any;
-            // coinPerMinute from HostLevel table; fall back to global settings share
-            const hostSharePerMinute = hostLevelConfig?.coinPerMinute ?? (settings.hostSharePerMinute || 28);
+
+            const LEVEL_RATE_MAP: Record<number, number> = {
+                1: 25,
+                2: 30,
+                3: 36,
+                4: 42,
+                5: 48,
+                6: 54,
+                7: 60,
+                8: 66,
+            };
+
+            // coinPerMinute from HostLevel table; fall back to level rate map (e.g. Lv.3 = 36, Lv.1 = 25)
+            const hostSharePerMinute = hostLevelConfig?.coinPerMinute ?? (LEVEL_RATE_MAP[hostLevel] || 36);
             const HOST_SHARE_PER_SECOND = hostSharePerMinute / 60;
             console.log(`📊 Host Lv.${hostLevel} → coinPerMinute: ${hostSharePerMinute}`);
             // ====================================

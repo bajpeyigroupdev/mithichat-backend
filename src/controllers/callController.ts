@@ -841,7 +841,11 @@ export const getHostLevels = async (req: AuthRequest, res: Response) => {
       ]
     }).sort({ level: 1 }).lean();
 
-    const userDoc = await User.findById(userId).select('coins diamonds').lean();
+    const userDoc = await User.findById(userId).select('coins diamonds createdAt level').lean();
+    const createdAt = (userDoc as any)?.createdAt ? new Date((userDoc as any).createdAt) : new Date();
+    const diffDays = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
+    const isPromoActive = diffDays <= 7;
+    const promoDaysLeft = isPromoActive ? Math.max(1, Math.ceil(7 - diffDays)) : 0;
 
     const realLevels = allLevels.filter(lvl => lvl.level > 0);
 
@@ -884,6 +888,8 @@ export const getHostLevels = async (req: AuthRequest, res: Response) => {
       totalCoins: userDoc?.coins ?? 0,
       totalDiamonds: userDoc?.diamonds ?? 0,
       currentLevel: currentLevelNum,
+      isPromoActive,
+      promoDaysLeft,
       // Next level targets for progress bars
       targetCalls,
       targetTime: targetMinutes,

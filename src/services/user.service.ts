@@ -27,6 +27,13 @@ export const recalculateAndUpdateHostLevel = async (
     const totalMinutes = Math.floor(totalDurationSeconds / 60);
 
     const now = new Date();
+    const hostUser = await User.findById(hostId).select('level createdAt').session(session || null as any).lean();
+    if (!hostUser) return 1;
+
+    const createdAt = (hostUser as any).createdAt ? new Date((hostUser as any).createdAt) : now;
+    const diffDays = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
+    const isPromoActive = diffDays <= 7;
+
     const allLevels = await HostLevel.find({
       $or: [
         { expiresAt: { $exists: false } },
@@ -36,7 +43,7 @@ export const recalculateAndUpdateHostLevel = async (
     }).session(session || null as any).sort({ level: -1 }).lean();
 
     const realLevels = allLevels.filter(lvl => lvl.level > 0);
-    let qualifiedLevel = realLevels.length > 0 ? realLevels[realLevels.length - 1].level : 1;
+    let qualifiedLevel = 1;
 
     for (const lvl of realLevels) {
       if (totalCalls >= (lvl.minCalls || 0) && totalMinutes >= (lvl.minMinutes || 0)) {
@@ -45,9 +52,12 @@ export const recalculateAndUpdateHostLevel = async (
       }
     }
 
-    const hostUser = await User.findById(hostId).select('level').session(session || null as any).lean();
+    // 🌟 7-Day New User Promo Rule:
+    // New users start at Level 3 for the first 7 days.
+    // After 7 days expire, level drops to their actual qualified level based on performance (starts at Level 1).
+    const targetLevel = isPromoActive ? Math.max(3, qualifiedLevel) : qualifiedLevel;
+
     const currentStoredLevel = (hostUser as any)?.level || 0;
-    const targetLevel = Math.max(currentStoredLevel, qualifiedLevel);
 
     if (currentStoredLevel !== targetLevel) {
       await User.findByIdAndUpdate(
@@ -55,7 +65,7 @@ export const recalculateAndUpdateHostLevel = async (
         { $set: { level: targetLevel } },
         { session: session || null as any }
       );
-      console.log(`🎉 Host ${hostId} level updated from ${currentStoredLevel} to ${targetLevel}`);
+      console.log(`🎉 Host ${hostId} level updated from ${currentStoredLevel} to ${targetLevel} (promo active: ${isPromoActive})`);
     }
 
     return targetLevel;

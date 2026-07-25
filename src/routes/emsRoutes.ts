@@ -21,7 +21,13 @@ import {
   aiRiskAnalysis,
   createCustomRole,
   comparePermissionsDetailed,
-  restorePermissionVersion
+  restorePermissionVersion,
+  registerPage,
+  listRegisteredPages,
+  clonePermissions,
+  duplicateRole,
+  exportPermissions,
+  importPermissions
 } from '../controllers/emsController';
 
 const router = express.Router();
@@ -60,7 +66,12 @@ router.patch('/requests/:id/password', checkPermission('menus', 'Verification'),
 router.post('/requests/:id/approve', checkPermission('menus', 'Verification'), approveRequest);
 router.post('/requests/:id/reject', checkPermission('menus', 'Verification'), rejectRequest);
 
-// ============ Audit Logs ============
-router.get('/audit-logs', checkPermission('menus', 'Developer'), getAuditLogs);
+// ============ Dynamic Page Registry & Enterprise IAM 4.0 Extensions ============
+router.post('/pages/register', registerPage);
+router.get('/pages', listRegisteredPages);
+router.post('/permissions/clone', checkPermission('menus', 'Settings'), clonePermissions);
+router.post('/roles/duplicate', checkPermission('menus', 'Settings'), duplicateRole);
+router.get('/permissions/export', checkPermission('menus', 'Settings'), exportPermissions);
+router.post('/permissions/import', checkPermission('menus', 'Settings'), importPermissions);
 
 export default router;
