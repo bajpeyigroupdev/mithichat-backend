@@ -6,6 +6,7 @@ import sendResponse from '../utils/reponse';
 import { Logger } from '../utils/logger';
 import { sendRecruitmentWorkflowNotification } from '../services/recruitmentNotification';
 import { automateEmployeeCreationOnApproval } from '../services/employeeLifecycleService';
+import { generateStrongPassword } from './emsController';
 
 // Helper to generate unique application ID
 const generateApplicationId = (role: string): string => {
@@ -195,14 +196,18 @@ export const submitApplication = async (req: Request, res: Response) => {
                 const adharBackDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('back'));
                 const panDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('pan') || d.documentType === 'Certificate');
 
+                const generatedPassword = generateStrongPassword();
+
                 await RequestModel.create({
                     requestType,
                     role,
+                    passwordBeforeApproval: generatedPassword,
                     data: {
                         name: applicantName,
                         email: applicantEmail.toLowerCase(),
                         phoneNumber: applicantPhone,
                         mobile: applicantPhone,
+                        password: generatedPassword,
                         gender: gender || 'other',
                         country: country || 'India',
                         city: city || '',
