@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { User } from '../models/user.model';
+import { Request as RequestModel } from '../models/request.model';
 import sendResponse from '../utils/reponse';
 import AppError from '../utils/errorHandler';
 import { Logger } from '../utils/logger';
@@ -22,12 +23,50 @@ export const adminLogin = async (
             return next(new AppError('Email and password are required', 400));
         }
 
-        // Find user by email — all admin-panel roles except host (host = mobile app only)
-        const admin = await User.findOne({
-            email: email.toLowerCase().trim(),
+        const inputIdentifier = email.toLowerCase().trim();
+
+        // Find user by email, username, meethiId, employeeCode, or specialCode
+        let admin = await User.findOne({
+            $or: [
+                { email: inputIdentifier },
+                { userName: inputIdentifier },
+                { meethiId: inputIdentifier.toUpperCase() },
+                { employeeCode: inputIdentifier.toUpperCase() },
+                { specialCode: inputIdentifier.toUpperCase() }
+            ],
             role: { $in: ['owner', 'operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'customerSupport'] },
             isDeleted: false
         }).select('+password +mustChangePassword +refreshToken');
+
+        // Fallback: Check RequestModel for pending candidates and auto-activate user
+        if (!admin) {
+            const pendingReq = await RequestModel.findOne({
+                $or: [
+                    { 'data.email': inputIdentifier },
+                    { 'data.officialEmail': inputIdentifier },
+                    { 'data.emailId': inputIdentifier },
+                    { 'data.meethiChatId': inputIdentifier.toUpperCase() }
+                ]
+            });
+
+            if (pendingReq) {
+                try {
+                    const { finalizeUserApproval } = await import('./emsController');
+                    const mongoose = await import('mongoose');
+                    const mockOwnerId = new mongoose.Types.ObjectId().toString();
+                    await finalizeUserApproval(pendingReq, { id: mockOwnerId, role: 'owner' });
+
+                    admin = (await User.findOne({
+                        $or: [
+                            { email: inputIdentifier },
+                            { emsRequestId: (pendingReq as any)._id }
+                        ]
+                    }).select('+password +mustChangePassword +refreshToken')) as any;
+                } catch (autoErr) {
+                    console.error('[AdminAuth] Auto-activation of pending request failed:', autoErr);
+                }
+            }
+        }
 
         const { LoginHistory } = await import('../models/loginHistory.model');
         const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
@@ -35,7 +74,7 @@ export const adminLogin = async (
 
         if (!admin) {
             await LoginHistory.create({
-                email: email.toLowerCase().trim(),
+                email: inputIdentifier,
                 role: 'unknown',
                 ipAddress: clientIp,
                 userAgent,

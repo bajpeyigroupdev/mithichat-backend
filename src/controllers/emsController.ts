@@ -993,10 +993,10 @@ export const finalizeUserApproval = async (
   // Resolve field names across different form schemas FIRST
   const userEmail = (data.email || data.emailId || data.officialEmail || '').toLowerCase();
   const userName = data.name || data.fullName || data.ownerName || data.agencyName || 'Unknown';
-  const userPhone = data.phoneNumber || data.phone || data.mobileNo || data.mobile || '';
+  const userPhone = data.mobile || data.phoneNumber || data.phone || data.mobileNo || '';
 
-  // Use stored password or generate custom Name+Phone password
-  const plainPassword = passwordBeforeApproval || data.password || generateApplicantPassword(userName, userPhone, userEmail);
+  // ALWAYS use Name+Phone password formula so table display and MongoDB user password match 100%
+  const plainPassword = generateApplicantPassword(userName, userPhone, userEmail);
   const hashedPassword = await generateSecureHash(plainPassword);
   const newUserId = await generateUniqueId();
 
