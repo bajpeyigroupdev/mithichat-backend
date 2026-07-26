@@ -40,14 +40,21 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
     return sendResponse(res, 401, false, "Unauthorized - No token provided");
   }
   try {
-    const decoded = jwt.verify(token, config.JWT_ACCESS_SECRET as string) as { userId: number };
-    if (!decoded.userId) {
+    const decoded = jwt.verify(token, config.JWT_ACCESS_SECRET as string) as any;
+    const targetUserId = decoded?.userId ? (typeof decoded.userId === 'number' ? decoded.userId : parseInt(decoded.userId, 10)) : null;
+
+    if (!targetUserId && !decoded?._id) {
       return sendResponse(res, 401, false, "Unauthorized - Invalid token payload");
     }
 
     // Explicitly exclude sensitive fields
-    const user = await User.findOne({ userId: decoded.userId, isDeleted: false })
-      .select('-password -refreshToken');
+    const user = await User.findOne({
+      $or: [
+        ...(targetUserId ? [{ userId: targetUserId }] : []),
+        ...(decoded?._id && Types.ObjectId.isValid(decoded._id) ? [{ _id: new Types.ObjectId(decoded._id) }] : [])
+      ],
+      isDeleted: false
+    }).select('-password -refreshToken');
 
     if (!user) {
       return sendResponse(res, 401, false, "Unauthorized - User not found");

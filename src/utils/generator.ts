@@ -1,14 +1,15 @@
 import jwt from "jsonwebtoken";
 import { config } from "../configs/envConfig";
 
-export const generateToken = (userId: string, type: "access" | "refresh") => {
+export const generateToken = (userId: string | number, type: "access" | "refresh") => {
     const secret = type === "access" ? config.JWT_ACCESS_SECRET : config.JWT_REFRESH_SECRET;
     if (!secret) {
         throw new Error(`Missing JWT secret for ${type} token`);
     }
 
-    const expiresIn = type === "access" ? "15m" : "7d";
-    return jwt.sign({ userId }, secret, { expiresIn });
+    const numericUserId = typeof userId === 'number' ? userId : (parseInt(String(userId), 10) || userId);
+    const expiresIn = type === "access" ? "7d" : "30d";
+    return jwt.sign({ userId: numericUserId }, secret, { expiresIn });
 };
 
 
