@@ -102,11 +102,34 @@ export const listSuperAdmins = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Helper to build a safe query for _id or userId
+const getSafeUserQuery = (id: string, role?: string) => {
+  const isObjId = mongoose.Types.ObjectId.isValid(id);
+  const numId = Number(id);
+
+  const filter: any = { isDeleted: false };
+  if (role) filter.role = role;
+
+  if (isObjId && !isNaN(numId)) {
+    filter.$or = [{ _id: id }, { userId: numId }];
+  } else if (isObjId) {
+    filter._id = id;
+  } else if (!isNaN(numId)) {
+    filter.userId = numId;
+  } else {
+    return null;
+  }
+  return filter;
+};
+
 // ─── GET: Single Super Admin ──────────────────────────────────────────────────
 export const getSuperAdmin = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const superAdmin = await User.findOne({ userId: id, role: 'superAdmin' }).lean();
+    const query = getSafeUserQuery(id, 'superAdmin');
+    if (!query) return sendResponse(res, 404, false, 'Super Admin not found');
+
+    const superAdmin = await User.findOne(query).lean();
     if (!superAdmin) return sendResponse(res, 404, false, 'Super Admin not found');
     return sendResponse(res, 200, true, 'Super Admin fetched', superAdmin);
   } catch (err: any) {
@@ -118,7 +141,10 @@ export const getSuperAdmin = async (req: AuthRequest, res: Response) => {
 export const toggleSuperAdminBlock = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const superAdmin = await User.findOne({ _id: id, role: 'superAdmin' });
+    const query = getSafeUserQuery(id, 'superAdmin');
+    if (!query) return sendResponse(res, 404, false, 'Super Admin not found');
+
+    const superAdmin = await User.findOne(query);
     if (!superAdmin) return sendResponse(res, 404, false, 'Super Admin not found');
 
     superAdmin.isBlocked = !superAdmin.isBlocked;
@@ -144,7 +170,10 @@ export const deleteSuperAdmin = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     if (req.user?.role !== 'owner') return sendResponse(res, 403, false, 'Owner only');
 
-    const superAdmin = await User.findOne({ _id: id, role: 'superAdmin' });
+    const query = getSafeUserQuery(id, 'superAdmin');
+    if (!query) return sendResponse(res, 404, false, 'Super Admin not found');
+
+    const superAdmin = await User.findOne(query);
     if (!superAdmin) return sendResponse(res, 404, false, 'Super Admin not found');
 
     superAdmin.isDeleted = true;
@@ -161,7 +190,10 @@ export const deleteSuperAdmin = async (req: AuthRequest, res: Response) => {
 export const resetSuperAdminPassword = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const superAdmin = await User.findOne({ _id: id, role: 'superAdmin' }).select('+password');
+    const query = getSafeUserQuery(id, 'superAdmin');
+    if (!query) return sendResponse(res, 404, false, 'Super Admin not found');
+
+    const superAdmin = await User.findOne(query).select('+password');
     if (!superAdmin) return sendResponse(res, 404, false, 'Super Admin not found');
 
     const newPassword = generateStrongPassword();

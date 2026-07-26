@@ -148,11 +148,34 @@ export const listAdmins = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// Helper to build a safe query for _id or userId
+const getSafeUserQuery = (id: string, role?: string) => {
+  const isObjId = mongoose.Types.ObjectId.isValid(id);
+  const numId = Number(id);
+
+  const filter: any = { isDeleted: false };
+  if (role) filter.role = role;
+
+  if (isObjId && !isNaN(numId)) {
+    filter.$or = [{ _id: id }, { userId: numId }];
+  } else if (isObjId) {
+    filter._id = id;
+  } else if (!isNaN(numId)) {
+    filter.userId = numId;
+  } else {
+    return null;
+  }
+  return filter;
+};
+
 // ─── GET: Single Admin ─────────────────────────────────────────────────────────
 export const getAdmin = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const admin = await User.findOne({ userId: id, role: 'admin' }).lean();
+    const query = getSafeUserQuery(id, 'admin');
+    if (!query) return sendResponse(res, 404, false, 'Admin not found');
+
+    const admin = await User.findOne(query).lean();
     if (!admin) return sendResponse(res, 404, false, 'Admin not found');
     return sendResponse(res, 200, true, 'Admin fetched', admin);
   } catch (err: any) {
@@ -164,7 +187,10 @@ export const getAdmin = async (req: AuthRequest, res: Response) => {
 export const toggleAdminBlock = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const admin = await User.findOne({ _id: id, role: 'admin' });
+    const query = getSafeUserQuery(id, 'admin');
+    if (!query) return sendResponse(res, 404, false, 'Admin not found');
+
+    const admin = await User.findOne(query);
     if (!admin) return sendResponse(res, 404, false, 'Admin not found');
 
     admin.isBlocked = !admin.isBlocked;
@@ -190,7 +216,10 @@ export const deleteAdmin = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     if (req.user?.role !== 'owner') return sendResponse(res, 403, false, 'Owner only');
 
-    const admin = await User.findOne({ _id: id, role: 'admin' });
+    const query = getSafeUserQuery(id, 'admin');
+    if (!query) return sendResponse(res, 404, false, 'Admin not found');
+
+    const admin = await User.findOne(query);
     if (!admin) return sendResponse(res, 404, false, 'Admin not found');
 
     admin.isDeleted = true;
@@ -207,7 +236,10 @@ export const deleteAdmin = async (req: AuthRequest, res: Response) => {
 export const resetAdminPassword = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const admin = await User.findOne({ _id: id, role: 'admin' }).select('+password');
+    const query = getSafeUserQuery(id, 'admin');
+    if (!query) return sendResponse(res, 404, false, 'Admin not found');
+
+    const admin = await User.findOne(query).select('+password');
     if (!admin) return sendResponse(res, 404, false, 'Admin not found');
 
     const newPassword = generateStrongPassword();
@@ -217,5 +249,158 @@ export const resetAdminPassword = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 200, true, 'Password reset', { newPassword });
   } catch (err: any) {
     return sendResponse(res, 500, false, err.message);
+  }
+};
+
+// ─── GET: Recruited Members for specific parent/role ──────────────────────────────
+export const getRecruitedMembers = async (req: Request, res: Response) => {
+  try {
+    const { parentId, targetRole, search, page = 1, limit = 20 } = req.query;
+
+    const parentIdStr = parentId ? String(parentId).trim() : '';
+    let parentUser: any = null;
+
+    if (parentIdStr && parentIdStr !== 'undefined' && parentIdStr !== 'null') {
+      if (mongoose.Types.ObjectId.isValid(parentIdStr)) {
+        parentUser = await User.findById(parentIdStr).select('userId name email phoneNumber role specialCode referralCode image').lean();
+      }
+      if (!parentUser && !isNaN(Number(parentIdStr))) {
+        parentUser = await User.findOne({ userId: Number(parentIdStr) }).select('userId name email phoneNumber role specialCode referralCode image').lean();
+      }
+
+      // If parentId was specified but not found, return empty results safely
+      if (!parentUser) {
+        return sendResponse(res, 200, true, 'Recruiter not found', {
+          parent: null,
+          members: [],
+          total: 0,
+          page: Number(page) || 1,
+          limit: Number(limit) || 20,
+          totalPages: 0,
+          stats: {
+            totalRecruited: 0,
+            superAdminsCount: 0,
+            adminsCount: 0,
+            agenciesCount: 0,
+            hostsCount: 0,
+            activeCount: 0,
+            blockedCount: 0,
+          }
+        });
+      }
+    }
+
+    const baseConditions: any[] = [];
+
+    if (parentUser) {
+      const parentObjId = parentUser._id;
+      const orConditions: any[] = [
+        { operatorId: parentObjId },
+        { superAdminId: parentObjId },
+        { adminId: parentObjId },
+        { agencyId: parentObjId },
+        { parentId: parentObjId },
+        { createdBy: parentObjId },
+        { referredBy: parentObjId },
+      ];
+      if (parentUser.specialCode) {
+        orConditions.push({ referralCode: parentUser.specialCode });
+      }
+      if (parentUser.referralCode) {
+        orConditions.push({ referralCode: parentUser.referralCode });
+      }
+      baseConditions.push({ $or: orConditions });
+    }
+
+    if (targetRole && targetRole !== 'all') {
+      baseConditions.push({ role: targetRole });
+    }
+
+    if (search && String(search).trim() !== '') {
+      const searchStr = String(search).trim();
+      const searchRegex = new RegExp(searchStr, 'i');
+      const searchNum = Number(searchStr);
+      const searchOrs: any[] = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { phoneNumber: searchRegex },
+        { specialCode: searchRegex },
+        { referralCode: searchRegex },
+      ];
+      if (!isNaN(searchNum)) {
+        searchOrs.push({ userId: searchNum });
+      }
+      baseConditions.push({ $or: searchOrs });
+    }
+
+    const matchStage: any = { isDeleted: false };
+    if (baseConditions.length > 0) {
+      matchStage.$and = baseConditions;
+    }
+
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Number(limit) || 20);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [members, total] = await Promise.all([
+      User.find(matchStage)
+        .select('userId name email phoneNumber image role isBlocked isActive isOnline lastOnline coins diamonds createdAt country specialCode referralCode agencyId createdBy parentId operatorId superAdminId adminId')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      User.countDocuments(matchStage),
+    ]);
+
+    // Statistics breakdown for parent
+    const statsStage: any = { isDeleted: false };
+    if (parentUser) {
+      const parentObjId = parentUser._id;
+      const orConditions: any[] = [
+        { operatorId: parentObjId },
+        { superAdminId: parentObjId },
+        { adminId: parentObjId },
+        { agencyId: parentObjId },
+        { parentId: parentObjId },
+        { createdBy: parentObjId },
+        { referredBy: parentObjId },
+      ];
+      if (parentUser.specialCode) {
+        orConditions.push({ referralCode: parentUser.specialCode });
+      }
+      if (parentUser.referralCode) {
+        orConditions.push({ referralCode: parentUser.referralCode });
+      }
+      statsStage.$or = orConditions;
+    }
+
+    const [superAdminsCount, adminsCount, agenciesCount, hostsCount, activeCount, blockedCount] = await Promise.all([
+      User.countDocuments({ ...statsStage, role: 'superAdmin' }),
+      User.countDocuments({ ...statsStage, role: 'admin' }),
+      User.countDocuments({ ...statsStage, role: 'agency' }),
+      User.countDocuments({ ...statsStage, role: 'host' }),
+      User.countDocuments({ ...statsStage, isBlocked: false }),
+      User.countDocuments({ ...statsStage, isBlocked: true }),
+    ]);
+
+    return sendResponse(res, 200, true, 'Recruited members fetched successfully', {
+      parent: parentUser,
+      members,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+      stats: {
+        totalRecruited: superAdminsCount + adminsCount + agenciesCount + hostsCount,
+        superAdminsCount,
+        adminsCount,
+        agenciesCount,
+        hostsCount,
+        activeCount,
+        blockedCount,
+      }
+    });
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message || 'Error fetching recruited members');
   }
 };

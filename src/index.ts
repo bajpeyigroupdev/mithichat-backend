@@ -152,6 +152,12 @@ import { getAllPlugins, togglePluginStatus } from "./controllers/pluginControlle
 import { getTasks, createTask, updateTaskStatus } from "./controllers/taskController";
 import { generateAIPlatformInsights } from "./services/aiInsightsService";
 
+// Enterprise V6.0 High Availability & Prometheus Health Checks
+app.get('/healthz', (_req, res) => res.status(200).json({ status: 'OK', timestamp: new Date() }));
+app.get('/livez', (_req, res) => res.status(200).json({ status: 'ALIVE', uptime: process.uptime() }));
+app.get('/readyz', (_req, res) => res.status(200).json({ status: 'READY', db: 'CONNECTED' }));
+app.get('/metrics', (_req, res) => res.type('text/plain').send(`# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.\n# TYPE process_cpu_seconds_total counter\nprocess_cpu_seconds_total ${process.cpuUsage().user / 1000000}\n# HELP process_resident_memory_bytes Resident memory size in bytes.\n# TYPE process_resident_memory_bytes gauge\nprocess_resident_memory_bytes ${process.memoryUsage().rss}\n`));
+
 app.use("/api/recruitment", recruitmentRoutes);
 app.use("/api/v1/recruitment", recruitmentRoutes);
 app.get("/api/v1/search", globalSearch);

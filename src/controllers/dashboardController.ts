@@ -39,157 +39,132 @@ export const getDashboardStats = async (
     try {
         const hostFilter = await getHostFilter(req);
 
+        // Phase 5 & 6 Enterprise Real-Time Aggregations
+        const { Request: RequestModel } = await import('../models/request.model');
+
+        // Request Statistics (EMS)
+        const [pendingRequests, approvedRequests, rejectedRequests] = await Promise.all([
+            RequestModel.countDocuments({ status: 'pending' }),
+            RequestModel.countDocuments({ status: 'approved' }),
+            RequestModel.countDocuments({ status: 'rejected' }),
+        ]);
+
+        // Role Counts (MongoDB Users)
+        const [
+            totalSuperAdmins,
+            totalAdmins,
+            totalAgencies,
+            totalOperators,
+            totalHosts,
+            totalSellers,
+            totalCustomerSupport
+        ] = await Promise.all([
+            User.countDocuments({ role: 'superAdmin', isDeleted: false }),
+            User.countDocuments({ role: 'admin', isDeleted: false }),
+            User.countDocuments({ role: 'agency', isDeleted: false }),
+            User.countDocuments({ role: 'operator', isDeleted: false }),
+            User.countDocuments({ role: 'host', isDeleted: false }),
+            User.countDocuments({ role: 'coinSeller', isDeleted: false }),
+            User.countDocuments({ role: 'customerSupport', isDeleted: false }),
+        ]);
+
+        // Registration Timeframes
+        const todayStart = dayjs().startOf('day').toDate();
+        const weekStart = dayjs().subtract(7, 'day').startOf('day').toDate();
+        const monthStart = dayjs().subtract(30, 'day').startOf('day').toDate();
+
+        const [todaysRegistrations, weeklyRegistrations, monthlyRegistrations] = await Promise.all([
+            User.countDocuments({ createdAt: { $gte: todayStart } }),
+            User.countDocuments({ createdAt: { $gte: weekStart } }),
+            User.countDocuments({ createdAt: { $gte: monthStart } }),
+        ]);
+
+        // User Status Breakdown
+        const [activeUsersCount, inactiveUsersCount, blockedUsersCount, deletedUsersCount] = await Promise.all([
+            User.countDocuments({ isDeleted: false, isBlocked: false, isActive: true }),
+            User.countDocuments({ isDeleted: false, isActive: false }),
+            User.countDocuments({ isDeleted: false, isBlocked: true }),
+            User.countDocuments({ isDeleted: true }),
+        ]);
+
+        // Total users (Global count)
+        const totalUsers = await User.countDocuments({ isDeleted: false });
+        const activeUsers = activeUsersCount;
+
         // Base match for transactions + host filter
         const txMatch = { ...hostFilter };
-
-        // For user counts, Admin only sees their hosts?
-        // Let's assume Admin Dashboard shows:
-        // Total Users: Maybe 0 or global? -> Let's show Linked Hosts count instead of Users.
-        // Total Hosts: Their hosts.
-
-        // Get filter for User model queries
-        let userFilter: any = { isDeleted: false };
-        let hostUserFilter: any = { isDeleted: false, role: 'host' };
-
-        if ((req as any).user?.role === 'admin') {
-            // Admin doesn't manage "Users" (Viewers), only Hosts.
-            // So totalUsers might be irrelevant or 0.
-            userFilter = { _id: null }; // 0 results
-            if (hostFilter.hostId && hostFilter.hostId.$in) {
-                hostUserFilter._id = { $in: hostFilter.hostId.$in };
-            } else {
-                hostUserFilter._id = null;
-            }
-        }
-
-        // Total users (Global for SuperAdmin, 0 for Admin)
-        const totalUsers = await User.countDocuments(userFilter);
-        const activeUsers = await User.countDocuments({ ...userFilter, isBlocked: false });
-
-        // Total hosts
-        const totalHosts = await User.countDocuments(hostUserFilter);
-        const activeHosts = await User.countDocuments({ ...hostUserFilter, isActive: true });
-
-        // Today's date range
-        const todayStart = dayjs().startOf('day').toDate();
-        const todayEnd = dayjs().endOf('day').toDate();
 
         // Call stats for today
         const callsToday = await CoinsTransaction.countDocuments({
             ...txMatch,
             type: TransactionType.VOICE_CALL,
-            createdAt: { $gte: todayStart, $lte: todayEnd },
+            createdAt: { $gte: todayStart },
         });
 
-        // BUG-09 FIX: 'duration' in CoinsTransaction is stored in SECONDS.
-        // The field was misnamed 'totalMinutes' and then divided by 60 again —
-        // producing hours instead of minutes. Now correctly named and divided once.
         const callAggregation = await CoinsTransaction.aggregate([
             {
                 $match: {
                     ...txMatch,
                     type: TransactionType.VOICE_CALL,
                     status: CallStatus.ENDED,
-                    createdAt: { $gte: todayStart, $lte: todayEnd },
+                    createdAt: { $gte: todayStart },
                 },
             },
             {
                 $group: {
                     _id: null,
-                    totalSeconds: { $sum: '$duration' }, // duration is in seconds
+                    totalSeconds: { $sum: '$duration' },
                     totalCoins: { $sum: '$coinsSpent' },
                 },
             },
         ]);
 
-        const minutesToday = Math.round((callAggregation[0]?.totalSeconds || 0) / 60); // convert seconds → minutes
+        const minutesToday = Math.round((callAggregation[0]?.totalSeconds || 0) / 60);
         const coinsSpentToday = callAggregation[0]?.totalCoins || 0;
-
-        // Revenue & Earnings
         const coinPrice = 0.10;
         const revenueToday = coinsSpentToday * coinPrice;
-
-        const hostEarningsAgg = await CoinsTransaction.aggregate([
-            {
-                $match: {
-                    ...txMatch,
-                    type: TransactionType.VOICE_CALL,
-                    status: CallStatus.ENDED,
-                    createdAt: { $gte: todayStart, $lte: todayEnd },
-                },
-            },
-            {
-                $group: {
-                    _id: null,
-                    totalEarnings: { $sum: '$hostEarning' },
-                },
-            },
-        ]);
-
-        const hostEarningsToday = (hostEarningsAgg[0]?.totalEarnings || 0) * coinPrice;
-
-        // Lifetime totals
-        // Revenue: SuperAdmin sees all recharges. Admin sees ? 
-        // Admin likely sees share of their hosts earnings? Or total spending on their hosts?
-        // Let's show Total Spending on My Hosts as "Revenue" for Admin?
-        // Or if Admin buys coins to sell... that's different.
-        // Assuming Admin Revenue = their profit.
-        // For now, let's just query CoinsTransaction sum for them.
-
-        let totalRevenue = 0;
-        if ((req as any).user?.role === 'superAdmin') {
-            const totalRevenueAgg = await RechargeHistory.aggregate([
-                { $group: { _id: null, total: { $sum: '$coins' } } }
-            ]);
-            totalRevenue = (totalRevenueAgg[0]?.total || 0) * coinPrice;
-        } else {
-            // Admin Revenue = Total Coins Spent on THEIR hosts * price? (Simple view)
-            const adminRevAgg = await CoinsTransaction.aggregate([
-                { $match: { ...txMatch, type: TransactionType.VOICE_CALL } },
-                { $group: { _id: null, total: { $sum: '$coinsSpent' } } }
-            ]);
-            totalRevenue = (adminRevAgg[0]?.total || 0) * coinPrice;
-        }
-
-        const totalHostEarningsAgg = await CoinsTransaction.aggregate([
-            { $match: { ...txMatch, type: TransactionType.VOICE_CALL, status: CallStatus.ENDED } },
-            { $group: { _id: null, total: { $sum: '$hostEarning' } } }
-        ]);
-        const totalHostEarnings = (totalHostEarningsAgg[0]?.total || 0) * coinPrice;
-
-        // Active Calls
-        const activeCalls = await User.countDocuments({ ...hostUserFilter, isBusy: true });
-
-        // Pending reports (against my hosts?)
-        // Reports usually have 'reportedId'. need to filter by my hosts.
-        let reportFilter: any = { status: 'pending' };
-        if (hostFilter.hostId) {
-            reportFilter.reportedId = hostFilter.hostId; // Assuming Report model has reportedId as ObjectId
-        }
-        const reportsPending = await Report.countDocuments(reportFilter);
 
         const stats = {
             totalUsers,
             activeUsers,
-            totalHosts,
-            activeHosts,
-            totalRevenue: parseFloat(totalRevenue.toFixed(2)),
-            totalHostEarnings: parseFloat(totalHostEarnings.toFixed(2)),
-            activeCalls,
+            requests: {
+                pending: pendingRequests,
+                approved: approvedRequests,
+                rejected: rejectedRequests,
+                total: pendingRequests + approvedRequests + rejectedRequests,
+            },
+            roles: {
+                superAdmin: totalSuperAdmins,
+                admin: totalAdmins,
+                agency: totalAgencies,
+                operator: totalOperators,
+                host: totalHosts,
+                seller: totalSellers,
+                customerSupport: totalCustomerSupport,
+            },
+            registrations: {
+                today: todaysRegistrations,
+                weekly: weeklyRegistrations,
+                monthly: monthlyRegistrations,
+            },
+            statuses: {
+                active: activeUsersCount,
+                inactive: inactiveUsersCount,
+                blocked: blockedUsersCount,
+                deleted: deletedUsersCount,
+            },
             stats: {
                 callsToday,
-                minutesToday, // BUG-09 FIX: already in minutes, no further division needed
+                minutesToday,
                 coinsSpentToday,
                 revenueToday: parseFloat(revenueToday.toFixed(2)),
-                hostEarningsToday: parseFloat(hostEarningsToday.toFixed(2)),
             },
-            reportsPending,
         };
 
-        return sendResponse(res, 200, true, 'Dashboard stats fetched successfully', stats);
+        return sendResponse(res, 200, true, 'Real-time Enterprise dashboard stats fetched successfully', stats);
     } catch (error) {
         await Logger('getDashboardStats', error);
-        next(new AppError('Error fetching dashboard stats', 500));
+        next(error);
     }
 };
 
@@ -231,7 +206,7 @@ export const getRevenueChart = async (
         return sendResponse(res, 200, true, 'Revenue chart data fetched successfully', formattedData);
     } catch (error) {
         await Logger('getRevenueChart', error);
-        next(new AppError('Error fetching revenue chart data', 500));
+        next(error);
     }
 };
 
@@ -273,7 +248,7 @@ export const getEarningsChart = async (
         return sendResponse(res, 200, true, 'Earnings chart data fetched successfully', formattedData);
     } catch (error) {
         await Logger('getEarningsChart', error);
-        next(new AppError('Error fetching earnings chart data', 500));
+        next(error);
     }
 };
 
@@ -316,7 +291,7 @@ export const getCallTrends = async (
         return sendResponse(res, 200, true, 'Call trends fetched successfully', formattedData);
     } catch (error) {
         await Logger('getCallTrends', error);
-        next(new AppError('Error fetching call trends', 500));
+        next(error);
     }
 };
 
@@ -353,6 +328,6 @@ export const getCoinDistribution = async (
         return sendResponse(res, 200, true, 'Coin distribution fetched successfully', formattedData);
     } catch (error) {
         await Logger('getCoinDistribution', error);
-        next(new AppError('Error fetching coin distribution', 500));
+        next(error);
     }
 };

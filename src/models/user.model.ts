@@ -75,7 +75,15 @@ const userSchema = new Schema<UserInterface>(
     orgId: { type: Schema.Types.ObjectId, ref: "Organization" },
     branchId: { type: Schema.Types.ObjectId, ref: "BranchRegion" },
     departmentId: { type: Schema.Types.ObjectId, ref: "Department" },
-    teamId: { type: Schema.Types.ObjectId, ref: "Team" }
+    teamId: { type: Schema.Types.ObjectId, ref: "Team" },
+    mustChangePassword: { type: Boolean, default: false },
+    loginUrl: { type: String, default: '' },
+    lastLogin: { type: Date },
+    emsRequestId: { type: Schema.Types.ObjectId, ref: 'Request' },
+    status: { type: String, enum: ['Active', 'Inactive', 'Blocked', 'Deleted'], default: 'Active' },
+    deletedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    deletedAt: { type: Date },
+    deleteReason: { type: String, default: '' }
   },
   {
     timestamps: true,
@@ -84,9 +92,15 @@ const userSchema = new Schema<UserInterface>(
   }
 );
 
-// Indexes
+// Indexes for Global Search Engine & RBAC Filters
 userSchema.index({ role: 1 });
+userSchema.index({ status: 1 });
 userSchema.index({ isDeleted: 1 });
+userSchema.index({ meethiId: 1 }, { sparse: true });
+userSchema.index({ employeeCode: 1 }, { sparse: true });
+userSchema.index({ specialCode: 1 }, { sparse: true });
+userSchema.index({ email: 1 });
+userSchema.index({ phoneNumber: 1 });
 userSchema.index({ createdAt: -1 });
 
 export const User = mongoose.model<UserInterface>("User", userSchema);

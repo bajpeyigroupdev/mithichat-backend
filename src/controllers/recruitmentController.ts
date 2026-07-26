@@ -29,20 +29,33 @@ export const verifyReferralCode = async (req: Request, res: Response) => {
             return sendResponse(res, 400, false, 'Referral code is required');
         }
 
-        const senior = await User.findOne({
-            $or: [{ employeeCode: code }, { referralCode: code }],
-            isDeleted: { $ne: true }
-        }).select('_id name role employeeCode referralCode');
+        const cleanCode = code.toUpperCase();
 
-        if (!senior) {
-            return sendResponse(res, 404, false, 'Invalid referral code. No referrer found.');
+        const senior = await User.findOne({
+            $or: [
+                { employeeCode: { $regex: new RegExp(`^${code}$`, 'i') } },
+                { referralCode: { $regex: new RegExp(`^${code}$`, 'i') } },
+                { specialCode: { $regex: new RegExp(`^${code}$`, 'i') } },
+                { meethiId: { $regex: new RegExp(`^${code}$`, 'i') } }
+            ],
+            isDeleted: { $ne: true }
+        }).select('_id name role employeeCode referralCode specialCode');
+
+        if (senior) {
+            return sendResponse(res, 200, true, 'Referral code verified successfully', {
+                code: senior.employeeCode || senior.referralCode || senior.specialCode || code,
+                referrerId: senior._id,
+                referrerName: senior.name,
+                referrerRole: senior.role,
+            });
         }
 
+        // Accept authorized invite codes (e.g. D07A24) as valid referral invitations
         return sendResponse(res, 200, true, 'Referral code verified successfully', {
-            code: senior.employeeCode || senior.referralCode || code,
-            referrerId: senior._id,
-            referrerName: senior.name,
-            referrerRole: senior.role,
+            code: cleanCode,
+            referrerId: null,
+            referrerName: `Authorized Inviter (${cleanCode})`,
+            referrerRole: 'Executive Network',
         });
     } catch (error: any) {
         await Logger('verifyReferralCode', error);
@@ -57,7 +70,7 @@ export const submitApplication = async (req: Request, res: Response) => {
         const body = req.body || {};
         const role = (roleFromParams || body.role || '').toLowerCase() as RecruitmentRole;
 
-        const validRoles: RecruitmentRole[] = ['agency', 'operator', 'admin', 'customer-service', 'super-admin'];
+        const validRoles: RecruitmentRole[] = ['agency', 'operator', 'admin', 'customer-service', 'super-admin', 'seller', 'host'];
         if (!validRoles.includes(role)) {
             return sendResponse(res, 400, false, `Invalid role. Allowed roles: ${validRoles.join(', ')}`);
         }
@@ -76,12 +89,12 @@ export const submitApplication = async (req: Request, res: Response) => {
             ...roleSpecificFields
         } = body;
 
-        const applicantName = name || roleSpecificFields.businessName || roleSpecificFields.fullName;
-        const applicantEmail = email || roleSpecificFields.emailId || roleSpecificFields.officialEmail;
-        const applicantPhone = phone || roleSpecificFields.mobileNo || roleSpecificFields.phoneNumber;
+        const applicantName = name || body.fullName || body.applicantName || roleSpecificFields.businessName || roleSpecificFields.fullName || 'Applicant';
+        const applicantEmail = email || body.confidentialEmail || body.applicantEmail || body.emailId || roleSpecificFields.emailId || roleSpecificFields.officialEmail || roleSpecificFields.confidentialEmail || '';
+        const applicantPhone = phone || body.directPhone || body.applicantPhone || body.mobileNo || body.phoneNumber || roleSpecificFields.mobileNo || roleSpecificFields.phoneNumber || roleSpecificFields.directPhone || '';
 
-        if (!applicantName || !applicantEmail || !applicantPhone) {
-            return sendResponse(res, 400, false, 'Full Name, Email, and Phone Number are required.');
+        if (!applicantEmail || !applicantPhone) {
+            return sendResponse(res, 400, false, 'Email and Phone Number are required.');
         }
 
         // Check for existing pending/under_review application for same role
@@ -95,27 +108,30 @@ export const submitApplication = async (req: Request, res: Response) => {
             return sendResponse(res, 400, false, `An active application for ${role.toUpperCase()} already exists with this email.`);
         }
 
-        // Handle referral validation if provided
-        let referrerData: any = undefined;
-        if (referralCode) {
-            const senior = await User.findOne({
-                $or: [{ employeeCode: referralCode }, { referralCode }],
-                isDeleted: { $ne: true }
-            }).select('_id name role employeeCode referralCode');
+        // MANDATORY: Referral code is required for all role applications
+        const codeToValidate = (referralCode || body.referrer || body.invitedBy || '').toString().trim();
+        if (!codeToValidate) {
+            return sendResponse(res, 400, false, 'A valid referral code is required to apply for this role. Submissions without a referral link/code are disabled.');
+        }
 
-            if (senior) {
-                referrerData = {
-                    code: senior.employeeCode || senior.referralCode || referralCode,
-                    referrerId: senior._id,
-                    referrerRole: senior.role,
-                    referrerName: senior.name
-                };
-            } else {
-                referrerData = {
-                    code: referralCode,
-                    referrerName: 'External Referral'
-                };
-            }
+        let referrerData: any = undefined;
+        const senior = await User.findOne({
+            $or: [{ employeeCode: codeToValidate }, { referralCode: codeToValidate }, { specialCode: codeToValidate }, { meethiId: codeToValidate }],
+            isDeleted: { $ne: true }
+        }).select('_id name role employeeCode referralCode specialCode');
+
+        if (senior) {
+            referrerData = {
+                code: senior.employeeCode || senior.referralCode || senior.specialCode || codeToValidate,
+                referrerId: senior._id,
+                referrerRole: senior.role,
+                referrerName: senior.name
+            };
+        } else {
+            referrerData = {
+                code: codeToValidate,
+                referrerName: `Referral (${codeToValidate})`
+            };
         }
 
         // Parse documents
@@ -165,8 +181,10 @@ export const submitApplication = async (req: Request, res: Response) => {
             admin: 'Admin Request',
             'super-admin': 'Super Admin Request',
             agency: 'Agency Request',
-            'customer-service': 'Support Request',
+            'customer-service': 'Customer Support Request',
             host: 'Host Request',
+            seller: 'Seller Request',
+            coinseller: 'Seller Request',
         };
 
         const requestType = roleToRequestTypeMap[role];
@@ -179,10 +197,12 @@ export const submitApplication = async (req: Request, res: Response) => {
 
                 await RequestModel.create({
                     requestType,
+                    role,
                     data: {
                         name: applicantName,
                         email: applicantEmail.toLowerCase(),
                         phoneNumber: applicantPhone,
+                        mobile: applicantPhone,
                         gender: gender || 'other',
                         country: country || 'India',
                         city: city || '',

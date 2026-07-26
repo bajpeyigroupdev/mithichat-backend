@@ -4,6 +4,27 @@ import { AuthRequest } from '../middlewares/authorize.middleware';
 import sendResponse from '../utils/reponse';
 import { generateSecureHash } from '../utils/passwordHelper';
 import { generateStrongPassword, logActivity } from './emsController';
+import mongoose from 'mongoose';
+
+// Helper to build a safe query for _id or userId
+const getSafeUserQuery = (id: string, role?: string) => {
+  const isObjId = mongoose.Types.ObjectId.isValid(id);
+  const numId = Number(id);
+
+  const filter: any = { isDeleted: false };
+  if (role) filter.role = role;
+
+  if (isObjId && !isNaN(numId)) {
+    filter.$or = [{ _id: id }, { userId: numId }];
+  } else if (isObjId) {
+    filter._id = id;
+  } else if (!isNaN(numId)) {
+    filter.userId = numId;
+  } else {
+    return null;
+  }
+  return filter;
+};
 
 // ─── GET: Operator List with aggregations ──────────────────────────────────────
 export const listOperators = async (req: AuthRequest, res: Response) => {
@@ -111,7 +132,10 @@ export const listOperators = async (req: AuthRequest, res: Response) => {
 export const getOperator = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const operator = await User.findOne({ userId: id, role: 'operator' }).lean();
+    const query = getSafeUserQuery(id, 'operator');
+    if (!query) return sendResponse(res, 404, false, 'Operator not found');
+
+    const operator = await User.findOne(query).lean();
     if (!operator) return sendResponse(res, 404, false, 'Operator not found');
     return sendResponse(res, 200, true, 'Operator fetched', operator);
   } catch (err: any) {
@@ -123,7 +147,10 @@ export const getOperator = async (req: AuthRequest, res: Response) => {
 export const toggleOperatorBlock = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const operator = await User.findOne({ _id: id, role: 'operator' });
+    const query = getSafeUserQuery(id, 'operator');
+    if (!query) return sendResponse(res, 404, false, 'Operator not found');
+
+    const operator = await User.findOne(query);
     if (!operator) return sendResponse(res, 404, false, 'Operator not found');
 
     operator.isBlocked = !operator.isBlocked;
@@ -149,7 +176,10 @@ export const deleteOperator = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     if (req.user?.role !== 'owner') return sendResponse(res, 403, false, 'Owner only');
 
-    const operator = await User.findOne({ _id: id, role: 'operator' });
+    const query = getSafeUserQuery(id, 'operator');
+    if (!query) return sendResponse(res, 404, false, 'Operator not found');
+
+    const operator = await User.findOne(query);
     if (!operator) return sendResponse(res, 404, false, 'Operator not found');
 
     operator.isDeleted = true;
@@ -166,7 +196,10 @@ export const deleteOperator = async (req: AuthRequest, res: Response) => {
 export const resetOperatorPassword = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const operator = await User.findOne({ _id: id, role: 'operator' }).select('+password');
+    const query = getSafeUserQuery(id, 'operator');
+    if (!query) return sendResponse(res, 404, false, 'Operator not found');
+
+    const operator = await User.findOne(query).select('+password');
     if (!operator) return sendResponse(res, 404, false, 'Operator not found');
 
     const newPassword = generateStrongPassword();

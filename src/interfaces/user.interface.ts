@@ -62,4 +62,12 @@ export interface UserInterface extends Document {
   branchId?: Types.ObjectId;
   departmentId?: Types.ObjectId;
   teamId?: Types.ObjectId;
+  mustChangePassword?: boolean;
+  loginUrl?: string;
+  lastLogin?: Date;
+  emsRequestId?: Types.ObjectId;
+  status?: string;
+  deletedBy?: Types.ObjectId;
+  deletedAt?: Date;
+  deleteReason?: string;
 }

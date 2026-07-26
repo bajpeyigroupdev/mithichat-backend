@@ -3,6 +3,7 @@ import { verifyToken } from '../middlewares/authorize.middleware';
 import {
     adminLogin,
     adminLogout,
+    changePassword,
     getAdminProfile,
     updateAdminProfile,
     addCoinsToUser,
@@ -22,7 +23,7 @@ import {
     resolveReport,
     dismissReport,
 } from '../controllers/reportsController';
-import { listAdmins, getAdmin, toggleAdminBlock, deleteAdmin, resetAdminPassword } from '../controllers/adminController';
+import { listAdmins, getAdmin, toggleAdminBlock, deleteAdmin, resetAdminPassword, getRecruitedMembers } from '../controllers/adminController';
 import { listSuperAdmins, getSuperAdmin, toggleSuperAdminBlock, deleteSuperAdmin, resetSuperAdminPassword } from '../controllers/superAdminController';
 
 const router = express.Router();
@@ -30,6 +31,7 @@ const router = express.Router();
 // ============ Admin Authentication Routes ============
 router.post('/login', adminLogin);
 router.post('/logout', verifyToken, adminLogout);
+router.post('/change-password', verifyToken, changePassword);
 router.get('/profile', verifyToken, getAdminProfile);
 router.patch('/profile', verifyToken, updateAdminProfile);
 router.post('/users/add-coins', verifyToken, addCoinsToUser);
@@ -241,7 +243,179 @@ router.get('/super-admins', verifyToken, listSuperAdmins);
 router.get('/super-admins/:id', verifyToken, getSuperAdmin);
 router.patch('/super-admins/:id/toggle-block', verifyToken, toggleSuperAdminBlock);
 router.delete('/super-admins/:id', verifyToken, deleteSuperAdmin);
-router.post('/super-admins/:id/reset-password', verifyToken, resetSuperAdminPassword);
+// ============ Recruited Members Module Routes ============
+router.get('/recruited-members', verifyToken, getRecruitedMembers);
+
+// ============ Sellers (Coin Sellers) Module Routes ============
+router.get('/sellers', verifyToken, async (req: any, res: any) => {
+    try {
+        const { User } = await import('../models/user.model');
+        const { search, page = 1, limit = 20 } = req.query;
+        const filter: any = { role: 'coinSeller', isDeleted: false };
+        if (search) filter.$or = [
+            { name: { $regex: search, $options: 'i' } },
+            { email: { $regex: search, $options: 'i' } },
+            { employeeCode: { $regex: search, $options: 'i' } },
+        ];
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+        const [sellers, total] = await Promise.all([
+            User.find(filter).select('-password -refreshToken').sort({ createdAt: -1 }).skip((pageNum-1)*limitNum).limit(limitNum),
+            User.countDocuments(filter)
+        ]);
+        return res.json({ success: true, message: 'Sellers listed', data: { sellers, pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total/limitNum) } } });
+    } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+});
+
+// ============ Customer Support Module Routes ============
+router.get('/customer-support', verifyToken, async (req: any, res: any) => {
+    try {
+        const { User } = await import('../models/user.model');
+        const { search, page = 1, limit = 20 } = req.query;
+        const filter: any = { role: 'customerSupport', isDeleted: false };
+        if (search) filter.$or = [
+            { name: { $regex: search, $options: 'i' } },
+            { email: { $regex: search, $options: 'i' } },
+            { employeeCode: { $regex: search, $options: 'i' } },
+        ];
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+        const [staff, total] = await Promise.all([
+            User.find(filter).select('-password -refreshToken').sort({ createdAt: -1 }).skip((pageNum-1)*limitNum).limit(limitNum),
+            User.countDocuments(filter)
+        ]);
+        return res.json({ success: true, message: 'Customer Support staff listed', data: { staff, pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total/limitNum) } } });
+    } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+});
+
+// ============ Agencies Module Routes (EMS-based) ============
+router.get('/agencies-list', verifyToken, async (req: any, res: any) => {
+    try {
+        const { User } = await import('../models/user.model');
+        const { search, page = 1, limit = 20 } = req.query;
+        const filter: any = { role: 'agency', isDeleted: false };
+        if (search) filter.$or = [
+            { name: { $regex: search, $options: 'i' } },
+            { email: { $regex: search, $options: 'i' } },
+            { employeeCode: { $regex: search, $options: 'i' } },
+        ];
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+        const [agencies, total] = await Promise.all([
+            User.find(filter).select('-password -refreshToken').sort({ createdAt: -1 }).skip((pageNum-1)*limitNum).limit(limitNum),
+            User.countDocuments(filter)
+        ]);
+        return res.json({ success: true, message: 'Agencies listed', data: { agencies, pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total/limitNum) } } });
+    } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+});
+
+// ============ Universal User Soft Delete & Restore Endpoints ============
+router.post('/users/:id/soft-delete', verifyToken, async (req: any, res: any) => {
+    try {
+        const { User } = await import('../models/user.model');
+        const { id } = req.params;
+        const { reason = 'Soft deleted by Administrator' } = req.body;
+        const actor = req.user;
+
+        const userObj = await User.findById(id);
+        if (!userObj) return res.status(404).json({ success: false, message: 'User not found' });
+
+        userObj.isDeleted = true;
+        userObj.status = 'Deleted';
+        userObj.deletedAt = new Date();
+        userObj.deletedBy = actor?.id || actor?._id;
+        userObj.deleteReason = reason;
+        await userObj.save();
+
+        return res.json({ success: true, message: `User ${userObj.name || userObj.employeeCode} has been soft-deleted`, data: userObj });
+    } catch (e: any) {
+        return res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+router.post('/users/:id/restore', verifyToken, async (req: any, res: any) => {
+    try {
+        const { User } = await import('../models/user.model');
+        const { id } = req.params;
+
+        const userObj = await User.findById(id);
+        if (!userObj) return res.status(404).json({ success: false, message: 'User not found' });
+
+        userObj.isDeleted = false;
+        userObj.status = 'Active';
+        userObj.deletedAt = undefined;
+        userObj.deletedBy = undefined;
+        userObj.deleteReason = '';
+        await userObj.save();
+
+        return res.json({ success: true, message: `User ${userObj.name || userObj.employeeCode} restored successfully`, data: userObj });
+    } catch (e: any) {
+        return res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// ============ Transfer Management Endpoints ============
+router.post('/users/:id/transfer', verifyToken, async (req: any, res: any) => {
+    try {
+        const { User } = await import('../models/user.model');
+        const { TransferHistory } = await import('../models/transferHistory.model');
+        const { id } = req.params;
+        const { newParentId, newParentRole, reason = 'Transfer approved by Admin' } = req.body;
+        const actor = req.user;
+
+        const userObj = await User.findById(id);
+        if (!userObj) return res.status(404).json({ success: false, message: 'Target user not found' });
+
+        const oldParentId = userObj.parentId;
+        const oldParentRole = userObj.parentRole || '';
+
+        // Update user parentage
+        userObj.parentId = newParentId;
+        userObj.parentRole = newParentRole;
+        if (newParentRole === 'agency') userObj.agencyId = newParentId;
+        if (newParentRole === 'operator') userObj.operatorId = newParentId;
+        if (newParentRole === 'superAdmin') userObj.superAdminId = newParentId;
+        await userObj.save();
+
+        // Record Transfer History
+        const transferRecord = await TransferHistory.create({
+            targetUserId: userObj._id,
+            transferType: 'Role_Transfer',
+            oldParentId,
+            oldParentRole,
+            newParentId,
+            newParentRole,
+            transferredBy: actor?.id || actor?._id,
+            transferDate: new Date(),
+            reason,
+            status: 'Approved'
+        });
+
+        return res.json({
+            success: true,
+            message: `User ${userObj.name || userObj.employeeCode} transferred successfully.`,
+            data: { user: userObj, transferRecord }
+        });
+    } catch (e: any) {
+        return res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+router.get('/users/:id/transfer-history', verifyToken, async (req: any, res: any) => {
+    try {
+        const { TransferHistory } = await import('../models/transferHistory.model');
+        const { id } = req.params;
+        const history = await TransferHistory.find({ targetUserId: id })
+            .populate('oldParentId', 'name email role employeeCode')
+            .populate('newParentId', 'name email role employeeCode')
+            .populate('transferredBy', 'name email role employeeCode')
+            .sort({ createdAt: -1 });
+
+        return res.json({ success: true, message: 'Transfer history retrieved', data: history });
+    } catch (e: any) {
+        return res.status(500).json({ success: false, message: e.message });
+    }
+});
 
 export default router;
 

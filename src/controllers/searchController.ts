@@ -14,36 +14,53 @@ export const globalSearch = async (req: Request, res: Response) => {
         }
 
         const regex = new RegExp(queryStr, 'i');
-
-        const [users, employees, recruitmentApps, hosts] = await Promise.all([
-            User.find({ $or: [{ name: regex }, { email: regex }, { phoneNumber: regex }, { employeeCode: regex }] })
-                .select('_id name email role employeeCode')
-                .limit(5)
-                .lean(),
-            Employee.find({ $or: [{ employeeCode: regex }, { designation: regex }] })
-                .select('_id employeeCode designation status')
-                .limit(5)
-                .lean(),
-            RecruitmentApplication.find({ $or: [{ applicationId: regex }, { 'applicant.name': regex }, { 'applicant.email': regex }] })
-                .select('_id applicationId role status applicant')
-                .limit(5)
-                .lean(),
-            Host.find({ $or: [{ meethiId: regex }, { fullName: regex }, { emailId: regex }] })
-                .select('_id meethiId fullName emailId isApproved')
-                .limit(5)
-                .lean()
-        ]);
-
-        const results = [
-            ...users.map(u => ({ type: 'User', title: u.name || 'User', subtitle: `${u.role?.toUpperCase()} • ${u.email || u.employeeCode || ''}`, link: `/users` })),
-            ...employees.map(e => ({ type: 'Employee', title: e.employeeCode, subtitle: `${e.designation} • ${e.status}`, link: `/employees` })),
-            ...recruitmentApps.map(r => ({ type: 'Recruitment', title: r.applicationId, subtitle: `${r.applicant?.name} (${r.role.toUpperCase()})`, link: `/recruitment` })),
-            ...hosts.map(h => ({ type: 'Host', title: h.fullName, subtitle: `ID: ${h.meethiId} • ${h.emailId}`, link: `/hosts` }))
+        const userOrConditions: any[] = [
+            { name: regex },
+            { email: regex },
+            { phoneNumber: regex },
+            { employeeCode: regex },
+            { specialCode: regex },
+            { meethiId: regex },
+            { referralCode: regex }
         ];
 
-        return sendResponse(res, 200, true, 'Global search results', { results });
+        // If queryStr is a valid Mongo ObjectId, search by _id as well
+        if (/^[0-9a-fA-F]{24}$/.test(queryStr)) {
+            userOrConditions.push({ _id: queryStr });
+        }
+
+        const users = await User.find({ $or: userOrConditions })
+            .select('_id name email phoneNumber role employeeCode specialCode meethiId status loginUrl')
+            .limit(10)
+            .lean();
+
+        const results = users.map(u => {
+            const roleStr = String(u.role || '').toLowerCase();
+            const rolePath = roleStr === 'superadmin' ? '/super-admins' :
+                             roleStr === 'admin' ? '/admins' :
+                             roleStr === 'agency' ? '/agencies' :
+                             roleStr === 'operator' ? '/operators' :
+                             roleStr === 'host' ? '/hosts' :
+                             roleStr === 'coinseller' || roleStr === 'seller' ? '/sellers' :
+                             roleStr === 'customersupport' || roleStr === 'support' ? '/customer-support' : '/users';
+
+            return {
+                id: u._id,
+                type: (u.role || 'User').toUpperCase(),
+                title: u.name || 'User Profile',
+                subtitle: `EMP: ${u.employeeCode || u.specialCode || u._id} | ID: ${u.meethiId || 'N/A'} | ${u.email || u.phoneNumber || ''}`,
+                employeeCode: u.employeeCode,
+                roleCode: u.specialCode,
+                meethiId: u.meethiId,
+                email: u.email,
+                phoneNumber: u.phoneNumber,
+                link: rolePath
+            };
+        });
+
+        return sendResponse(res, 200, true, 'Global search results retrieved', { results });
     } catch (error: any) {
         await Logger('globalSearch', error);
-        return sendResponse(res, 500, false, 'Failed to perform global search');
+        return sendResponse(res, 500, false, 'Failed to perform global search', { error: error.message });
     }
 };

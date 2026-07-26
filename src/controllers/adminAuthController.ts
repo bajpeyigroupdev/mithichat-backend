@@ -9,7 +9,7 @@ import { AuthRequest } from '../middlewares/authorize.middleware';
 import { RechargeHistory } from '../models/RechargeHistory';
 import { RechargeType } from '../constants/user';
 
-// Admin login
+// Admin login — Email + Password only. No username, no mobile.
 export const adminLogin = async (
     req: Request,
     res: Response,
@@ -22,48 +22,108 @@ export const adminLogin = async (
             return next(new AppError('Email and password are required', 400));
         }
 
-        // Find admin user by email
+        // Find user by email — all admin-panel roles except host (host = mobile app only)
         const admin = await User.findOne({
-            email,
-            role: { $in: ['owner', 'operator', 'superAdmin', 'admin', 'agency', 'coinSeller'] },
+            email: email.toLowerCase().trim(),
+            role: { $in: ['owner', 'operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'customerSupport'] },
             isDeleted: false
-        }).select('+password');
+        }).select('+password +mustChangePassword +refreshToken');
+
+        const { LoginHistory } = await import('../models/loginHistory.model');
+        const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+        const userAgent = req.headers['user-agent'] || '';
+
         if (!admin) {
+            await LoginHistory.create({
+                email: email.toLowerCase().trim(),
+                role: 'unknown',
+                ipAddress: clientIp,
+                userAgent,
+                loginStatus: 'Failed_Invalid_Credentials',
+                failureReason: 'User not found in system'
+            });
             return next(new AppError('Invalid credentials', 401));
+        }
+
+        // Block hosts from admin panel (they use mobile app only)
+        if ((admin.role as string) === 'host') {
+            await LoginHistory.create({
+                userId: admin._id,
+                email: email.toLowerCase().trim(),
+                role: admin.role,
+                ipAddress: clientIp,
+                userAgent,
+                loginStatus: 'Failed_Host_Blocked',
+                failureReason: 'Host role must use mobile application'
+            });
+            return next(new AppError('Hosts must use the mobile application to login.', 403));
         }
 
         // Check if admin is blocked
         if (admin.isBlocked) {
-            return next(new AppError('Account is blocked. Contact super admin.', 403));
+            await LoginHistory.create({
+                userId: admin._id,
+                email: email.toLowerCase().trim(),
+                role: admin.role,
+                ipAddress: clientIp,
+                userAgent,
+                loginStatus: 'Failed_Blocked',
+                failureReason: 'Account suspended/blocked'
+            });
+            return next(new AppError('Account is suspended. Contact your administrator.', 403));
         }
 
         // Verify password
         const isPasswordValid = await verifySecureHash(password, admin.password!);
         if (!isPasswordValid) {
+            await LoginHistory.create({
+                userId: admin._id,
+                email: email.toLowerCase().trim(),
+                role: admin.role,
+                ipAddress: clientIp,
+                userAgent,
+                loginStatus: 'Failed_Invalid_Credentials',
+                failureReason: 'Incorrect password'
+            });
             return next(new AppError('Invalid credentials', 401));
         }
+
+        // Log Successful Login
+        await LoginHistory.create({
+            userId: admin._id,
+            email: email.toLowerCase().trim(),
+            role: admin.role,
+            ipAddress: clientIp,
+            userAgent,
+            loginStatus: 'Success',
+            failureReason: ''
+        });
 
         // Generate tokens
         const accessToken = generateToken(admin.userId.toString(), 'access');
         const refreshToken = generateToken(admin.userId.toString(), 'refresh');
-        // Update refresh token in database
+
+        // Update refresh token + last login timestamp
         admin.refreshToken = refreshToken;
+        (admin as any).lastLogin = new Date();
         await admin.save();
 
         // Remove sensitive fields
         const adminData = admin.toObject();
         delete adminData.password;
         delete adminData.refreshToken;
+
         const data = {
             user: adminData,
             token: accessToken,
             refreshToken,
+            mustChangePassword: (admin as any).mustChangePassword === true,
         };
 
-        return sendResponse(res, 200, true, 'Admin login successful', data);
+        return sendResponse(res, 200, true, 'Login successful', data);
     } catch (error) {
         await Logger('adminLogin', error);
-        next(new AppError('Error during admin login', 500));
+        next(new AppError('Error during login', 500));
     }
 };
 
@@ -82,10 +142,63 @@ export const adminLogout = async (
             refreshToken: '',
         });
 
-        return sendResponse(res, 200, true, 'Admin logout successful');
+        return sendResponse(res, 200, true, 'Logout successful');
     } catch (error) {
         await Logger('adminLogout', error);
-        next(new AppError('Error during admin logout', 500));
+        next(new AppError('Error during logout', 500));
+    }
+};
+
+// Change password (used for first-login forced change and voluntary changes)
+export const changePassword = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+): Promise<void> => {
+    try {
+        const adminId = (req as any).user.id;
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return next(new AppError('Current password and new password are required', 400));
+        }
+
+        // Password complexity validation
+        const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{10,20}$/;
+        if (!passwordRegex.test(newPassword)) {
+            return next(new AppError(
+                'New password must be 10-20 characters and contain at least one uppercase letter, one lowercase letter, one number, and one special character (!@#$%^&*)',
+                400
+            ));
+        }
+
+        const user = await User.findById(adminId).select('+password +mustChangePassword');
+        if (!user) {
+            return next(new AppError('User not found', 404));
+        }
+
+        // Verify current password
+        const isValid = await verifySecureHash(currentPassword, user.password!);
+        if (!isValid) {
+            return next(new AppError('Current password is incorrect', 401));
+        }
+
+        // Prevent reusing the same password
+        const isSamePassword = await verifySecureHash(newPassword, user.password!);
+        if (isSamePassword) {
+            return next(new AppError('New password cannot be the same as your current password', 400));
+        }
+
+        // Hash and save new password
+        const hashedNewPassword = await generateSecureHash(newPassword);
+        user.password = hashedNewPassword;
+        (user as any).mustChangePassword = false;
+        await user.save();
+
+        return sendResponse(res, 200, true, 'Password changed successfully. Please login with your new password.');
+    } catch (error) {
+        await Logger('changePassword', error);
+        next(new AppError('Error changing password', 500));
     }
 };
 

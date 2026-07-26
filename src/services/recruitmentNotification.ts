@@ -14,17 +14,17 @@ export async function sendRecruitmentWorkflowNotification(payload: NotificationP
         console.log(`[Notification Service] Dispatching ${payload.status.toUpperCase()} notification to ${payload.applicantEmail} for ${payload.applicationId}`);
 
         // Notification templates per status trigger
-        let subject = `[MithiChat Recruitment] Application Update: ${payload.applicationId}`;
-        let body = `Hello ${payload.applicantName},\n\nYour recruitment application (${payload.applicationId}) status has been updated to: ${payload.status.toUpperCase()}.\n`;
+        let subject = `[MithiChat EMS] Application Update: ${payload.applicationId}`;
+        let body = `Hello ${payload.applicantName},\n\nYour application (${payload.applicationId}) status has been updated to: ${payload.status.toUpperCase()}.\n`;
 
         if (payload.status === 'interview_scheduled') {
-            subject = `[MithiChat Recruitment] Interview Scheduled - ${payload.applicationId}`;
+            subject = `[MithiChat EMS] Interview Scheduled - ${payload.applicationId}`;
             body += `\nOur HR board has scheduled an interview for your ${payload.role.toUpperCase()} application. Details will be sent shortly.`;
         } else if (payload.status === 'approved') {
             subject = `🎉 Congratulations! Your ${payload.role.toUpperCase()} Application is Approved!`;
             body += `\nWelcome to MithiChat! Your partner onboarding is approved. Check your portal for credentials.`;
         } else if (payload.status === 'rejected') {
-            subject = `[MithiChat Recruitment] Application Status Update - ${payload.applicationId}`;
+            subject = `[MithiChat EMS] Application Status Update - ${payload.applicationId}`;
             body += `\nThank you for applying. At this time, we are unable to move forward with your application.`;
         }
 

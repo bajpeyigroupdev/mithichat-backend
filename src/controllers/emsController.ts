@@ -8,6 +8,7 @@ import { AuditLog } from '../models/auditLog.model';
 import { Counter } from '../models/counter.model';
 import { PageRegistry } from '../models/pageRegistry.model';
 import { Role } from '../models/role.model';
+import { RecruitmentApplication } from '../models/recruitmentApplication.model';
 import sendResponse from '../utils/reponse';
 import { generateSecureHash } from '../utils/passwordHelper';
 import { generateUniqueId } from '../utils/generator';
@@ -56,7 +57,7 @@ const getNextSequenceValue = async (sequenceName: string): Promise<number> => {
   return sequenceDocument.seq;
 };
 
-// Role prefixes for special codes
+// Role prefixes for special codes (short referral format)
 const roleCodePrefix: Record<string, string> = {
   owner: 'OWN',
   operator: 'OPR',
@@ -69,21 +70,87 @@ const roleCodePrefix: Record<string, string> = {
   user: 'USR',
 };
 
+// Global Unique Identity System Prefixes
+const empCodePrefixMap: Record<string, string> = {
+  owner: 'EMP-OWN',
+  superAdmin: 'EMP-SA',
+  admin: 'EMP-ADM',
+  agency: 'EMP-AGY',
+  operator: 'EMP-OP',
+  host: 'EMP-HOST',
+  coinSeller: 'EMP-SEL',
+  customerSupport: 'EMP-CS',
+  user: 'EMP-USR',
+};
+
+const roleCodePrefixMap: Record<string, string> = {
+  owner: 'OWN',
+  superAdmin: 'SA',
+  admin: 'ADM',
+  agency: 'AGY',
+  operator: 'OP',
+  host: 'HOST',
+  coinSeller: 'SEL',
+  customerSupport: 'CS',
+  user: 'USR',
+};
+
+// Generate Employee Code (EMP-SA-000001 format per spec)
+export const generateEmployeeCode = async (role: string): Promise<string> => {
+  const prefix = empCodePrefixMap[role] || 'EMP-USR';
+  const seq = await getNextSequenceValue(`emp_${prefix}`);
+  return `${prefix}-${String(seq).padStart(6, '0')}`;
+};
+
+// Generate Role Code (SA000001 format per spec)
+export const generateFormattedRoleCode = async (role: string): Promise<string> => {
+  const prefix = roleCodePrefixMap[role] || 'USR';
+  const seq = await getNextSequenceValue(`role_${prefix}`);
+  return `${prefix}${String(seq).padStart(6, '0')}`;
+};
+
+// Generate Meethi Chat ID (MC100001 format per spec)
+export const generateMeethiId = async (): Promise<string> => {
+  const seq = await getNextSequenceValue('meethi_id');
+  return `MC${100000 + seq}`;
+};
+
 export const generateSpecialCode = async (role: string, name: string): Promise<string> => {
   const cleanName = name.trim().replace(/[^a-zA-Z]/g, '').substring(0, 2).toUpperCase() || 'XX';
-  const prefix = roleCodePrefix[role] || 'USR';
+  const prefix = roleCodePrefixMap[role] || 'USR';
   const seq = await getNextSequenceValue(prefix);
   return `${prefix}-${cleanName}-${seq}`;
 };
 
-// Strong random password generator
+// Cryptographically strong password generator (10-12 chars, guaranteed complexity)
 export const generateStrongPassword = (): string => {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-  let password = '';
-  for (let i = 0; i < 12; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const lower = 'abcdefghijklmnopqrstuvwxyz';
+  const digits = '0123456789';
+  const specials = '!@#$%^&*';
+  const all = upper + lower + digits + specials;
+  // Guarantee at least one of each required category
+  const required = [
+    upper.charAt(Math.floor(Math.random() * upper.length)),
+    upper.charAt(Math.floor(Math.random() * upper.length)),
+    lower.charAt(Math.floor(Math.random() * lower.length)),
+    lower.charAt(Math.floor(Math.random() * lower.length)),
+    digits.charAt(Math.floor(Math.random() * digits.length)),
+    digits.charAt(Math.floor(Math.random() * digits.length)),
+    specials.charAt(Math.floor(Math.random() * specials.length)),
+    specials.charAt(Math.floor(Math.random() * specials.length)),
+  ];
+  // Fill remaining slots
+  const remaining = 12 - required.length;
+  for (let i = 0; i < remaining; i++) {
+    required.push(all.charAt(Math.floor(Math.random() * all.length)));
   }
-  return password;
+  // Shuffle array
+  for (let i = required.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [required[i], required[j]] = [required[j], required[i]];
+  }
+  return required.join('');
 };
 
 const defaultRolePermissions: Record<string, {
@@ -207,7 +274,8 @@ export const getPermissions = async (req: AuthRequest, res: Response) => {
 
     return sendResponse(res, 200, true, 'Permissions retrieved successfully', permission);
   } catch (error: any) {
-    return sendResponse(res, 500, false, error.message);
+    console.error('❌ Error in getPermissions:', error);
+    return res.status(500).json({ success: false, message: error.message, stack: error.stack });
   }
 };
 
@@ -505,43 +573,61 @@ export const updateWorkflow = async (req: AuthRequest, res: Response) => {
 export const createRequest = async (req: AuthRequest, res: Response) => {
   try {
     const { requestType, data } = req.body;
-    const creator = req.user; // If logged in
+    const creator = req.user; // If logged in (null for public form submissions)
 
     if (!requestType || !data) {
       return sendResponse(res, 400, false, 'requestType and data are required.');
     }
 
+    // Detect role from requestType
+    let detectedRole = 'user';
+    const rt = requestType.toLowerCase();
+    if (rt.includes('super admin')) detectedRole = 'superAdmin';
+    else if (rt.includes('admin')) detectedRole = 'admin';
+    else if (rt.includes('operator')) detectedRole = 'operator';
+    else if (rt.includes('seller') || rt.includes('coin')) detectedRole = 'coinSeller';
+    else if (rt.includes('support') || rt.includes('customer service') || rt.includes('cs request')) detectedRole = 'customerSupport';
+    else if (rt.includes('agency')) detectedRole = 'agency';
+    else if (rt.includes('host')) detectedRole = 'host';
+
     // Resolve workflow config
     const workflow = await Workflow.findOne({ requestType, isActive: true });
     const steps = workflow ? workflow.steps : [];
-    const autoApprove = workflow ? workflow.autoApprove : true;
+    // NEVER auto-approve — all requests must go through manual review
+    const autoApprove = false;
 
-    // Auto-generate temporary strong password for new staff applications if not provided
-    let passwordBeforeApproval = data.password || generateStrongPassword();
+    // Generate password (stored for reference, only hashed on approval)
+    const passwordBeforeApproval = generateStrongPassword();
 
     const newRequest = await RequestModel.create({
       requestType,
-      data: { ...data, password: passwordBeforeApproval },
+      role: detectedRole,
+      data: { ...data },
       workflowSteps: steps,
       currentStepIndex: 0,
-      status: autoApprove ? RequestStatus.APPROVED : RequestStatus.PENDING,
+      status: RequestStatus.PENDING,
       passwordBeforeApproval,
-      createdBy: creator ? creator.id : 'self_registration',
+      createdBy: creator ? creator.id : (data.email || 'self_registration'),
       createdByRole: creator ? creator.role : 'public',
+      timeline: [{
+        action: 'Application Submitted',
+        actor: data.name || data.fullName || 'Applicant',
+        actorRole: 'public',
+        date: new Date(),
+        remarks: `Registration form submitted for ${requestType}`,
+      }],
     });
 
-    if (autoApprove) {
-      // Immediately spawn user account if auto-approved
-      await finalizeUserApproval(newRequest);
-    }
-
-    return sendResponse(
-      res,
-      201,
-      true,
-      autoApprove ? 'Request approved automatically.' : 'Request submitted, pending approvals.',
-      newRequest
+    // Audit log
+    await logActivity(
+      creator ? creator.id.toString() : 'self',
+      creator ? creator.role : 'public',
+      'Request Submitted',
+      (newRequest as any)._id.toString(),
+      `New ${requestType} application submitted by ${data.name || data.email || 'Applicant'}`
     );
+
+    return sendResponse(res, 201, true, 'Application submitted successfully. It is pending review.', newRequest);
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -549,13 +635,184 @@ export const createRequest = async (req: AuthRequest, res: Response) => {
 
 export const listRequests = async (req: AuthRequest, res: Response) => {
   try {
-    const { status, requestType } = req.query;
-    const filter: any = {};
-    if (status) filter.status = status;
-    if (requestType) filter.requestType = requestType;
+    const { status, requestType, role, search, page = 1, limit = 20, startDate, endDate } = req.query;
 
-    const requests = await RequestModel.find(filter).sort({ createdAt: -1 });
-    return sendResponse(res, 200, true, 'Requests listed successfully', requests);
+    // Auto-sync any RecruitmentApplication entries into RequestModel so submissions are immediately visible
+    try {
+      const pendingApps = await RecruitmentApplication.find({});
+      for (const app of pendingApps) {
+        const email = app.applicant?.email || (app.roleData as any)?.email || (app.roleData as any)?.officialEmail;
+        const appId = app.applicationId;
+        
+        const orConditions: any[] = [];
+        if (email) orConditions.push({ 'data.email': email.toLowerCase() });
+        if (appId) {
+          orConditions.push({ 'data.meethiChatId': appId });
+          orConditions.push({ 'data.mithiChatId': appId });
+        }
+
+        if (orConditions.length === 0) continue;
+
+        const exists = await RequestModel.findOne({ $or: orConditions });
+
+        if (!exists) {
+          const roleToReqType: Record<string, string> = {
+            admin: 'Admin Request',
+            operator: 'Operator Request',
+            'super-admin': 'Super Admin Request',
+            agency: 'Agency Request',
+            'customer-service': 'Customer Support Request',
+            host: 'Host Request',
+            seller: 'Seller Request'
+          };
+          const reqType = roleToReqType[app.role] || `${app.role} Request`;
+          await RequestModel.create({
+            requestType: reqType,
+            role: app.role,
+            data: {
+              name: app.applicant?.name || (app.roleData as any)?.name || (app.roleData as any)?.fullName || 'Applicant',
+              email: email || '',
+              phoneNumber: app.applicant?.phone || (app.roleData as any)?.phone || (app.roleData as any)?.mobileNo || '',
+              mobile: app.applicant?.phone || (app.roleData as any)?.phone || (app.roleData as any)?.mobileNo || '',
+              gender: app.applicant?.gender || (app.roleData as any)?.gender || 'other',
+              country: app.applicant?.country || (app.roleData as any)?.country || 'India',
+              city: app.applicant?.city || (app.roleData as any)?.city || '',
+              address: app.applicant?.address || (app.roleData as any)?.address || '',
+              experience: app.applicant?.experienceYears || (app.roleData as any)?.experienceYears || '',
+              invitedBy: app.referrer?.referrerName || app.referrer?.code || 'Direct Recruitment Portal',
+              meethiChatId: app.applicationId,
+              mithiChatId: app.applicationId,
+              username: (app.roleData as any)?.username || `@${(app.applicant?.name || 'user').toLowerCase().replace(/\s+/g, '')}`,
+              ...app.roleData
+            },
+            status: app.status === 'approved' ? RequestStatus.APPROVED : RequestStatus.PENDING,
+            createdBy: 'recruitment_sync',
+            createdByRole: 'public'
+          });
+        }
+      }
+    } catch (syncErr) {
+      console.error('RecruitmentApplication sync error:', syncErr);
+    }
+
+    const andConditions: any[] = [];
+
+    if (status) andConditions.push({ status });
+
+    if (requestType) {
+      const rtStr = (requestType as string).trim();
+      const roleBase = rtStr.toLowerCase().replace(' request', '').trim();
+      const roleUnderscore = roleBase.replace(/[\s-]+/g, '_');
+      const roleHyphen = roleBase.replace(/[\s_]+/g, '-');
+
+      andConditions.push({
+        $or: [
+          { requestType: { $regex: new RegExp(rtStr, 'i') } },
+          { requestType: { $regex: new RegExp(roleBase, 'i') } },
+          { role: { $regex: new RegExp(roleUnderscore, 'i') } },
+          { role: { $regex: new RegExp(roleHyphen, 'i') } },
+          { role: { $regex: new RegExp(roleBase, 'i') } }
+        ]
+      });
+    }
+
+    if (role) andConditions.push({ role });
+
+    // Date range filter
+    if (startDate || endDate) {
+      const dateFilter: any = {};
+      if (startDate) dateFilter.$gte = new Date(startDate as string);
+      if (endDate) dateFilter.$lte = new Date(endDate as string);
+      andConditions.push({ createdAt: dateFilter });
+    }
+
+    // Search across name, email, mobile in data
+    if (search) {
+      const searchStr = search as string;
+      andConditions.push({
+        $or: [
+          { 'data.name': { $regex: searchStr, $options: 'i' } },
+          { 'data.fullName': { $regex: searchStr, $options: 'i' } },
+          { 'data.email': { $regex: searchStr, $options: 'i' } },
+          { 'data.phoneNumber': { $regex: searchStr, $options: 'i' } },
+          { 'data.mobile': { $regex: searchStr, $options: 'i' } },
+          { roleCode: { $regex: searchStr, $options: 'i' } },
+        ]
+      });
+    }
+
+    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
+
+    const pageNum = Math.max(1, parseInt(page as string));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [requests, total] = await Promise.all([
+      RequestModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
+      RequestModel.countDocuments(filter),
+    ]);
+
+    return sendResponse(res, 200, true, 'Requests listed successfully', {
+      data: requests,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error: any) {
+    console.error('❌ Error in listRequests:', error);
+    return res.status(500).json({ success: false, message: error.message, stack: error.stack });
+  }
+};
+
+export const getRequestById = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const request = await RequestModel.findById(id);
+    if (!request) return sendResponse(res, 404, false, 'Request not found.');
+    return sendResponse(res, 200, true, 'Request retrieved successfully', request);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const updateRequestStatus = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status, remarks } = req.body;
+    const actor = req.user!;
+
+    const allowed = [RequestStatus.UNDER_REVIEW, RequestStatus.READY_FOR_INTERVIEW];
+    if (!allowed.includes(status)) {
+      return sendResponse(res, 400, false, `Status must be one of: ${allowed.join(', ')}`);
+    }
+
+    const requestObj = await RequestModel.findById(id);
+    if (!requestObj) return sendResponse(res, 404, false, 'Request not found.');
+    if (requestObj.status === RequestStatus.APPROVED || requestObj.status === RequestStatus.REJECTED) {
+      return sendResponse(res, 400, false, `Cannot change status of ${requestObj.status} request.`);
+    }
+
+    const oldStatus = requestObj.status;
+    requestObj.status = status;
+    requestObj.timeline.push({
+      action: status === RequestStatus.UNDER_REVIEW ? 'Marked Under Review' : 'Ready For Interview',
+      actor: (actor as any).name || actor.role,
+      actorRole: actor.role,
+      date: new Date(),
+      remarks: remarks || '',
+    });
+    await requestObj.save();
+
+    await logActivity(
+      actor.id.toString(), actor.role,
+      'Status Changed', id,
+      `Request status changed from ${oldStatus} to ${status} by ${(actor as any).name || actor.role}`
+    );
+
+    return sendResponse(res, 200, true, `Request status updated to ${status}`, requestObj);
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -598,8 +855,11 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, 'Request not found.');
     }
 
-    if (requestObj.status !== RequestStatus.PENDING) {
-      return sendResponse(res, 400, false, `Request is already ${requestObj.status}.`);
+    if (requestObj.status === RequestStatus.APPROVED) {
+      return sendResponse(res, 400, false, 'Request is already approved.');
+    }
+    if (requestObj.status === RequestStatus.REJECTED) {
+      return sendResponse(res, 400, false, 'Rejected requests cannot be approved.');
     }
 
     // Determine target workflow role
@@ -607,7 +867,7 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
 
     // If workflow steps exist, verify current actor role matches the targetRole
     if (targetRole && actor.role !== 'owner' && actor.role !== targetRole) {
-      return sendResponse(res, 430, false, `Verification failure: Current approval stage requires '${targetRole}' role.`);
+      return sendResponse(res, 403, false, `Verification failure: Current approval stage requires '${targetRole}' role.`);
     }
 
     // Record approval stamp
@@ -616,7 +876,16 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
       userId: actor.id,
       role: actor.role,
       date: new Date(),
-      comments,
+      comments: comments || 'Approved',
+    });
+
+    // Add timeline entry
+    requestObj.timeline.push({
+      action: 'Approved',
+      actor: (actor as any).name || actor.role,
+      actorRole: actor.role,
+      date: new Date(),
+      remarks: comments || 'Application approved',
     });
 
     // Audit Log
@@ -629,16 +898,23 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
     );
 
     // Advance to next step or finalize
-    if (requestObj.currentStepIndex + 1 >= requestObj.workflowSteps.length) {
+    let generatedCredentials: { email: string; password: string; specialCode: string; roleCode: string } | null = null;
+    if (requestObj.currentStepIndex + 1 >= requestObj.workflowSteps.length || requestObj.workflowSteps.length === 0) {
       requestObj.status = RequestStatus.APPROVED;
       requestObj.approvedDate = new Date();
-      await finalizeUserApproval(requestObj, actor);
+      generatedCredentials = await finalizeUserApproval(requestObj, actor);
     } else {
       requestObj.currentStepIndex += 1;
+      requestObj.status = RequestStatus.UNDER_REVIEW;
     }
 
     await requestObj.save();
-    return sendResponse(res, 200, true, 'Approval step processed successfully.', requestObj);
+    return sendResponse(res, 200, true, 'Approval processed successfully.', {
+      request: requestObj,
+      generatedCredentials,
+      approvedBy: (actor as any).name || actor.role,
+      approvedDate: new Date().toISOString(),
+    });
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -647,11 +923,14 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
 export const rejectRequest = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { reason } = req.body;
+    const { reason, comments } = req.body;
     const actor = req.user!;
 
-    if (!reason) {
-      return sendResponse(res, 400, false, 'Rejection reason is required.');
+    const rejectReason = (reason || comments || '').trim();
+
+    // Validate minimum reason length
+    if (!rejectReason || rejectReason.length < 10) {
+      return sendResponse(res, 400, false, 'Rejection reason must be at least 10 characters long.');
     }
 
     const requestObj = await RequestModel.findById(id);
@@ -659,8 +938,11 @@ export const rejectRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, 'Request not found.');
     }
 
-    if (requestObj.status !== RequestStatus.PENDING) {
-      return sendResponse(res, 400, false, `Request is already ${requestObj.status}.`);
+    if (requestObj.status === RequestStatus.APPROVED) {
+      return sendResponse(res, 400, false, 'Approved requests cannot be rejected.');
+    }
+    if (requestObj.status === RequestStatus.REJECTED) {
+      return sendResponse(res, 400, false, 'Request is already rejected.');
     }
 
     requestObj.status = RequestStatus.REJECTED;
@@ -669,8 +951,15 @@ export const rejectRequest = async (req: AuthRequest, res: Response) => {
       userId: actor.id,
       role: actor.role,
       date: new Date(),
-      reason,
+      reason: rejectReason,
     };
+    requestObj.timeline.push({
+      action: 'Rejected',
+      actor: (actor as any).name || actor.role,
+      actorRole: actor.role,
+      date: new Date(),
+      remarks: rejectReason,
+    });
 
     await requestObj.save();
 
@@ -679,34 +968,66 @@ export const rejectRequest = async (req: AuthRequest, res: Response) => {
       actor.role,
       'Rejection',
       (requestObj as any)._id.toString(),
-      `Rejected request type ${requestObj.requestType}. Reason: ${reason}`
+      `Rejected request type ${requestObj.requestType}. Reason: ${rejectReason}`
     );
 
-    return sendResponse(res, 200, true, 'Request rejected successfully.', requestObj);
+    return sendResponse(res, 200, true, 'Request rejected successfully.', {
+      request: requestObj,
+      rejectedBy: (actor as any).name || actor.role,
+      rejectedDate: new Date().toISOString(),
+      reason: rejectReason,
+    });
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message);
   }
 };
 
 // ============ Helper: Create users after final workflow approval ============
-const finalizeUserApproval = async (requestObj: IRequest, finalApprover?: any) => {
+// Returns the plain-text credentials so the frontend can display them in the approval dialog
+const finalizeUserApproval = async (
+  requestObj: IRequest,
+  finalApprover?: any
+): Promise<{ email: string; password: string; specialCode: string; roleCode: string }> => {
   const { requestType, data, passwordBeforeApproval } = requestObj;
 
-  // Hash password
-  const hashedPassword = await generateSecureHash(passwordBeforeApproval || 'Default@123');
+  // Use stored password or generate a fresh one — NEVER expose hashed
+  const plainPassword = passwordBeforeApproval || generateStrongPassword();
+  const hashedPassword = await generateSecureHash(plainPassword);
   const newUserId = await generateUniqueId();
 
-  let targetRole = 'user';
-  if (requestType.toLowerCase().includes('admin')) targetRole = 'admin';
-  else if (requestType.toLowerCase().includes('super admin')) targetRole = 'superAdmin';
-  else if (requestType.toLowerCase().includes('operator')) targetRole = 'operator';
-  else if (requestType.toLowerCase().includes('seller')) targetRole = 'coinSeller';
-  else if (requestType.toLowerCase().includes('support')) targetRole = 'customerSupport';
-  else if (requestType.toLowerCase().includes('agency')) targetRole = 'agency';
-  else if (requestType.toLowerCase().includes('host')) targetRole = 'host';
+  // Detect role
+  let targetRole = (requestObj as any).role || 'user';
+  if (!targetRole || targetRole === 'user') {
+    const rt = requestType.toLowerCase();
+    if (rt.includes('super admin')) targetRole = 'superAdmin';
+    else if (rt.includes('admin')) targetRole = 'admin';
+    else if (rt.includes('operator')) targetRole = 'operator';
+    else if (rt.includes('seller') || rt.includes('coin')) targetRole = 'coinSeller';
+    else if (rt.includes('support') || rt.includes('customer service') || rt.includes('cs request')) targetRole = 'customerSupport';
+    else if (rt.includes('agency')) targetRole = 'agency';
+    else if (rt.includes('host')) targetRole = 'host';
+  }
 
+  // Generate both code formats
+  // Generate Global Unique Identities
   const specialCode = await generateSpecialCode(targetRole, data.name || 'User');
+  const roleCode = await generateFormattedRoleCode(targetRole); // SA000001 format
+  const employeeCode = await generateEmployeeCode(targetRole); // EMP-SA-000001 format
+  const meethiId = data.meethiChatId || data.meethiId || await generateMeethiId(); // MC100001 format
   const referralCode = `${targetRole.substring(0, 3).toUpperCase()}${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+
+  // Role-specific login URL auto assignment
+  const loginUrlMap: Record<string, string> = {
+    owner: 'owner.meethichat.live',
+    superAdmin: 'superadmin.meethichat.live',
+    admin: 'admin.meethichat.live',
+    agency: 'agency.meethichat.live',
+    operator: 'operator.meethichat.live',
+    coinSeller: 'seller.meethichat.live',
+    customerSupport: 'support.meethichat.live',
+    host: 'No Web Login (Mobile App Only)',
+  };
+  const loginUrl = loginUrlMap[targetRole] || 'admin.meethichat.live';
 
   // Automatically construct parenting tree
   let parentId: any = undefined;
@@ -719,25 +1040,28 @@ const finalizeUserApproval = async (requestObj: IRequest, finalApprover?: any) =
 
   // Resolve hierarchy based on referral/parent links
   let referrerUser: any = null;
-  if (data.referralCode) {
-    // Host automatically joins correct agency via referral code
-    referrerUser = await User.findOne({ referralCode: data.referralCode });
-  } else if (finalApprover) {
-    referrerUser = await User.findById(finalApprover.id);
+  const referralCodeToSearch = data.referralCode || data.parentOwner || data.parentOperator || data.invitedBy;
+  if (referralCodeToSearch) {
+    referrerUser = await User.findOne({
+      $or: [
+        { referralCode: referralCodeToSearch },
+        { specialCode: referralCodeToSearch },
+        { employeeCode: referralCodeToSearch },
+      ]
+    });
+  }
+  if (!referrerUser && finalApprover) {
+    referrerUser = await User.findById(finalApprover.id).catch(() => null);
   }
 
   if (referrerUser) {
     parentId = referrerUser._id;
     parentRole = referrerUser.role;
-
-    // Inherit ancestors
     ownerId = referrerUser.ownerId || (referrerUser.role === 'owner' ? referrerUser._id : undefined);
     operatorId = referrerUser.operatorId || (referrerUser.role === 'operator' ? referrerUser._id : undefined);
     superAdminId = referrerUser.superAdminId || (referrerUser.role === 'superAdmin' ? referrerUser._id : undefined);
     adminId = referrerUser.adminId || (referrerUser.role === 'admin' ? referrerUser._id : undefined);
     agencyId = referrerUser.agencyId || (referrerUser.role === 'agency' ? referrerUser._id : undefined);
-
-    // Save corresponding parent role IDs
     if (referrerUser.role === 'owner') ownerId = referrerUser._id;
     if (referrerUser.role === 'operator') operatorId = referrerUser._id;
     if (referrerUser.role === 'superAdmin') superAdminId = referrerUser._id;
@@ -745,19 +1069,28 @@ const finalizeUserApproval = async (requestObj: IRequest, finalApprover?: any) =
     if (referrerUser.role === 'agency') agencyId = referrerUser._id;
   }
 
+  // Resolve field names across different form schemas
+  const userEmail = (data.email || data.emailId || data.officialEmail || '').toLowerCase();
+  const userName = data.name || data.fullName || data.ownerName || data.agencyName || 'Unknown';
+  const userPhone = data.phoneNumber || data.phone || data.mobileNo || data.mobile || '';
+
   const newUser = await User.create({
     userId: newUserId,
-    name: data.name,
-    email: data.email?.toLowerCase(),
-    phoneNumber: data.phoneNumber,
+    name: userName,
+    email: userEmail,
+    phoneNumber: userPhone,
     password: hashedPassword,
     role: targetRole,
     gender: data.gender || 'other',
     emailVerified: true,
     isActive: true,
-    employeeCode: specialCode, // Compatibility
-    specialCode,
+    employeeCode,             // EMP-SA-000001 format
+    specialCode: roleCode,    // SA000001 format
+    meethiId,                 // MC100001 format
     referralCode,
+    loginUrl,
+    mustChangePassword: true, // Force password change on first login
+    emsRequestId: (requestObj as any)._id,
     parentId,
     parentRole,
     referredBy: parentId,
@@ -775,25 +1108,51 @@ const finalizeUserApproval = async (requestObj: IRequest, finalApprover?: any) =
     },
   });
 
-  // Assign Default Permission sets
+  // Assign default permission sets based on role template or fallback map
   let defaultTemplate = await Permission.findOne({ targetType: 'role', targetId: targetRole });
-  if (defaultTemplate) {
-    await Permission.create({
-      targetType: 'user',
-      targetId: (newUser as any)._id.toString(),
-      menus: defaultTemplate.menus,
-      pages: defaultTemplate.pages,
-      modules: defaultTemplate.modules,
-      actions: defaultTemplate.actions,
-      fields: defaultTemplate.fields,
-      buttons: defaultTemplate.buttons,
-      columns: defaultTemplate.columns,
-      dashboardWidgets: defaultTemplate.dashboardWidgets,
-    });
-  }
+  const fallback = defaultRolePermissions[targetRole] || defaultRolePermissions['admin'];
+  
+  await Permission.create({
+    targetType: 'user',
+    targetId: (newUser as any)._id.toString(),
+    menus: defaultTemplate?.menus || fallback.menus,
+    pages: defaultTemplate?.pages || fallback.pages,
+    modules: defaultTemplate?.modules || fallback.modules,
+    actions: defaultTemplate?.actions || fallback.actions,
+    fields: defaultTemplate?.fields || {},
+    buttons: defaultTemplate?.buttons || fallback.buttons,
+    columns: defaultTemplate?.columns || fallback.columns,
+    dashboardWidgets: defaultTemplate?.dashboardWidgets || fallback.dashboardWidgets,
+  });
 
+  // Update request with generated user data
   requestObj.userId = newUser.userId;
+  (requestObj as any).roleCode = roleCode;
+  (requestObj as any).generatedUserId = newUser.userId;
+  requestObj.timeline.push({
+    action: 'Account Created',
+    actor: 'System',
+    actorRole: 'system',
+    date: new Date(),
+    remarks: `User account created with role ${targetRole}. Email: ${userEmail}. Role Code: ${roleCode}`,
+  });
   await requestObj.save();
+
+  // Audit log for account creation
+  await logActivity(
+    finalApprover?.id?.toString() || 'system',
+    finalApprover?.role || 'system',
+    'Account Created',
+    (newUser as any)._id.toString(),
+    `New ${targetRole} account created for ${userName} (${userEmail}) with role code ${roleCode}`
+  );
+
+  return {
+    email: userEmail,
+    password: plainPassword,
+    specialCode,
+    roleCode,
+  };
 };
 
 // ============ System Audit Logs ============

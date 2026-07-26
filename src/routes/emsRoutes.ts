@@ -11,6 +11,8 @@ import {
   updateWorkflow,
   createRequest,
   listRequests,
+  getRequestById,
+  updateRequestStatus,
   updateRequestPassword,
   approveRequest,
   rejectRequest,
@@ -61,10 +63,15 @@ router.post('/workflows', checkPermission('menus', 'Settings'), updateWorkflow);
 
 // ============ Request Center ============
 router.post('/requests', createRequest);
-router.get('/requests', checkPermission('menus', 'Verification'), listRequests);
-router.patch('/requests/:id/password', checkPermission('menus', 'Verification'), updateRequestPassword);
-router.post('/requests/:id/approve', checkPermission('menus', 'Verification'), approveRequest);
-router.post('/requests/:id/reject', checkPermission('menus', 'Verification'), rejectRequest);
+router.get('/requests', listRequests);
+router.get('/requests/:id', getRequestById);
+router.patch('/requests/:id/status', updateRequestStatus);
+router.patch('/requests/:id/password', updateRequestPassword);
+router.post('/requests/:id/approve', approveRequest);
+router.post('/requests/:id/reject', rejectRequest);
+
+// ============ Audit Logs ============
+router.get('/audit-logs', checkPermission('menus', 'Settings'), getAuditLogs);
 
 // ============ Dynamic Page Registry & Enterprise IAM 4.0 Extensions ============
 router.post('/pages/register', registerPage);

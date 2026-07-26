@@ -2,23 +2,37 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export enum RequestStatus {
   PENDING = 'pending',
+  UNDER_REVIEW = 'under_review',
+  READY_FOR_INTERVIEW = 'ready_for_interview',
   APPROVED = 'approved',
   REJECTED = 'rejected',
   CANCELLED = 'cancelled',
   EXPIRED = 'expired',
 }
 
+export interface ITimelineEntry {
+  action: string;
+  actor: string;
+  actorRole: string;
+  date: Date;
+  remarks?: string;
+}
+
 export interface IRequest extends Document {
-  userId?: number; // Applicant userId if they exist (or will be generated upon approval)
-  requestType: string; // E.g., 'Agency Request', 'Admin Request', 'Super Admin Request', 'Operator Request', 'Seller Request', 'Support Request', 'Host Request', 'KYC Request', 'Withdrawal Request'
-  data: Record<string, any>; // Dynamic payloads like name, email, phone, documents, bank details, withdrawal amounts
+  userId?: number;
+  requestType: string;
+  role: string;
+  data: Record<string, any>;
   status: RequestStatus;
-  workflowSteps: string[]; // Copy of workflow steps at creation time
-  currentStepIndex: number; // Current active role index in workflowSteps
+  workflowSteps: string[];
+  currentStepIndex: number;
   appliedDate: Date;
   approvedDate?: Date;
   rejectedDate?: Date;
-  passwordBeforeApproval?: string; // Hashed or clear-text password that can be edited by owner/approver before final approval
+  passwordBeforeApproval?: string;
+  roleCode?: string;
+  generatedUserId?: number;
+  mustChangePassword: boolean;
   approvedBy?: Array<{
     userId: mongoose.Types.ObjectId;
     role: string;
@@ -31,16 +45,29 @@ export interface IRequest extends Document {
     date: Date;
     reason: string;
   };
-  createdBy: mongoose.Types.ObjectId | string; // Person who initiated (could be a referrer or applicant)
+  timeline: ITimelineEntry[];
+  createdBy: mongoose.Types.ObjectId | string;
   createdByRole?: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
+const TimelineEntrySchema = new Schema<ITimelineEntry>(
+  {
+    action: { type: String, required: true },
+    actor: { type: String, required: true },
+    actorRole: { type: String, default: 'system' },
+    date: { type: Date, default: Date.now },
+    remarks: { type: String },
+  },
+  { _id: false }
+);
+
 const requestSchema = new Schema<IRequest>(
   {
     userId: { type: Number },
     requestType: { type: String, required: true },
+    role: { type: String, default: '' },
     data: { type: Schema.Types.Mixed, default: {} },
     status: {
       type: String,
@@ -53,6 +80,9 @@ const requestSchema = new Schema<IRequest>(
     approvedDate: { type: Date },
     rejectedDate: { type: Date },
     passwordBeforeApproval: { type: String },
+    roleCode: { type: String },
+    generatedUserId: { type: Number },
+    mustChangePassword: { type: Boolean, default: true },
     approvedBy: [
       {
         userId: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -67,7 +97,8 @@ const requestSchema = new Schema<IRequest>(
       date: { type: Date },
       reason: { type: String },
     },
-    createdBy: { type: Schema.Types.Mixed }, // User ID or email or 'self'
+    timeline: { type: [TimelineEntrySchema], default: [] },
+    createdBy: { type: Schema.Types.Mixed },
     createdByRole: { type: String },
   },
   { timestamps: true }
@@ -75,5 +106,9 @@ const requestSchema = new Schema<IRequest>(
 
 requestSchema.index({ status: 1 });
 requestSchema.index({ requestType: 1 });
+requestSchema.index({ role: 1 });
+requestSchema.index({ createdAt: -1 });
+requestSchema.index({ 'data.email': 1 });
+requestSchema.index({ 'data.name': 1 });
 
 export const Request = mongoose.model<IRequest>('Request', requestSchema);
