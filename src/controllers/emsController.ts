@@ -12,6 +12,7 @@ import { RecruitmentApplication } from '../models/recruitmentApplication.model';
 import sendResponse from '../utils/reponse';
 import { generateSecureHash } from '../utils/passwordHelper';
 import { generateUniqueId } from '../utils/generator';
+import { ROLE_PERMISSION_MATRIX } from '../configs/rbacMatrix';
 
 // ============ Helper: Log activity ============
 export const logActivity = async (
@@ -157,80 +158,19 @@ const defaultRolePermissions: Record<string, {
   dashboardWidgets: string[];
   buttons: string[];
   columns: Record<string, string[]>;
-}> = {
-  owner: {
-    menus: ['Dashboard', 'Users', 'Host', 'Agency', 'Coin Seller', 'Reports', 'Notifications', 'Finance', 'Settings', 'Developer', 'Admin', 'SuperAdmin'],
-    pages: [],
-    modules: [],
-    actions: [],
-    dashboardWidgets: ["Today's Minutes", "Coins Spent Today", "Host Earnings Today", "Today's Revenue", "Total Users", "Total Hosts", "Active Hosts", "Reports Pending"],
-    buttons: ['Add', 'Edit', 'Delete', 'Suspend', 'Activate', 'Recharge', 'Export'],
+}> = Object.keys(ROLE_PERMISSION_MATRIX).reduce((acc, roleKey) => {
+  const roleDef = ROLE_PERMISSION_MATRIX[roleKey];
+  acc[roleKey] = {
+    menus: roleDef.allowedModules,
+    pages: roleDef.allowedRoutes,
+    modules: roleDef.allowedModules,
+    actions: roleDef.allowedActions,
+    dashboardWidgets: roleKey === 'owner' ? ['*'] : ["Today's Minutes", "Coins Spent Today", "Total Users", "Active Hosts"],
+    buttons: roleDef.allowedActions,
     columns: { user: ['UID', 'Name', 'Email', 'Role', 'Status', 'Joined'] }
-  },
-  operator: {
-    menus: ['Dashboard', 'Users', 'Host', 'Agency', 'Coin Seller', 'Reports', 'Notifications', 'Finance', 'Settings', 'Developer', 'Admin', 'SuperAdmin'],
-    pages: [],
-    modules: [],
-    actions: [],
-    dashboardWidgets: ["Today's Minutes", "Coins Spent Today", "Host Earnings Today", "Today's Revenue", "Total Users", "Total Hosts", "Active Hosts", "Reports Pending"],
-    buttons: ['Add', 'Edit', 'Delete', 'Suspend', 'Activate', 'Recharge', 'Export'],
-    columns: { user: ['UID', 'Name', 'Email', 'Role', 'Status', 'Joined'] }
-  },
-  superAdmin: {
-    menus: ['Dashboard', 'Users', 'Host', 'Agency', 'Coin Seller', 'Reports', 'Notifications', 'Finance', 'Settings', 'Admin', 'SuperAdmin'],
-    pages: [],
-    modules: [],
-    actions: [],
-    dashboardWidgets: ["Today's Minutes", "Coins Spent Today", "Host Earnings Today", "Today's Revenue", "Total Users", "Total Hosts", "Active Hosts", "Reports Pending"],
-    buttons: ['Add', 'Edit', 'Delete', 'Suspend', 'Activate', 'Recharge', 'Export'],
-    columns: { user: ['UID', 'Name', 'Email', 'Role', 'Status', 'Joined'] }
-  },
-  admin: {
-    menus: ['Dashboard', 'Users', 'Host', 'Agency', 'Coin Seller', 'Reports', 'Notifications', 'Finance', 'Admin'],
-    pages: [],
-    modules: [],
-    actions: [],
-    dashboardWidgets: ["Today's Minutes", "Coins Spent Today", "Host Earnings Today", "Total Users", "Total Hosts", "Active Hosts"],
-    buttons: ['Add', 'Edit', 'Suspend', 'Activate', 'Recharge', 'Export'],
-    columns: { user: ['UID', 'Name', 'Email', 'Role', 'Status', 'Joined'] }
-  },
-  agency: {
-    menus: ['Dashboard', 'Users', 'Host'],
-    pages: [],
-    modules: [],
-    actions: [],
-    dashboardWidgets: ["Total Hosts", "Active Hosts"],
-    buttons: ['Add', 'Edit', 'Export'],
-    columns: { user: ['UID', 'Name', 'Role', 'Status', 'Joined'] }
-  },
-  host: {
-    menus: ['Dashboard', 'Host'],
-    pages: [],
-    modules: [],
-    actions: [],
-    dashboardWidgets: ["Today's Minutes", "Host Earnings Today"],
-    buttons: [],
-    columns: { user: ['UID', 'Name', 'Role', 'Status'] }
-  },
-  coinSeller: {
-    menus: ['Dashboard', 'Finance'],
-    pages: [],
-    modules: [],
-    actions: [],
-    dashboardWidgets: ["Coins Spent Today"],
-    buttons: ['Recharge'],
-    columns: { user: ['UID', 'Name', 'Role', 'Status'] }
-  },
-  customerSupport: {
-    menus: ['Dashboard', 'Reports', 'Notifications'],
-    pages: [],
-    modules: [],
-    actions: [],
-    dashboardWidgets: ["Reports Pending"],
-    buttons: ['Suspend', 'Activate'],
-    columns: { user: ['UID', 'Name', 'Role', 'Status', 'Joined'] }
-  }
-};
+  };
+  return acc;
+}, {} as Record<string, any>);
 
 export const getPermissions = async (req: AuthRequest, res: Response) => {
   try {

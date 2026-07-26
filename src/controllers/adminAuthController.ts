@@ -34,7 +34,7 @@ export const adminLogin = async (
                 { employeeCode: inputIdentifier.toUpperCase() },
                 { specialCode: inputIdentifier.toUpperCase() }
             ],
-            role: { $in: ['owner', 'operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'customerSupport'] },
+            role: { $in: ['owner', 'operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'customerSupport', 'host'] },
             isDeleted: false
         }).select('+password +mustChangePassword +refreshToken');
 
@@ -95,7 +95,7 @@ export const adminLogin = async (
                 loginStatus: 'Failed_Host_Blocked',
                 failureReason: 'Host role must use mobile application'
             });
-            return next(new AppError('Hosts must use the mobile application to login.', 403));
+            return next(new AppError('This account is only allowed to login through the Mobile Application.', 403));
         }
 
         // Check if admin is blocked

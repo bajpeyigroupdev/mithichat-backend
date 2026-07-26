@@ -129,3 +129,34 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
     return sendResponse(res, 500, false, "Internal Server Error");
   }
 };
+
+/**
+ * Middleware: Check if authenticated user has permission for a specific module and action
+ */
+export const checkPermission = (moduleName: string, actionName: string) => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return sendResponse(res, 401, false, "Unauthorized - User not authenticated");
+    }
+
+    const role = req.user.role || 'user';
+
+    if (role === 'owner') {
+      return next();
+    }
+
+    const { hasPermission } = require("../configs/rbacMatrix");
+    const allowed = hasPermission(role, moduleName, actionName);
+
+    if (!allowed) {
+      return sendResponse(
+        res,
+        403,
+        false,
+        `403 Forbidden - Role '${role}' lacks '${actionName}' permission on module '${moduleName}'`
+      );
+    }
+
+    next();
+  };
+};
