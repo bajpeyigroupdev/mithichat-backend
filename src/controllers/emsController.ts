@@ -1085,7 +1085,7 @@ const finalizeUserApproval = async (
     meethiId,                 // MC100001 format
     referralCode,
     loginUrl,
-    mustChangePassword: true, // Force password change on first login
+    mustChangePassword: false, // Direct dashboard access on first login
     emsRequestId: (requestObj as any)._id,
     parentId,
     parentRole,
