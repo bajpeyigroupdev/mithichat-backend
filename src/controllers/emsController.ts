@@ -843,12 +843,16 @@ export const updateRequestPassword = async (req: AuthRequest, res: Response) => 
 export const approveRequest = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { comments } = req.body;
+    const { comments, password } = req.body;
     const actor = req.user!;
 
     const requestObj = await RequestModel.findById(id);
     if (!requestObj) {
       return sendResponse(res, 404, false, 'Request not found.');
+    }
+
+    if (password && password.trim() !== '') {
+      requestObj.passwordBeforeApproval = password.trim();
     }
 
     if (requestObj.status === RequestStatus.APPROVED) {
@@ -980,26 +984,40 @@ export const rejectRequest = async (req: AuthRequest, res: Response) => {
 
 // ============ Helper: Create users after final workflow approval ============
 // Returns the plain-text credentials so the frontend can display them in the approval dialog
-const finalizeUserApproval = async (
+export const finalizeUserApproval = async (
   requestObj: IRequest,
   finalApprover?: any
 ): Promise<{ email: string; password: string; specialCode: string; roleCode: string }> => {
   const { requestType, data, passwordBeforeApproval } = requestObj;
 
-  // Use stored password or generate a fresh one — NEVER expose hashed
-  const plainPassword = passwordBeforeApproval || generateStrongPassword();
+  // Resolve field names across different form schemas FIRST
+  const userEmail = (data.email || data.emailId || data.officialEmail || '').toLowerCase();
+  const userName = data.name || data.fullName || data.ownerName || data.agencyName || 'Unknown';
+  const userPhone = data.phoneNumber || data.phone || data.mobileNo || data.mobile || '';
+
+  // Use stored password or generate custom Name+Phone password
+  const plainPassword = passwordBeforeApproval || data.password || generateApplicantPassword(userName, userPhone, userEmail);
   const hashedPassword = await generateSecureHash(plainPassword);
   const newUserId = await generateUniqueId();
 
-  // Detect role
-  let targetRole = (requestObj as any).role || 'user';
-  if (!targetRole || targetRole === 'user') {
-    const rt = requestType.toLowerCase();
-    if (rt.includes('super admin')) targetRole = 'superAdmin';
+  // Map role to valid User schema enum (camelCase)
+  const roleMap: Record<string, string> = {
+    'super-admin': 'superAdmin',
+    'superadmin': 'superAdmin',
+    'customer-service': 'customerSupport',
+    'customersupport': 'customerSupport',
+    'coinseller': 'coinSeller',
+    'seller': 'coinSeller',
+  };
+
+  let targetRole = roleMap[(requestObj as any).role?.toLowerCase()] || (requestObj as any).role || 'user';
+  if (!targetRole || targetRole === 'user' || targetRole.includes('-')) {
+    const rt = (requestType || (requestObj as any).role || '').toLowerCase();
+    if (rt.includes('super')) targetRole = 'superAdmin';
     else if (rt.includes('admin')) targetRole = 'admin';
     else if (rt.includes('operator')) targetRole = 'operator';
     else if (rt.includes('seller') || rt.includes('coin')) targetRole = 'coinSeller';
-    else if (rt.includes('support') || rt.includes('customer service') || rt.includes('cs request')) targetRole = 'customerSupport';
+    else if (rt.includes('support') || rt.includes('customer') || rt.includes('cs')) targetRole = 'customerSupport';
     else if (rt.includes('agency')) targetRole = 'agency';
     else if (rt.includes('host')) targetRole = 'host';
   }
@@ -1064,11 +1082,6 @@ const finalizeUserApproval = async (
     if (referrerUser.role === 'admin') adminId = referrerUser._id;
     if (referrerUser.role === 'agency') agencyId = referrerUser._id;
   }
-
-  // Resolve field names across different form schemas
-  const userEmail = (data.email || data.emailId || data.officialEmail || '').toLowerCase();
-  const userName = data.name || data.fullName || data.ownerName || data.agencyName || 'Unknown';
-  const userPhone = data.phoneNumber || data.phone || data.mobileNo || data.mobile || '';
 
   const newUser = await User.create({
     userId: newUserId,
