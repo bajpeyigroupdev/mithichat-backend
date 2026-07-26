@@ -196,7 +196,7 @@ export const submitApplication = async (req: Request, res: Response) => {
                 const adharBackDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('back'));
                 const panDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('pan') || d.documentType === 'Certificate');
 
-                const generatedPassword = generateStrongPassword();
+                const generatedPassword = generateStrongPassword(applicantName, applicantPhone, applicantEmail);
 
                 await RequestModel.create({
                     requestType,

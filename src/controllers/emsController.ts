@@ -122,35 +122,31 @@ export const generateSpecialCode = async (role: string, name: string): Promise<s
   return `${prefix}-${cleanName}-${seq}`;
 };
 
+// Custom dynamic applicant password generator combining Name + Phone / Email
+export const generateApplicantPassword = (name?: string, phone?: string, email?: string): string => {
+  const cleanName = (name || 'User').replace(/[^a-zA-Z]/g, '');
+  const prefix = cleanName.length >= 3
+    ? cleanName.slice(0, 3).charAt(0).toUpperCase() + cleanName.slice(1, 3).toLowerCase()
+    : (cleanName.length > 0 ? cleanName.charAt(0).toUpperCase() + cleanName.slice(1).toLowerCase() : 'Mith');
+
+  const phoneDigits = (phone || '').replace(/\D/g, '');
+  let numPart = phoneDigits.length >= 4 ? phoneDigits.slice(-4) : '';
+
+  if (!numPart && email) {
+    const emailDigits = email.replace(/\D/g, '');
+    numPart = emailDigits.length >= 4 ? emailDigits.slice(-4) : '';
+  }
+
+  if (!numPart) {
+    numPart = '1234';
+  }
+
+  return `${prefix}@${numPart}!1`;
+};
+
 // Cryptographically strong password generator (10-12 chars, guaranteed complexity)
-export const generateStrongPassword = (): string => {
-  const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  const lower = 'abcdefghijklmnopqrstuvwxyz';
-  const digits = '0123456789';
-  const specials = '!@#$%^&*';
-  const all = upper + lower + digits + specials;
-  // Guarantee at least one of each required category
-  const required = [
-    upper.charAt(Math.floor(Math.random() * upper.length)),
-    upper.charAt(Math.floor(Math.random() * upper.length)),
-    lower.charAt(Math.floor(Math.random() * lower.length)),
-    lower.charAt(Math.floor(Math.random() * lower.length)),
-    digits.charAt(Math.floor(Math.random() * digits.length)),
-    digits.charAt(Math.floor(Math.random() * digits.length)),
-    specials.charAt(Math.floor(Math.random() * specials.length)),
-    specials.charAt(Math.floor(Math.random() * specials.length)),
-  ];
-  // Fill remaining slots
-  const remaining = 12 - required.length;
-  for (let i = 0; i < remaining; i++) {
-    required.push(all.charAt(Math.floor(Math.random() * all.length)));
-  }
-  // Shuffle array
-  for (let i = required.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [required[i], required[j]] = [required[j], required[i]];
-  }
-  return required.join('');
+export const generateStrongPassword = (name?: string, phone?: string, email?: string): string => {
+  return generateApplicantPassword(name, phone, email);
 };
 
 const defaultRolePermissions: Record<string, {
