@@ -94,7 +94,24 @@ const userSchema = new Schema<UserInterface>(
     rejectedReferrals: { type: Number, default: 0 },
     monthlyReferrals: { type: Number, default: 0 },
     todayReferrals: { type: Number, default: 0 },
-    lastReferralAt: { type: Date }
+    lastReferralAt: { type: Date },
+    parentUserId: { type: String, default: '' },
+    rootReferralId: { type: String, default: '' },
+    hierarchyPath: { type: String, default: '', index: true },
+    referralOwnerId: { type: String, default: '', index: true },
+    referralOwnerRole: { type: String, default: '' },
+    rootOwnerId: { type: Schema.Types.ObjectId, ref: 'User' },
+    rootOperatorId: { type: Schema.Types.ObjectId, ref: 'User' },
+    networkId: { type: String, default: '', index: true },
+    treeDepth: { type: Number, default: 0 },
+    createdFromReferral: { type: Boolean, default: false },
+    isRootNode: { type: Boolean, default: false },
+    childrenCount: { type: Number, default: 0 },
+    activeChildren: { type: Number, default: 0 },
+    pendingChildren: { type: Number, default: 0 },
+    approvedChildren: { type: Number, default: 0 },
+    totalNetworkUsers: { type: Number, default: 0 },
+    lastHierarchyUpdate: { type: Date }
   },
   {
     timestamps: true,
@@ -110,6 +127,11 @@ userSchema.index({ isDeleted: 1 });
 userSchema.index({ referralCode: 1 }, { sparse: true });
 userSchema.index({ referrerId: 1 }, { sparse: true });
 userSchema.index({ referrerCode: 1 }, { sparse: true });
+userSchema.index({ hierarchyPath: 1 }, { sparse: true });
+userSchema.index({ networkId: 1 }, { sparse: true });
+userSchema.index({ superAdminId: 1 }, { sparse: true });
+userSchema.index({ adminId: 1 }, { sparse: true });
+userSchema.index({ agencyId: 1 }, { sparse: true });
 userSchema.index({ createdAt: -1 });
 
 export const User = mongoose.model<UserInterface>("User", userSchema);
