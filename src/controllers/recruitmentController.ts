@@ -116,14 +116,23 @@ export const submitApplication = async (req: Request, res: Response) => {
         }
 
         let referrerData: any = undefined;
+        const escapedCode = codeToValidate.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+        const codeRegex = new RegExp(`^${escapedCode}$`, 'i');
+
         const senior = await User.findOne({
-            $or: [{ employeeCode: codeToValidate }, { referralCode: codeToValidate }, { specialCode: codeToValidate }, { meethiId: codeToValidate }],
+            $or: [
+                { employeeCode: codeRegex },
+                { referralCode: codeRegex },
+                { specialCode: codeRegex },
+                { meethiId: codeRegex },
+                { userName: codeRegex }
+            ],
             isDeleted: { $ne: true }
         }).select('_id name role employeeCode referralCode specialCode');
 
         if (senior) {
             referrerData = {
-                code: senior.employeeCode || senior.referralCode || senior.specialCode || codeToValidate,
+                code: senior.referralCode || senior.employeeCode || senior.specialCode || codeToValidate,
                 referrerId: senior._id,
                 referrerRole: senior.role,
                 referrerName: senior.name
@@ -131,7 +140,7 @@ export const submitApplication = async (req: Request, res: Response) => {
         } else {
             referrerData = {
                 code: codeToValidate,
-                referrerName: `Referral (${codeToValidate})`
+                referrerName: `Referral Code: ${codeToValidate}`
             };
         }
 
@@ -202,6 +211,10 @@ export const submitApplication = async (req: Request, res: Response) => {
                     requestType,
                     role,
                     passwordBeforeApproval: generatedPassword,
+                    referralCode: referrerData?.code || referralCode || '',
+                    referralUserId: referrerData?.referrerId ? referrerData.referrerId.toString() : '',
+                    referralOwner: referrerData?.referrerName || '',
+                    referralRole: referrerData?.referrerRole || '',
                     data: {
                         name: applicantName,
                         email: applicantEmail.toLowerCase(),
@@ -213,8 +226,8 @@ export const submitApplication = async (req: Request, res: Response) => {
                         city: city || '',
                         address: address || '',
                         experience: experienceYears || '',
-                        referralCode: referralCode || '',
-                        invitedBy: referrerData?.referrerName || referrerData?.code || 'Direct Recruitment Portal',
+                        referralCode: referrerData?.code || referralCode || '',
+                        invitedBy: referrerData?.referrerName || (referralCode ? `Referral Code: ${referralCode}` : 'Direct Recruitment Portal'),
                         parentOperator: referrerData?.code || '',
                         parentOwner: referrerData?.code || '',
                         mithiChatId: applicationId,
@@ -259,6 +272,46 @@ export const getAdminApplications = async (req: Request, res: Response) => {
 
         if (status && status !== 'all') {
             query.status = status;
+        }
+
+        const currentUser = (req as any).user;
+        if (currentUser && !['owner', 'operator'].includes(currentUser.role)) {
+            const currentUserId = currentUser._id || currentUser.id;
+            const currentUserIdStr = currentUserId ? currentUserId.toString() : null;
+
+            const rawCodes = [
+                currentUser.referralCode,
+                currentUser.employeeCode,
+                currentUser.specialCode,
+                currentUser.meethiId
+            ];
+            const validCodes = rawCodes.map(c => (c || '').toString().trim()).filter(c => c.length > 0);
+
+            const userScopeOr: any[] = [];
+
+            if (currentUserIdStr) {
+                userScopeOr.push({ 'referrer.referrerId': currentUserId });
+                userScopeOr.push({ 'referrer.referrerId': currentUserIdStr });
+            }
+
+            if (validCodes.length > 0) {
+                const codeRegexes = validCodes.map(c => new RegExp(`^${c.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, 'i'));
+                userScopeOr.push({ 'referrer.code': { $in: codeRegexes } });
+                userScopeOr.push({ 'roleData.referralCode': { $in: codeRegexes } });
+            }
+
+            const userName = (currentUser.name || '').trim();
+            if (userName && userName.length > 2 && !['public', 'system', 'external referral', 'direct recruitment portal'].includes(userName.toLowerCase())) {
+                const safeNameRegex = new RegExp(`^${userName.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, 'i');
+                userScopeOr.push({ 'referrer.referrerName': safeNameRegex });
+            }
+
+            if (userScopeOr.length > 0) {
+                query.$or = userScopeOr;
+                query['referrer.referrerId'] = { $exists: true, $ne: null };
+            } else {
+                query._id = null;
+            }
         }
 
         if (search) {

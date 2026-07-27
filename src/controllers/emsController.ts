@@ -605,6 +605,10 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
           await RequestModel.create({
             requestType: reqType,
             role: app.role,
+            referralCode: app.referrer?.code || '',
+            referralUserId: app.referrer?.referrerId ? app.referrer.referrerId.toString() : '',
+            referralOwner: app.referrer?.referrerName || '',
+            referralRole: app.referrer?.referrerRole || '',
             data: {
               name: app.applicant?.name || (app.roleData as any)?.name || (app.roleData as any)?.fullName || 'Applicant',
               email: email || '',
@@ -615,15 +619,18 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
               city: app.applicant?.city || (app.roleData as any)?.city || '',
               address: app.applicant?.address || (app.roleData as any)?.address || '',
               experience: app.applicant?.experienceYears || (app.roleData as any)?.experienceYears || '',
+              referralCode: app.referrer?.code || (app.roleData as any)?.referralCode || '',
               invitedBy: app.referrer?.referrerName || app.referrer?.code || 'Direct Recruitment Portal',
+              parentOperator: app.referrer?.code || '',
+              parentOwner: app.referrer?.code || '',
               meethiChatId: app.applicationId,
               mithiChatId: app.applicationId,
               username: (app.roleData as any)?.username || `@${(app.applicant?.name || 'user').toLowerCase().replace(/\s+/g, '')}`,
               ...app.roleData
             },
             status: app.status === 'approved' ? RequestStatus.APPROVED : RequestStatus.PENDING,
-            createdBy: 'recruitment_sync',
-            createdByRole: 'public'
+            createdBy: app.referrer?.referrerId || 'recruitment_sync',
+            createdByRole: app.referrer?.referrerRole || 'public'
           });
         }
       }
@@ -632,6 +639,52 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
     }
 
     const andConditions: any[] = [];
+
+    // Strict referral/creator scoping: non-owner and non-operator users can ONLY see requests from their referral link/tree. Direct/Public recruitment applications are visible ONLY to owner and operator.
+    const currentUser = req.user;
+    if (currentUser && !['owner', 'operator'].includes(currentUser.role || '')) {
+      const currentUserId = (currentUser as any)._id || (currentUser as any).id;
+      const currentUserIdStr = currentUserId ? currentUserId.toString() : null;
+
+      const rawCodes = [
+        (currentUser as any).referralCode,
+        (currentUser as any).employeeCode,
+        (currentUser as any).specialCode,
+        (currentUser as any).meethiId
+      ];
+      const validCodes = rawCodes.map(c => (c || '').toString().trim()).filter(c => c.length > 0);
+
+      const referralScopeOr: any[] = [];
+
+      if (currentUserIdStr) {
+        referralScopeOr.push({ createdBy: currentUserId });
+        referralScopeOr.push({ createdBy: currentUserIdStr });
+        referralScopeOr.push({ referralUserId: currentUserIdStr });
+      }
+
+      if (validCodes.length > 0) {
+        const codeRegexes = validCodes.map(c => new RegExp(`^${c.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, 'i'));
+        referralScopeOr.push({ referralCode: { $in: codeRegexes } });
+        referralScopeOr.push({ 'data.referralCode': { $in: codeRegexes } });
+        referralScopeOr.push({ 'data.parentSuperAdminCode': { $in: codeRegexes } });
+        referralScopeOr.push({ 'data.parentAdminCode': { $in: codeRegexes } });
+      }
+
+      const userName = (currentUser.name || '').trim();
+      if (userName && userName.length > 2 && !['public', 'system', 'external referral', 'direct recruitment portal'].includes(userName.toLowerCase())) {
+        const safeNameRegex = new RegExp(`^${userName.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, 'i');
+        referralScopeOr.push({ referralOwner: safeNameRegex });
+      }
+
+      if (referralScopeOr.length > 0) {
+        andConditions.push({ $or: referralScopeOr });
+        // Exclude all un-referred public recruitment direct applications for superAdmin/admin/agency/customerSupport/seller
+        andConditions.push({ createdBy: { $ne: 'public_recruitment' } });
+        andConditions.push({ createdByRole: { $ne: 'public' } });
+      } else {
+        andConditions.push({ _id: null });
+      }
+    }
 
     if (status) andConditions.push({ status });
 
