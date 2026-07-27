@@ -802,12 +802,32 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, 'Rejected requests cannot be approved.');
     }
 
-    // Determine target workflow role
-    const targetRole = requestObj.workflowSteps[requestObj.currentStepIndex];
+    // Enterprise Request Approval Ownership Matrix
+    const approvalOwnershipMatrix: Record<string, { review: string; approve: string }> = {
+      'super-admin': { review: 'operator', approve: 'owner' },
+      'superAdmin': { review: 'operator', approve: 'owner' },
+      'admin': { review: 'superAdmin', approve: 'operator' },
+      'agency': { review: 'superAdmin', approve: 'operator' },
+      'host': { review: 'agency', approve: 'operator' },
+      'coinSeller': { review: 'operator', approve: 'owner' },
+      'seller': { review: 'operator', approve: 'owner' },
+      'customerSupport': { review: 'superAdmin', approve: 'operator' },
+    };
 
-    // If workflow steps exist, verify current actor role matches the targetRole
-    if (targetRole && actor.role !== 'owner' && actor.role !== targetRole) {
-      return sendResponse(res, 403, false, `Verification failure: Current approval stage requires '${targetRole}' role.`);
+    const targetReqRole = (requestObj.role || requestObj.requestType || '').toLowerCase();
+    const matchingRoleKey = Object.keys(approvalOwnershipMatrix).find(k => targetReqRole.includes(k.toLowerCase())) || 'admin';
+    const ownership = approvalOwnershipMatrix[matchingRoleKey];
+
+    if (actor.role !== 'owner') {
+      const requiredRole = requestObj.currentStepIndex === 0 ? ownership.review : ownership.approve;
+      if (actor.role !== requiredRole) {
+        return sendResponse(
+          res,
+          403,
+          false,
+          `Verification failure: ${requestObj.currentStepIndex === 0 ? 'Review' : 'Final Approval'} for '${matchingRoleKey}' requests requires '${requiredRole}' role.`
+        );
+      }
     }
 
     // Record approval stamp
