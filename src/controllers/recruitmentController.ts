@@ -64,7 +64,8 @@ export const verifyReferralCode = async (req: Request, res: Response) => {
                 { employeeCode: { $regex: new RegExp(`^${code}$`, 'i') } },
                 { referralCode: { $regex: new RegExp(`^${code}$`, 'i') } },
                 { specialCode: { $regex: new RegExp(`^${code}$`, 'i') } },
-                { meethiId: { $regex: new RegExp(`^${code}$`, 'i') } }
+                { meethiId: { $regex: new RegExp(`^${code}$`, 'i') } },
+                { userName: { $regex: new RegExp(`^${code}$`, 'i') } }
             ],
             isDeleted: { $ne: true }
         }).select('_id name role employeeCode referralCode specialCode');
