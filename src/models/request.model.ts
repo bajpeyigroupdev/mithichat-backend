@@ -46,6 +46,12 @@ export interface IRequest extends Document {
     reason: string;
   };
   timeline: ITimelineEntry[];
+  referralCode?: string;
+  referralOwner?: string;
+  referralRole?: string;
+  referralUserId?: string;
+  referralLinkUsed?: string;
+  referralDate?: Date;
   createdBy: mongoose.Types.ObjectId | string;
   createdByRole?: string;
   createdAt: Date;
@@ -83,6 +89,12 @@ const requestSchema = new Schema<IRequest>(
     roleCode: { type: String },
     generatedUserId: { type: Number },
     mustChangePassword: { type: Boolean, default: true },
+    referralCode: { type: String, uppercase: true, trim: true },
+    referralOwner: { type: String, default: '' },
+    referralRole: { type: String, default: '' },
+    referralUserId: { type: String, default: '' },
+    referralLinkUsed: { type: String, default: '' },
+    referralDate: { type: Date },
     approvedBy: [
       {
         userId: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -107,6 +119,8 @@ const requestSchema = new Schema<IRequest>(
 requestSchema.index({ status: 1 });
 requestSchema.index({ requestType: 1 });
 requestSchema.index({ role: 1 });
+requestSchema.index({ referralCode: 1 }, { sparse: true });
+requestSchema.index({ referralUserId: 1 }, { sparse: true });
 requestSchema.index({ createdAt: -1 });
 requestSchema.index({ 'data.email': 1 });
 requestSchema.index({ 'data.name': 1 });

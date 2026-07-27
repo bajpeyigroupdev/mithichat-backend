@@ -144,6 +144,8 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/upi", upiRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/teamleader", publicRoutes);
+import referralRoutes from "./routes/referral.routes";
+app.use("/api", referralRoutes);
 import { globalSearch } from "./controllers/searchController";
 import { getSystemHealth } from "./controllers/monitoringController";
 import { getActivityFeed } from "./controllers/activityFeedController";

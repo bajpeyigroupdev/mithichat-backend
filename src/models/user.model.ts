@@ -69,8 +69,6 @@ const userSchema = new Schema<UserInterface>(
     operatorId: { type: Schema.Types.ObjectId, ref: "User" },
     superAdminId: { type: Schema.Types.ObjectId, ref: "User" },
     adminId: { type: Schema.Types.ObjectId, ref: "User" },
-    agencyId: { type: Schema.Types.ObjectId, ref: "User" },
-    referralCode: { type: String, unique: true, sparse: true },
     specialCode: { type: String, unique: true, sparse: true },
     orgId: { type: Schema.Types.ObjectId, ref: "Organization" },
     branchId: { type: Schema.Types.ObjectId, ref: "BranchRegion" },
@@ -83,7 +81,20 @@ const userSchema = new Schema<UserInterface>(
     status: { type: String, enum: ['Active', 'Inactive', 'Blocked', 'Deleted'], default: 'Active' },
     deletedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     deletedAt: { type: Date },
-    deleteReason: { type: String, default: '' }
+    deleteReason: { type: String, default: '' },
+    referralCode: { type: String, uppercase: true, trim: true, sparse: true },
+    referralLink: { type: String, default: '' },
+    referrerId: { type: String, default: '' },
+    referrerRole: { type: String, default: '' },
+    referrerCode: { type: String, uppercase: true, trim: true, default: '' },
+    totalReferrals: { type: Number, default: 0 },
+    activeReferrals: { type: Number, default: 0 },
+    pendingReferrals: { type: Number, default: 0 },
+    approvedReferrals: { type: Number, default: 0 },
+    rejectedReferrals: { type: Number, default: 0 },
+    monthlyReferrals: { type: Number, default: 0 },
+    todayReferrals: { type: Number, default: 0 },
+    lastReferralAt: { type: Date }
   },
   {
     timestamps: true,
@@ -92,15 +103,13 @@ const userSchema = new Schema<UserInterface>(
   }
 );
 
-// Indexes for Global Search Engine & RBAC Filters
+// Indexes for Global Search Engine, RBAC Filters & Referral Network Engine
 userSchema.index({ role: 1 });
 userSchema.index({ status: 1 });
 userSchema.index({ isDeleted: 1 });
-userSchema.index({ meethiId: 1 }, { sparse: true });
-userSchema.index({ employeeCode: 1 }, { sparse: true });
-userSchema.index({ specialCode: 1 }, { sparse: true });
-userSchema.index({ email: 1 });
-userSchema.index({ phoneNumber: 1 });
+userSchema.index({ referralCode: 1 }, { sparse: true });
+userSchema.index({ referrerId: 1 }, { sparse: true });
+userSchema.index({ referrerCode: 1 }, { sparse: true });
 userSchema.index({ createdAt: -1 });
 
 export const User = mongoose.model<UserInterface>("User", userSchema);

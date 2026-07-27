@@ -988,7 +988,6 @@ export const finalizeUserApproval = async (
   const roleCode = await generateFormattedRoleCode(targetRole); // SA000001 format
   const employeeCode = await generateEmployeeCode(targetRole); // EMP-SA-000001 format
   const meethiId = data.meethiChatId || data.meethiId || await generateMeethiId(); // MC100001 format
-  const referralCode = `${targetRole.substring(0, 3).toUpperCase()}${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
   // Role-specific login URL auto assignment
   const loginUrlMap: Record<string, string> = {
@@ -1014,7 +1013,7 @@ export const finalizeUserApproval = async (
 
   // Resolve hierarchy based on referral/parent links
   let referrerUser: any = null;
-  const referralCodeToSearch = data.referralCode || data.parentOwner || data.parentOperator || data.invitedBy;
+  const referralCodeToSearch = data.referralCode || requestObj.referralCode || data.parentOwner || data.parentOperator || data.invitedBy;
   if (referralCodeToSearch) {
     referrerUser = await User.findOne({
       $or: [
@@ -1043,6 +1042,31 @@ export const finalizeUserApproval = async (
     if (referrerUser.role === 'agency') agencyId = referrerUser._id;
   }
 
+  // Generate immutable Enterprise Referral Code & Link for supported roles
+  const rolePrefixMap: Record<string, { prefix: string; path: string }> = {
+    owner: { prefix: 'OWN', path: '' },
+    operator: { prefix: 'OPR', path: '/operator' },
+    superAdmin: { prefix: 'SA', path: '/super-admin' },
+    'super-admin': { prefix: 'SA', path: '/super-admin' },
+    admin: { prefix: 'ADM', path: '/admin' },
+    agency: { prefix: 'AGY', path: '/agency' },
+  };
+
+  let referralCode = '';
+  let referralLink = '';
+
+  if (rolePrefixMap[targetRole]) {
+    const roleConfig = rolePrefixMap[targetRole];
+    let isUnique = false;
+    while (!isUnique) {
+      const randomChars = Math.random().toString(36).substring(2, 8).toUpperCase();
+      referralCode = `${roleConfig.prefix}-${randomChars}`;
+      const existing = await User.findOne({ referralCode });
+      if (!existing) isUnique = true;
+    }
+    referralLink = `https://apply.mithichat.live${roleConfig.path}?ref=${referralCode}`;
+  }
+
   const newUser = await User.create({
     userId: newUserId,
     name: userName,
@@ -1056,13 +1080,17 @@ export const finalizeUserApproval = async (
     employeeCode,             // EMP-SA-000001 format
     specialCode: roleCode,    // SA000001 format
     meethiId,                 // MC100001 format
-    referralCode,
+    referralCode: referralCode || undefined,
+    referralLink,
+    referrerId: referrerUser ? referrerUser._id.toString() : '',
+    referrerRole: referrerUser ? referrerUser.role : '',
+    referrerCode: referrerUser ? (referrerUser.referralCode || referrerUser.specialCode || '') : '',
     loginUrl,
     mustChangePassword: false, // Direct dashboard access on first login
     emsRequestId: (requestObj as any)._id,
     parentId,
     parentRole,
-    referredBy: parentId,
+    referredBy: parentId ? parentId.toString() : '',
     ownerId,
     operatorId,
     superAdminId,
@@ -1076,6 +1104,14 @@ export const finalizeUserApproval = async (
       loggedInDeviceIds: [],
     },
   });
+
+  // Update referrer statistics counters
+  if (referrerUser) {
+    await User.findByIdAndUpdate(referrerUser._id, {
+      $inc: { approvedReferrals: 1, totalReferrals: 1, activeReferrals: 1, todayReferrals: 1, monthlyReferrals: 1 },
+      $set: { lastReferralAt: new Date() }
+    }).catch(() => null);
+  }
 
   // Assign default permission sets based on role template or fallback map
   let defaultTemplate = await Permission.findOne({ targetType: 'role', targetId: targetRole });
