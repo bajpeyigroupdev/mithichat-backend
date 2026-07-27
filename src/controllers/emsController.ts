@@ -1542,7 +1542,7 @@ export const listRegisteredPages = async (req: AuthRequest, res: Response) => {
       PAGE_PERMISSION_REGISTRY.map((page) => ({
         updateOne: {
           filter: { pageId: page.pageId },
-          update: { $setOnInsert: page },
+          update: { $set: page },
           upsert: true,
         },
       })),

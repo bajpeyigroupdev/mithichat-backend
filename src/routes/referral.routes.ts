@@ -18,18 +18,16 @@ const router = Router();
 router.post('/public/referral/validate', validateReferralCode);
 
 // Authenticated routes
-router.use(verifyToken);
-
-router.get('/referrals/dashboard', getReferralDashboard);
-router.get('/referrals/stats', getReferralDashboard);
-router.get('/referrals/analytics', getReferralAnalytics);
-router.get('/referrals/leaderboard', getReferralLeaderboard);
-router.get('/referrals/funnel', getReferralFunnel);
-router.get('/referrals/history', getReferralHistory);
-router.get('/referrals/tree', getReferralTree);
+router.get('/referrals/dashboard', verifyToken, getReferralDashboard);
+router.get('/referrals/stats', verifyToken, getReferralDashboard);
+router.get('/referrals/analytics', verifyToken, getReferralAnalytics);
+router.get('/referrals/leaderboard', verifyToken, getReferralLeaderboard);
+router.get('/referrals/funnel', verifyToken, getReferralFunnel);
+router.get('/referrals/history', verifyToken, getReferralHistory);
+router.get('/referrals/tree', verifyToken, getReferralTree);
 
 // Settings (Owner Only)
-router.get('/referrals/settings', getReferralSettings);
-router.put('/referrals/settings', updateReferralSettings);
+router.get('/referrals/settings', verifyToken, getReferralSettings);
+router.put('/referrals/settings', verifyToken, updateReferralSettings);
 
 export default router;
