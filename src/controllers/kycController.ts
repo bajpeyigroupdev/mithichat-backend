@@ -6,6 +6,9 @@ import { Kyc, KycStatus } from "../models/kyc.model";
 import { User } from "../models/user.model";
 import { Logger } from "../utils/logger";
 import { deleteImageFromCloudinary } from "../utils/cloudinary";
+import { HierarchyScopeService } from "../utils/hierarchyScope";
+
+const KYC_ADMIN_ROLES = new Set(["owner", "operator", "superAdmin", "admin", "agency"]);
 
 // Create or Update KYC
 export const submitKyc = async (req: AuthRequest, res: Response) => {
@@ -79,8 +82,29 @@ export const getMyKyc = async (req: AuthRequest, res: Response) => {
 // Admin: Get Pending KYC
 export const getPendingKyc = async (req: AuthRequest, res: Response) => {
     try {
-        const list = await Kyc.find({ status: KycStatus.PENDING }).sort({ createdAt: -1 });
-        return sendResponse(res, 200, true, "Pending KYC list", list);
+        const { role, id } = req.user || {};
+        if (!role || !id || !KYC_ADMIN_ROLES.has(role)) {
+            return sendResponse(res, 403, false, "You are not allowed to view KYC requests");
+        }
+
+        const filter: any = { status: KycStatus.PENDING };
+        if (!["owner", "operator"].includes(role)) {
+            const userScope = HierarchyScopeService.buildUserScope({ id: String(id), role });
+            const visibleUsers = await User.find(userScope).select("userId").lean();
+            filter.userId = { $in: visibleUsers.map((user) => user.userId) };
+        }
+
+        const list = await Kyc.find(filter).sort({ createdAt: -1 });
+        const users = await User.find({
+            userId: { $in: list.map((item) => item.userId) },
+        }).select("userId name userName image meethiId role").lean();
+        const userById = new Map(users.map((user) => [user.userId, user]));
+        const enriched = list.map((item) => ({
+            ...item.toObject(),
+            user: userById.get(item.userId) || null,
+        }));
+
+        return sendResponse(res, 200, true, "Pending KYC list", enriched);
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
     }
@@ -89,6 +113,10 @@ export const getPendingKyc = async (req: AuthRequest, res: Response) => {
 // Admin: Approve/Reject KYC
 export const updateKycStatus = async (req: AuthRequest, res: Response) => {
     try {
+        const { role, id } = req.user || {};
+        if (!role || !id || !KYC_ADMIN_ROLES.has(role)) {
+            return sendResponse(res, 403, false, "You are not allowed to review KYC");
+        }
         const { kycId, status, reason } = req.body;
         if (![KycStatus.APPROVED, KycStatus.REJECTED].includes(status)) {
             return sendResponse(res, 400, false, "Invalid status");
@@ -99,9 +127,21 @@ export const updateKycStatus = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, "KYC record not found");
         }
 
+        if (!["owner", "operator"].includes(role)) {
+            const userScope = HierarchyScopeService.buildUserScope({ id: String(id), role });
+            const visibleUser = await User.exists({
+                $and: [userScope, { userId: kyc.userId }],
+            });
+            if (!visibleUser) {
+                return sendResponse(res, 403, false, "This KYC is outside your team");
+            }
+        }
+
         kyc.status = status;
         if (status === KycStatus.REJECTED) {
             kyc.rejectionReason = reason || "Documents invalid";
+        } else {
+            kyc.rejectionReason = undefined;
         }
         await kyc.save();
 

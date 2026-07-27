@@ -5,6 +5,7 @@ import sendResponse from '../utils/reponse';
 import { generateSecureHash } from '../utils/passwordHelper';
 import { generateStrongPassword, logActivity } from './emsController';
 import mongoose from 'mongoose';
+import { HierarchyScopeService } from '../utils/hierarchyScope';
 
 // Helper to build a safe query for _id or userId
 const getSafeUserQuery = (id: string, role?: string) => {
@@ -32,12 +33,18 @@ export const listOperators = async (req: AuthRequest, res: Response) => {
     const { search, status, page = 1, limit = 20 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
-    const matchStage: any = { role: 'operator', isDeleted: false };
+    const actor = req.user!;
+    const matchStage: any = {
+      $and: [
+        HierarchyScopeService.buildUserScope({ id: String(actor.id), role: actor.role }),
+        { role: 'operator', isDeleted: false },
+      ],
+    };
     if (status === 'active') matchStage.isBlocked = false;
     if (status === 'suspended') matchStage.isBlocked = true;
     if (search) {
       const q = new RegExp(String(search), 'i');
-      matchStage.$or = [{ name: q }, { email: q }, { phoneNumber: q }];
+      matchStage.$and.push({ $or: [{ name: q }, { email: q }, { phoneNumber: q }] });
     }
 
     const thirtyDaysAgo = new Date();

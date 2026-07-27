@@ -8,10 +8,14 @@ import { Kyc, KycStatus } from "../models/kyc.model";
 import { Logger } from "../utils/logger";
 import mongoose from "mongoose";
 import { createNotification } from "./notificationController";
+import {
+    MIN_WITHDRAWAL_COINS,
+    MIN_WITHDRAWAL_INR,
+    WITHDRAWAL_COINS_PER_INR,
+} from "../configs/monetization";
+import { HierarchyScopeService } from "../utils/hierarchyScope";
 
-// Constants
-const MIN_WITHDRAWAL_INR = 200;
-const COIN_TO_INR_RATIO = 16.7; // 100 coins = ~6 INR (Example ratio from frontend)
+const ADMIN_ROLES = new Set(["owner", "operator", "superAdmin", "admin", "agency"]);
 
 // User: Request Withdrawal
 export const requestWithdrawal = async (req: AuthRequest, res: Response) => {
@@ -21,9 +25,10 @@ export const requestWithdrawal = async (req: AuthRequest, res: Response) => {
         const { userId } = req.user || {};
         const { amount, method, details } = req.body; // amount in INR
 
-        if (!amount || amount < MIN_WITHDRAWAL_INR) {
+        const requestedAmount = Number(amount);
+        if (!Number.isFinite(requestedAmount) || requestedAmount < MIN_WITHDRAWAL_INR) {
             await session.abortTransaction();
-            return sendResponse(res, 400, false, `Minimum withdrawal is ₹${MIN_WITHDRAWAL_INR}`);
+            return sendResponse(res, 400, false, `Minimum withdrawal is ₹${MIN_WITHDRAWAL_INR} (${MIN_WITHDRAWAL_COINS} coins)`);
         }
 
         if (![WithdrawalMethod.BANK, WithdrawalMethod.UPI].includes(method)) {
@@ -45,12 +50,12 @@ export const requestWithdrawal = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, "User not found");
         }
 
-        const coinsRequired = Math.ceil(amount * COIN_TO_INR_RATIO);
+        const coinsRequired = Math.ceil(requestedAmount * WITHDRAWAL_COINS_PER_INR);
         const currentCoins = user.coins || 0;
 
         if (currentCoins < coinsRequired) {
             await session.abortTransaction();
-            return sendResponse(res, 400, false, `Insufficient coins. You need ${coinsRequired} coins for ₹${amount}`);
+            return sendResponse(res, 400, false, `Insufficient coins. You need ${coinsRequired} coins for ₹${requestedAmount}`);
         }
 
         // 3. Deduct Coins (Hold them)
@@ -60,7 +65,7 @@ export const requestWithdrawal = async (req: AuthRequest, res: Response) => {
         // 4. Create Request
         await Withdrawal.create([{
             userId,
-            amount,
+            amount: requestedAmount,
             coinsDeducted: coinsRequired,
             method,
             details,
@@ -93,20 +98,18 @@ export const getMyWithdrawals = async (req: AuthRequest, res: Response) => {
 // Admin: Get Pending
 export const getPendingWithdrawals = async (req: AuthRequest, res: Response) => {
     try {
-        const { role, userId } = req.user || {};
+        const { role, id } = req.user || {};
+        if (!role || !id || !ADMIN_ROLES.has(role)) {
+            return sendResponse(res, 403, false, "You are not allowed to view withdrawal requests");
+        }
         let filter: any = { status: WithdrawalStatus.PENDING };
 
-        if (role === 'admin') {
-            // Admin sees only their hosts' withdrawals
-            const adminUser = await User.findById(userId);
-            if (!adminUser?.meethiId) {
-                return sendResponse(res, 200, true, "Pending withdrawals", []); // Return empty if no meethiId
-            }
-
-            // Find hosts linked to this Admin
-            const myHosts = await User.find({ meethiId: adminUser.meethiId }).select('userId');
-            const hostUserIds = myHosts.map(h => h.userId);
-
+        if (!["owner", "operator"].includes(role)) {
+            const userScope = HierarchyScopeService.buildUserScope({ id: String(id), role });
+            const myHosts = await User.find({
+                $and: [userScope, { role: "host" }],
+            }).select("userId");
+            const hostUserIds = myHosts.map((host) => host.userId);
             filter.userId = { $in: hostUserIds };
         }
 
@@ -154,12 +157,18 @@ export const processWithdrawal = async (req: AuthRequest, res: Response) => {
         }
 
         // Security Check for Admin
-        const { role, userId } = req.user || {};
-        if (role === 'admin') {
-            const adminUser = await User.findById(userId).session(session);
-            const hostUser = await User.findOne({ userId: withdrawal.userId }).session(session);
+        const { role, id } = req.user || {};
+        if (!role || !id || !ADMIN_ROLES.has(role)) {
+            await session.abortTransaction();
+            return sendResponse(res, 403, false, "You are not allowed to process withdrawals");
+        }
+        if (!["owner", "operator"].includes(role)) {
+            const userScope = HierarchyScopeService.buildUserScope({ id: String(id), role });
+            const hostUser = await User.findOne({
+                $and: [userScope, { userId: withdrawal.userId, role: "host" }],
+            }).session(session);
 
-            if (!adminUser?.meethiId || !hostUser || hostUser.meethiId !== adminUser.meethiId) {
+            if (!hostUser) {
                 await session.abortTransaction();
                 return sendResponse(res, 403, false, "Unauthorized to process this withdrawal");
             }

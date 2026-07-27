@@ -13,6 +13,23 @@ import sendResponse from '../utils/reponse';
 import { generateSecureHash } from '../utils/passwordHelper';
 import { generateUniqueId } from '../utils/generator';
 import { ROLE_PERMISSION_MATRIX } from '../configs/rbacMatrix';
+import { PAGE_PERMISSION_REGISTRY } from '../configs/permissionRegistry';
+import { HierarchyScopeService } from '../utils/hierarchyScope';
+
+const canManagePermissionTarget = async (
+  actor: NonNullable<AuthRequest['user']>,
+  targetType: string,
+  targetId: string
+) => {
+  if (actor.role === 'owner' || actor.role === 'operator') return true;
+  if (targetType !== 'user') return false;
+  return Boolean(await User.exists({
+    $and: [
+      HierarchyScopeService.buildUserScope({ id: String(actor.id), role: actor.role }),
+      { _id: targetId },
+    ],
+  }));
+};
 
 // ============ Helper: Log activity ============
 export const logActivity = async (
@@ -179,6 +196,9 @@ export const getPermissions = async (req: AuthRequest, res: Response) => {
     if (!targetType || !targetId) {
       return sendResponse(res, 400, false, 'targetType and targetId are required queries.');
     }
+    if (!req.user || !(await canManagePermissionTarget(req.user, String(targetType), String(targetId)))) {
+      return sendResponse(res, 403, false, 'Permission target is outside your team');
+    }
 
     let permission = await Permission.findOne({ targetType, targetId });
     if (!permission) {
@@ -257,6 +277,9 @@ export const updatePermissions = async (req: AuthRequest, res: Response) => {
 
     if (!targetType || !targetId || !permissions) {
       return sendResponse(res, 400, false, 'targetType, targetId, and permissions data are required.');
+    }
+    if (!actor || !(await canManagePermissionTarget(actor, String(targetType), String(targetId)))) {
+      return sendResponse(res, 403, false, 'Permission target is outside your team');
     }
 
     const oldPermission = await Permission.findOne({ targetType, targetId });
@@ -660,6 +683,17 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
         referralScopeOr.push({ createdBy: currentUserId });
         referralScopeOr.push({ createdBy: currentUserIdStr });
         referralScopeOr.push({ referralUserId: currentUserIdStr });
+      }
+      const visibleTeam = await User.find(
+        HierarchyScopeService.buildUserScope({
+          id: currentUserIdStr || '',
+          role: currentUser.role,
+        })
+      ).select('_id').lean();
+      const visibleIds = visibleTeam.map((member) => String(member._id));
+      if (visibleIds.length > 0) {
+        referralScopeOr.push({ referralUserId: { $in: visibleIds } });
+        referralScopeOr.push({ createdBy: { $in: visibleIds } });
       }
 
       if (validCodes.length > 0) {
@@ -1504,6 +1538,16 @@ export const registerPage = async (req: AuthRequest, res: Response) => {
 
 export const listRegisteredPages = async (req: AuthRequest, res: Response) => {
   try {
+    await PageRegistry.bulkWrite(
+      PAGE_PERMISSION_REGISTRY.map((page) => ({
+        updateOne: {
+          filter: { pageId: page.pageId },
+          update: { $setOnInsert: page },
+          upsert: true,
+        },
+      })),
+      { ordered: false }
+    );
     let pages = await PageRegistry.find({}).sort({ category: 1, name: 1 });
     if (pages.length === 0) {
       // Seed with some standard dashboard pages automatically
@@ -1797,5 +1841,3 @@ export const importPermissions = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 500, false, error.message);
   }
 };
-
-

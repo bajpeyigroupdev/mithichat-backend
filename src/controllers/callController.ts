@@ -17,8 +17,8 @@ import { convertToHMS } from '../utils/time.util';
 import { User } from '../models/user.model';
 import { BillingService } from '../services/billing.service';
 import { sendCallNotification, sendMissedCallNotification } from '../utils/pushNotification';
-import { getCachedSettings } from './settingsController';
 import { recalculateAndUpdateHostLevel } from '../services/user.service';
+import { CALL_DIAMONDS_PER_MINUTE } from '../configs/monetization';
 
 const APP_ID = config.AGORA_APP_ID!;
 const APP_CERTIFICATE = config.AGORA_APP_CERTIFICATE!;
@@ -218,8 +218,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
 
     console.log('🔵 START CALL REQUEST:', { userId, hostId, diamonds });
 
-    const settings = await getCachedSettings();
-    const CALL_RATE_PER_MINUTE = settings.callRatePerMinute || 100;
+    const CALL_RATE_PER_MINUTE = CALL_DIAMONDS_PER_MINUTE;
 
     if (!userId || diamonds == null || (!hostId && !randomMatch)) {
       return sendResponse(res, 400, false, "Required call details are missing");
@@ -725,81 +724,116 @@ export const getCallHistory = async (req: AuthRequest, res: Response) => {
 
 
 export const getRanking = async (req: AuthRequest, res: Response) => {
-  const { type = 'time', range = 'daily' } = req.query;
+  try {
+    const requestedType = String(req.query.type || "time").toLowerCase();
+    const requestedRange = String(req.query.range || "daily").toLowerCase();
+    const metric = ["time", "call", "coins", "diamonds"].includes(requestedType)
+      ? requestedType
+      : "time";
 
-  // 1️⃣ Determine date range
-  const now = new Date();
-  let startDate: dayjs.Dayjs;
-  if (range === 'daily') startDate = dayjs(now).startOf('day');
-  else if (range === 'weekly') startDate = dayjs(now).subtract(7, 'day');
-  else if (range === 'monthly') startDate = dayjs(now).subtract(30, 'day');
-  else startDate = dayjs(now).startOf('day');
-
-  // 2️⃣ Aggregate calls
-  let sortField: 'time' | 'call' | 'coins' = 'time';
-  if (type === 'time') sortField = 'time';
-  else if (type === 'call') sortField = 'call';
-  else if (type === 'coins') sortField = 'coins';
-
-  const ranking = await CoinsTransaction.aggregate([
-    {
-      $match: {
-        callStart: { $gte: startDate.toDate() },
-        type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT] }
-      }
-    },
-    // Fix Duplicates: Convert hostId to ObjectId to ensure grouping matches generic user OIDs
-    {
-      $addFields: {
-        hostIdObj: { $toObjectId: "$hostId" }
-      }
-    },
-    {
-      $lookup: {
-        from: 'users',
-        localField: 'hostIdObj', // Use converted ID
-        foreignField: '_id',
-        as: 'user',
-      },
-    },
-    { $unwind: '$user' },
-    {
-      $group: {
-        _id: '$hostIdObj', // Group by standard ObjectId
-        name: { $first: '$user.name' },
-        time: { $sum: { $ifNull: [{ $toDouble: '$duration' }, 0] } }, // Ensure numeric
-        call: { $sum: 1 },
-        coins: { $sum: { $ifNull: [{ $toDouble: '$hostEarning' }, 0] } }, // Ensure numeric
-      },
-    },
-    { $sort: { [sortField]: -1 } },
-    { $limit: 10 },
-  ]);
-
-  console.log('📊 Ranking Aggregation Result:', JSON.stringify(ranking, null, 2));
-
-  // 3️⃣ Format Data
-  const formattedRanking = ranking.map((item, index) => {
-    // Format Time: HH:MM:SS
-    const totalSeconds = item.time || 0;
-    const h = Math.floor(totalSeconds / 3600).toString().padStart(2, '0');
-    const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
-    const s = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
-
-    // Frontend expects keys: 'time', 'call', 'coins' (lowercase) based on activeMetric
-    return {
-      rank: index + 1,
-      name: item.name || "Unknown",
-      time: `${h}:${m}:${s}`,
-      call: item.call || 0,
-      coins: item.coins || 0,
+    const match: Record<string, any> = {
+      status: CallStatus.ENDED,
+      type: metric === "diamonds"
+        ? { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT, TransactionType.GIFT_SENT] }
+        : { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT, TransactionType.GIFT_SENT] },
     };
-  });
+    if (requestedRange !== "all") {
+      const startDate =
+        requestedRange === "weekly"
+          ? dayjs().subtract(7, "day")
+          : requestedRange === "monthly"
+            ? dayjs().subtract(30, "day")
+            : dayjs().startOf("day");
+      match.createdAt = { $gte: startDate.toDate() };
+    }
 
-  res.json({
-    success: true,
-    data: formattedRanking,
-  });
+    const participantField = metric === "diamonds" ? "$userId" : "$hostId";
+    const ranking = await CoinsTransaction.aggregate([
+      { $match: match },
+      {
+        $addFields: {
+          participantId: {
+            $convert: {
+              input: participantField,
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
+        },
+      },
+      { $match: { participantId: { $ne: null } } },
+      {
+        $group: {
+          _id: "$participantId",
+          time: {
+            $sum: {
+              $cond: [
+                { $eq: ["$type", TransactionType.VOICE_CALL] },
+                { $ifNull: ["$duration", 0] },
+                0,
+              ],
+            },
+          },
+          call: {
+            $sum: {
+              $cond: [{ $eq: ["$type", TransactionType.VOICE_CALL] }, 1, 0],
+            },
+          },
+          coins: { $sum: { $ifNull: ["$hostEarning", 0] } },
+          diamonds: { $sum: { $ifNull: ["$coinsSpent", 0] } },
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "_id",
+          as: "user",
+        },
+      },
+      { $unwind: "$user" },
+      { $sort: { [metric]: -1, _id: 1 } },
+      {
+        $project: {
+          name: { $ifNull: ["$user.name", "$user.userName"] },
+          image: "$user.image",
+          time: 1,
+          call: 1,
+          coins: 1,
+          diamonds: 1,
+        },
+      },
+    ]);
+
+    const formattedRanking = ranking.map((item, index) => {
+      const totalSeconds = Number(item.time) || 0;
+      const hours = Math.floor(totalSeconds / 3600).toString().padStart(2, "0");
+      const minutes = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, "0");
+      const seconds = Math.floor(totalSeconds % 60).toString().padStart(2, "0");
+      return {
+        id: String(item._id),
+        rank: index + 1,
+        name: item.name || "User",
+        image: item.image || "",
+        time: `${hours}:${minutes}:${seconds}`,
+        call: Number(item.call) || 0,
+        coins: Number(item.coins) || 0,
+        diamonds: Number(item.diamonds) || 0,
+      };
+    });
+
+    const currentUserId = String(req.user?.id || "");
+    return res.json({
+      success: true,
+      data: formattedRanking.slice(0, 10),
+      currentUser: formattedRanking.find((item) => item.id === currentUserId) || null,
+      metric,
+      range: requestedRange,
+    });
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message || "Failed to fetch ranking");
+  }
 };
 
 

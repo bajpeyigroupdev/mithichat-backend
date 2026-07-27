@@ -41,8 +41,8 @@ router.use(verifyToken);
 router.get('/my-permissions', getMyPermissions);
 
 // ============ Permission Builder & Templates ============
-router.get('/permissions', checkPermission('menus', 'Settings'), getPermissions);
-router.post('/permissions', checkPermission('menus', 'Settings'), updatePermissions);
+router.get('/permissions', getPermissions);
+router.post('/permissions', updatePermissions);
 router.get('/templates', checkPermission('menus', 'Settings'), getTemplates);
 router.post('/templates', checkPermission('menus', 'Settings'), saveTemplate);
 router.get('/compare', checkPermission('menus', 'Settings'), comparePermissions);

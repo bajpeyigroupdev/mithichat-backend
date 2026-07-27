@@ -159,7 +159,6 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
     switch (role) {
       case "owner":
       case "operator":
-      case "superAdmin":
         totalUsers = await User.countDocuments({
           isDeleted: false,
           role: { $ne: "superAdmin" }, // Exclude superAdmins
@@ -174,19 +173,12 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
           .limit(limitNumber);
         break;
 
+      case "superAdmin":
       case "admin":
       case "agency":
-        const scopedFilter = await getAccessibleUserFilter(req.user, {
-          isDeleted: false,
-          isBlocked: false,
-        });
-        totalUsers = await User.countDocuments(scopedFilter);
-        usersQuery = User.find(scopedFilter)
-          .select("userId name coins diamonds createdAt role email phoneNumber image")
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limitNumber);
-        break;
+      case "coinSeller":
+      case "customerSupport":
+        return sendResponse(res, 403, false, "Only owner and operator can view the user list");
 
 
       case "host":
@@ -234,8 +226,8 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 
     let query: any = { isDeleted: false };
 
-    // If owner/operator/superAdmin, allow searching by name, email, or phoneNumber
-    if (["owner", "operator", "superAdmin"].includes(role || "")) {
+    // Only owner/operator may search arbitrary users.
+    if (["owner", "operator"].includes(role || "")) {
       if (userId) query.userId = userId;
       if (name) query.name = name;
       if (email) query.email = email;
@@ -252,13 +244,14 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
     switch (role) {
       case "owner":
       case "operator":
-      case "superAdmin":
-        break; // SuperAdmin can see all users
+        break;
 
+      case "superAdmin":
       case "admin":
       case "agency":
-        query = await getAccessibleUserFilter(req.user, { ...query, isBlocked: false });
-        break;
+      case "coinSeller":
+      case "customerSupport":
+        return sendResponse(res, 403, false, "Only owner and operator can view user details");
 
 
       case "user":

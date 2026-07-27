@@ -69,6 +69,7 @@ const userSchema = new Schema<UserInterface>(
     operatorId: { type: Schema.Types.ObjectId, ref: "User" },
     superAdminId: { type: Schema.Types.ObjectId, ref: "User" },
     adminId: { type: Schema.Types.ObjectId, ref: "User" },
+    agencyId: { type: Schema.Types.ObjectId, ref: "User" },
     specialCode: { type: String, unique: true, sparse: true },
     orgId: { type: Schema.Types.ObjectId, ref: "Organization" },
     branchId: { type: Schema.Types.ObjectId, ref: "BranchRegion" },

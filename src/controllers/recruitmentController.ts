@@ -8,6 +8,33 @@ import { sendRecruitmentWorkflowNotification } from '../services/recruitmentNoti
 import { automateEmployeeCreationOnApproval } from '../services/employeeLifecycleService';
 import { generateStrongPassword } from './emsController';
 
+const RECRUITMENT_ROLE_RANK: Record<string, number> = {
+    owner: 0,
+    operator: 1,
+    'super-admin': 2,
+    superadmin: 2,
+    admin: 3,
+    agency: 4,
+    seller: 5,
+    coinseller: 5,
+    'customer-service': 5,
+    customersupport: 5,
+    host: 6,
+};
+
+const normalizeRecruitmentRole = (role: string) => {
+    const compact = role.toLowerCase().replace(/[\s_]/g, '-');
+    const aliases: Record<string, RecruitmentRole> = {
+        superadmin: 'super-admin',
+        'super-admin': 'super-admin',
+        coinseller: 'seller',
+        'coin-seller': 'seller',
+        customersupport: 'customer-service',
+        'customer-support': 'customer-service',
+    };
+    return (aliases[compact] || compact) as RecruitmentRole;
+};
+
 // Helper to generate unique application ID
 const generateApplicationId = (role: string): string => {
     const rolePrefixes: Record<string, string> = {
@@ -51,13 +78,7 @@ export const verifyReferralCode = async (req: Request, res: Response) => {
             });
         }
 
-        // Accept authorized invite codes (e.g. D07A24) as valid referral invitations
-        return sendResponse(res, 200, true, 'Referral code verified successfully', {
-            code: cleanCode,
-            referrerId: null,
-            referrerName: `Authorized Inviter (${cleanCode})`,
-            referrerRole: 'Executive Network',
-        });
+        return sendResponse(res, 404, false, 'Invalid or inactive referral code');
     } catch (error: any) {
         await Logger('verifyReferralCode', error);
         return sendResponse(res, 500, false, 'Error verifying referral code');
@@ -69,7 +90,7 @@ export const submitApplication = async (req: Request, res: Response) => {
     try {
         const roleFromParams = req.params.role as RecruitmentRole;
         const body = req.body || {};
-        const role = (roleFromParams || body.role || '').toLowerCase() as RecruitmentRole;
+        const role = normalizeRecruitmentRole(roleFromParams || body.role || '');
 
         const validRoles: RecruitmentRole[] = ['agency', 'operator', 'admin', 'customer-service', 'super-admin', 'seller', 'host'];
         if (!validRoles.includes(role)) {
@@ -131,6 +152,17 @@ export const submitApplication = async (req: Request, res: Response) => {
         }).select('_id name role employeeCode referralCode specialCode');
 
         if (senior) {
+            const referrerRole = normalizeRecruitmentRole(String(senior.role || ''));
+            const referrerRank = RECRUITMENT_ROLE_RANK[referrerRole];
+            const targetRank = RECRUITMENT_ROLE_RANK[role];
+            if (referrerRank === undefined || targetRank === undefined || targetRank <= referrerRank) {
+                return sendResponse(
+                    res,
+                    403,
+                    false,
+                    `A ${senior.role} cannot refer the same or a higher role.`
+                );
+            }
             referrerData = {
                 code: senior.referralCode || senior.employeeCode || senior.specialCode || codeToValidate,
                 referrerId: senior._id,
@@ -138,10 +170,7 @@ export const submitApplication = async (req: Request, res: Response) => {
                 referrerName: senior.name
             };
         } else {
-            referrerData = {
-                code: codeToValidate,
-                referrerName: `Referral Code: ${codeToValidate}`
-            };
+            return sendResponse(res, 400, false, 'Invalid or inactive referral code.');
         }
 
         // Parse documents

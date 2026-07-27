@@ -5,6 +5,7 @@ export enum UserRole {
   ADMIN = "admin",
   AGENCY = "agency",
   COIN_SELLER = "coinSeller",
+  CUSTOMER_SUPPORT = "customerSupport",
   HOST = "host",
   USER = "user",
 }
@@ -16,6 +17,7 @@ export const ROLE_HIERARCHY: Record<string, number> = {
   [UserRole.ADMIN]: 3,
   [UserRole.AGENCY]: 4,
   [UserRole.COIN_SELLER]: 5,
+  [UserRole.CUSTOMER_SUPPORT]: 5,
   [UserRole.HOST]: 6,
   [UserRole.USER]: 7,
 };

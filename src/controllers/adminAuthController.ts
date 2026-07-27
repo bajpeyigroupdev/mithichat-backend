@@ -9,6 +9,7 @@ import { generateToken, generateUniqueId } from '../utils/generator';
 import { AuthRequest } from '../middlewares/authorize.middleware';
 import { RechargeHistory } from '../models/RechargeHistory';
 import { RechargeType } from '../constants/user';
+import { HierarchyScopeService } from '../utils/hierarchyScope';
 
 // Admin login — Email + Password only. No username, no mobile.
 export const adminLogin = async (
@@ -407,11 +408,11 @@ const generateEmployeeCode = (prefix: string, userId: number): string => {
 // admin          -> agency, coinSeller, host, user
 // agency         -> host, user
 const canCreate: Record<string, string[]> = {
-    owner:      ['operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'host', 'user'],
-    operator:   ['superAdmin', 'admin', 'agency', 'coinSeller', 'host', 'user'],
-    superAdmin: ['admin', 'agency', 'coinSeller', 'host', 'user'],
-    admin:      ['agency', 'coinSeller', 'host', 'user'],
-    agency:     ['host', 'user'],
+    owner:      ['operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'customerSupport', 'host', 'user'],
+    operator:   ['superAdmin', 'admin', 'agency', 'coinSeller', 'customerSupport', 'host', 'user'],
+    superAdmin: ['admin', 'agency', 'coinSeller', 'customerSupport', 'host'],
+    admin:      ['agency', 'coinSeller', 'customerSupport', 'host'],
+    agency:     ['host'],
 };
 
 const roleCodePrefix: Record<string, string> = {
@@ -420,6 +421,7 @@ const roleCodePrefix: Record<string, string> = {
     admin:      'ADM',
     agency:     'AGN',
     coinSeller: 'CS',
+    customerSupport: 'SUP',
     host:       'HST',
     user:       'USR',
 };
@@ -455,6 +457,13 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
         const hashedPassword = await generateSecureHash(password);
         const newUserId = await generateUniqueId();
         const employeeCode = generateEmployeeCode(roleCodePrefix[roleToCreate] || 'EMP', newUserId);
+        const creator = await User.findById(creatorId).lean();
+        if (!creator) {
+            return sendResponse(res, 401, false, 'Creator account not found');
+        }
+        const creatorPath = creator.hierarchyPath
+            ? `${creator.hierarchyPath}/${creator._id}`
+            : String(creator._id);
 
         const newEmployee = await User.create({
             name,
@@ -468,6 +477,18 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
             isActive: true,
             employeeCode,
             referredBy: creatorId,
+            parentId: creatorId,
+            parentRole: creatorRole,
+            createdBy: creatorId,
+            createdByRole: creatorRole,
+            ownerId: creator.ownerId || (creatorRole === 'owner' ? creator._id : undefined),
+            operatorId: creator.operatorId || (creatorRole === 'operator' ? creator._id : undefined),
+            superAdminId: creator.superAdminId || (creatorRole === 'superAdmin' ? creator._id : undefined),
+            adminId: creator.adminId || (creatorRole === 'admin' ? creator._id : undefined),
+            agencyId: (creator as any).agencyId || (creatorRole === 'agency' ? creator._id : undefined),
+            referrerId: String(creator._id),
+            referrerRole: creatorRole,
+            hierarchyPath: creatorPath,
             documents: docList,
             device: {
                 createdDeviceId: 'ADMIN_PANEL',
@@ -555,10 +576,19 @@ export const listEmployees = async (req: AuthRequest, res: Response) => {
             ? [targetRole as string]
             : allowedRoles;
 
-        const query: any = { role: { $in: roleFilter }, isDeleted: false };
-        if (role === 'admin' || role === 'agency') {
-            query.referredBy = myId;
+        if (roleFilter.includes('user') && !['owner', 'operator'].includes(role)) {
+            return sendResponse(res, 403, false, 'Only owner and operator can view users');
         }
+        const hierarchyScope = HierarchyScopeService.buildUserScope({
+            id: String(myId),
+            role,
+        });
+        const query: any = {
+            $and: [
+                hierarchyScope,
+                { role: { $in: roleFilter }, isDeleted: false },
+            ],
+        };
 
         const employees = await User.find(query)
             .select('-password -refreshToken')
@@ -586,8 +616,13 @@ export const toggleBlockEmployee = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, 'Employee not found');
         }
 
-        // Admins can only block their own subordinates
-        if ((role === 'admin' || role === 'agency') && String(employee.referredBy) !== String(myId)) {
+        const visibleEmployee = await User.exists({
+            $and: [
+                HierarchyScopeService.buildUserScope({ id: String(myId), role }),
+                { _id: employee._id },
+            ],
+        });
+        if (!visibleEmployee || !canCreate[role].includes(String(employee.role))) {
             return sendResponse(res, 403, false, 'Access Denied: Not your subordinate');
         }
 

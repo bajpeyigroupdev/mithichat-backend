@@ -8,6 +8,7 @@ import { generateSecureHash } from '../utils/passwordHelper';
 import { generateToken, generateUniqueId } from '../utils/generator';
 import { generateSpecialCode, generateStrongPassword, logActivity } from './emsController';
 import mongoose from 'mongoose';
+import { HierarchyScopeService } from '../utils/hierarchyScope';
 import { config } from "../configs/envConfig";
 import { AuthType, Gender, UserRole } from "../constants/user";
 import { Logger } from "../utils/logger";
@@ -74,12 +75,18 @@ export const listAdmins = async (req: AuthRequest, res: Response) => {
     const { search, status, page = 1, limit = 20 } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
-    const matchStage: any = { role: 'admin', isDeleted: false };
+    const actor = req.user!;
+    const matchStage: any = {
+      $and: [
+        HierarchyScopeService.buildUserScope({ id: String(actor.id), role: actor.role }),
+        { role: 'admin', isDeleted: false },
+      ],
+    };
     if (status === 'active') matchStage.isBlocked = false;
     if (status === 'suspended') matchStage.isBlocked = true;
     if (search) {
       const q = new RegExp(String(search), 'i');
-      matchStage.$or = [{ name: q }, { email: q }, { phoneNumber: q }];
+      matchStage.$and.push({ $or: [{ name: q }, { email: q }, { phoneNumber: q }] });
     }
 
     const thirtyDaysAgo = new Date();

@@ -1,5 +1,6 @@
 import express from 'express';
 import { verifyToken } from '../middlewares/authorize.middleware';
+import { HierarchyScopeService } from '../utils/hierarchyScope';
 import {
     adminLogin,
     adminLogout,
@@ -251,12 +252,15 @@ router.get('/sellers', verifyToken, async (req: any, res: any) => {
     try {
         const { User } = await import('../models/user.model');
         const { search, page = 1, limit = 20 } = req.query;
-        const filter: any = { role: 'coinSeller', isDeleted: false };
-        if (search) filter.$or = [
+        const filter: any = { $and: [
+            HierarchyScopeService.buildUserScope({ id: String(req.user.id), role: req.user.role }),
+            { role: 'coinSeller', isDeleted: false },
+        ] };
+        if (search) filter.$and.push({ $or: [
             { name: { $regex: search, $options: 'i' } },
             { email: { $regex: search, $options: 'i' } },
             { employeeCode: { $regex: search, $options: 'i' } },
-        ];
+        ] });
         const pageNum = Math.max(1, parseInt(page));
         const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
         const [sellers, total] = await Promise.all([
@@ -272,12 +276,15 @@ router.get('/customer-support', verifyToken, async (req: any, res: any) => {
     try {
         const { User } = await import('../models/user.model');
         const { search, page = 1, limit = 20 } = req.query;
-        const filter: any = { role: 'customerSupport', isDeleted: false };
-        if (search) filter.$or = [
+        const filter: any = { $and: [
+            HierarchyScopeService.buildUserScope({ id: String(req.user.id), role: req.user.role }),
+            { role: 'customerSupport', isDeleted: false },
+        ] };
+        if (search) filter.$and.push({ $or: [
             { name: { $regex: search, $options: 'i' } },
             { email: { $regex: search, $options: 'i' } },
             { employeeCode: { $regex: search, $options: 'i' } },
-        ];
+        ] });
         const pageNum = Math.max(1, parseInt(page));
         const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
         const [staff, total] = await Promise.all([
@@ -293,12 +300,15 @@ router.get('/agencies-list', verifyToken, async (req: any, res: any) => {
     try {
         const { User } = await import('../models/user.model');
         const { search, page = 1, limit = 20 } = req.query;
-        const filter: any = { role: 'agency', isDeleted: false };
-        if (search) filter.$or = [
+        const filter: any = { $and: [
+            HierarchyScopeService.buildUserScope({ id: String(req.user.id), role: req.user.role }),
+            { role: 'agency', isDeleted: false },
+        ] };
+        if (search) filter.$and.push({ $or: [
             { name: { $regex: search, $options: 'i' } },
             { email: { $regex: search, $options: 'i' } },
             { employeeCode: { $regex: search, $options: 'i' } },
-        ];
+        ] });
         const pageNum = Math.max(1, parseInt(page));
         const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
         const [agencies, total] = await Promise.all([

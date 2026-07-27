@@ -4,9 +4,12 @@ import { User } from '../models/user.model';
 import { CallStatus, TransactionType } from '../constants/user';
 import { updateBalance } from './coins.service';
 import Conversation from '../models/conversation.model';
-import { getCachedSettings } from '../controllers/settingsController';
 import HostLevel from '../models/hostLevel.model';
 import { recalculateAndUpdateHostLevel } from './user.service';
+import {
+    CALL_DIAMONDS_PER_MINUTE,
+    HOST_LEVEL_COINS_PER_MINUTE,
+} from '../configs/monetization';
 
 export class BillingService {
 
@@ -85,27 +88,17 @@ export class BillingService {
                 (callEndTime.getTime() - new Date(transaction.callStart).getTime()) / 1000
             );
 
-            const settings = await getCachedSettings();
-            const CALL_RATE_PER_SECOND = (settings.callRatePerMinute || 100) / 60;
+            const CALL_RATE_PER_SECOND = CALL_DIAMONDS_PER_MINUTE / 60;
 
             // ===== Level-based host earning =====
             // Recalculate and update host's current level, then find coinPerMinute from HostLevel config
             const hostLevel = await recalculateAndUpdateHostLevel(transaction.hostId, session);
             const hostLevelConfig = await HostLevel.findOne({ level: hostLevel }).session(session).lean() as any;
 
-            const LEVEL_RATE_MAP: Record<number, number> = {
-                1: 25,
-                2: 30,
-                3: 36,
-                4: 42,
-                5: 48,
-                6: 54,
-                7: 60,
-                8: 66,
-            };
-
-            // coinPerMinute from HostLevel table; fall back to level rate map (e.g. Lv.3 = 36, Lv.1 = 25)
-            const hostSharePerMinute = hostLevelConfig?.coinPerMinute ?? (LEVEL_RATE_MAP[hostLevel] || 36);
+            const hostSharePerMinute =
+                hostLevelConfig?.coinPerMinute ??
+                HOST_LEVEL_COINS_PER_MINUTE[hostLevel] ??
+                HOST_LEVEL_COINS_PER_MINUTE[1];
             const HOST_SHARE_PER_SECOND = hostSharePerMinute / 60;
             console.log(`📊 Host Lv.${hostLevel} → coinPerMinute: ${hostSharePerMinute}`);
             // ====================================
