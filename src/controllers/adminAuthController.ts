@@ -10,6 +10,7 @@ import { AuthRequest } from '../middlewares/authorize.middleware';
 import { RechargeHistory } from '../models/RechargeHistory';
 import { RechargeType } from '../constants/user';
 import { HierarchyScopeService } from '../utils/hierarchyScope';
+import { getAccountRoleScope, PANEL_ACCOUNT_ROLES } from '../utils/accountScope';
 
 // Admin login — Email + Password only. No username, no mobile.
 export const adminLogin = async (
@@ -35,7 +36,7 @@ export const adminLogin = async (
                 { employeeCode: inputIdentifier.toUpperCase() },
                 { specialCode: inputIdentifier.toUpperCase() }
             ],
-            role: { $in: ['owner', 'operator', 'superAdmin', 'admin', 'agency', 'coinSeller', 'customerSupport', 'host'] },
+            role: { $in: PANEL_ACCOUNT_ROLES },
             isDeleted: false
         }).select('+password +mustChangePassword +refreshToken');
 
@@ -61,7 +62,8 @@ export const adminLogin = async (
                         $or: [
                             { email: inputIdentifier },
                             { emsRequestId: (pendingReq as any)._id }
-                        ]
+                        ],
+                        role: { $in: PANEL_ACCOUNT_ROLES },
                     }).select('+password +mustChangePassword +refreshToken')) as any;
                 } catch (autoErr) {
                     console.error('[AdminAuth] Auto-activation of pending request failed:', autoErr);
@@ -432,6 +434,8 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
         const { role: creatorRole, userId: creatorUserId, id: creatorId } = req.user || {};
 
         const { name, email, password, phoneNumber, targetRole, documents } = req.body;
+        const normalizedEmail = String(email || '').trim().toLowerCase();
+        const normalizedPhone = phoneNumber ? String(phoneNumber).trim() : '';
 
         if (!creatorRole || !canCreate[creatorRole]) {
             return sendResponse(res, 403, false, 'Access Denied: You do not have permission to create accounts.');
@@ -439,19 +443,50 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
 
         const allowedRoles = canCreate[creatorRole];
         const roleToCreate = targetRole || 'user';
+        const accountRoleScope = getAccountRoleScope(roleToCreate);
         if (!allowedRoles.includes(roleToCreate)) {
             return sendResponse(res, 403, false, `Access Denied: A "${creatorRole}" cannot create a "${roleToCreate}".`);
         }
 
-        if (!name || !email || !password) {
+        if (!name || !normalizedEmail || !password) {
             return sendResponse(res, 400, false, 'Name, Email, and Password are required.');
         }
 
         const docList = Array.isArray(documents) ? documents.filter(Boolean) : (documents ? [documents] : []);
 
-        const existing = await User.findOne({ $or: [{ email }, phoneNumber ? { phoneNumber } : {}] });
-        if (existing) {
-            return sendResponse(res, 400, false, 'User with this Email or Phone already exists.');
+        const existingEmail = await User.findOne({
+            email: normalizedEmail,
+            role: { $in: accountRoleScope },
+        })
+            .select('userId role isDeleted status')
+            .lean();
+        if (existingEmail) {
+            const accountState = existingEmail.isDeleted || existingEmail.status === 'Deleted'
+                ? 'a deleted account'
+                : `an existing ${existingEmail.role || 'user'} account`;
+            return sendResponse(
+                res,
+                409,
+                false,
+                `This email is already registered to ${accountState} (User ID: ${existingEmail.userId}). Use another email or update the existing account.`
+            );
+        }
+
+        if (normalizedPhone && accountRoleScope.includes('user')) {
+            const existingPhone = await User.findOne({
+                phoneNumber: normalizedPhone,
+                role: { $in: accountRoleScope },
+            })
+                .select('userId role isDeleted status')
+                .lean();
+            if (existingPhone) {
+                return sendResponse(
+                    res,
+                    409,
+                    false,
+                    `This phone number is already registered (User ID: ${existingPhone.userId}).`
+                );
+            }
         }
 
         const hashedPassword = await generateSecureHash(password);
@@ -467,9 +502,9 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
 
         const newEmployee = await User.create({
             name,
-            email,
+            email: normalizedEmail,
             password: hashedPassword,
-            phoneNumber: phoneNumber || undefined,
+            phoneNumber: normalizedPhone || undefined,
             role: roleToCreate,
             userId: newUserId,
             gender: 'other',
@@ -505,6 +540,15 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
         });
     } catch (error: any) {
         await Logger('createEmployee', error);
+        if (error?.code === 11000) {
+            const field = Object.keys(error.keyPattern || error.keyValue || {})[0] || 'value';
+            return sendResponse(
+                res,
+                409,
+                false,
+                `An account with this ${field} already exists. Search all users, including deleted accounts, or use a different ${field}.`
+            );
+        }
         return sendResponse(res, 500, false, error.message);
     }
 };

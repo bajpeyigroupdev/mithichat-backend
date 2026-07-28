@@ -5,6 +5,24 @@ export interface RoleDefinition {
   allowedActions: string[];
 }
 
+const OPERATOR_DENIED_ROUTES = [
+  '/operators',
+  '/organization',
+  '/tasks',
+  '/events',
+  '/settings',
+  '/security',
+
+  '/ai',
+  '/analytics/live-map',
+  '/health',
+  '/owner',
+  '/finance/ledger',
+  '/compliance',
+  '/logs',
+  '/api-center',
+];
+
 export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
   owner: {
     name: 'Owner',
@@ -17,40 +35,61 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
     name: 'Operator',
     allowedRoutes: [
       '/dashboard',
-      '/super-admins',
-      '/super-admins/request',
       '/admins',
+      '/admins/add',
+      '/admins/create',
       '/admins/request',
+      '/ads',
       '/agencies',
+      '/agencies/add',
+      '/agencies/create',
       '/agencies/request',
-      '/hosts',
-      '/hosts/request',
-      '/host-management',
-      '/sellers',
-      '/sellers/request',
-      '/customer-support',
-      '/customer-support/request',
-      '/users',
-      '/verification/requests',
-      '/kyc',
-      '/reports',
-      '/help-support',
-      '/calls',
-      '/rooms',
-      '/recharges/user',
-      '/recharges/seller',
-      '/messages/system',
-      '/messages/activity',
-      '/events',
-      '/security/audit',
       '/banners',
+      '/bans/device',
+      '/bans/id',
+      '/calls',
+      '/cms',
+      '/customer-support',
+      '/customer-support/add',
+      '/customer-support/create',
+      '/customer-support/list',
+      '/customer-support/request',
+      '/deletions',
+      '/employees',
+      '/help-support',
       '/host-levels',
+      '/host-management',
+      '/hosts',
+      '/hosts/add',
+      '/hosts/create',
+      '/hosts/request',
+      '/kyc',
+      '/messages/activity',
+      '/messages/system',
+      '/moderation',
+
+
+      '/profile',
+      '/recharges/seller',
+      '/recharges/user',
+      '/referrals',
+      '/referrals/links',
+      '/reports',
+      '/rooms',
+      '/sellers',
+      '/sellers/add',
+      '/sellers/create',
+      '/sellers/request',
+      '/super-admins',
+      '/super-admins/create',
+      '/super-admins/request',
+      '/users',
+      '/users/add',
+      '/users/new',
+      '/verification',
+      '/verification/requests',
       '/vip',
       '/withdrawals',
-      '/bans/id',
-      '/bans/device',
-      '/deletions',
-      '/profile',
     ],
     allowedModules: [
       'Dashboard',
@@ -67,27 +106,30 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
       'Rooms',
       'WalletMonitoring',
       'Notifications',
-      'AuditView',
       'Banner',
       'HostLevels',
       'VIP',
       'Withdrawals',
       'Moderation',
+      'Recharge',
+      'Finance',
+      'CMS',
+      'Ads',
+      'Employees',
+      'HelpSupport',
+      'Deletions',
       'Profile',
     ],
     allowedActions: [
-      'view',
-      'edit',
-      'approve',
-      'reject',
-      'moderate',
-      'idBan',
-      'deviceBan',
-      'changeLevel',
-      'export',
+      'view', 'create', 'edit', 'update', 'delete',
+      'approve', 'reject', 'block', 'unblock', 'moderate',
+      'idBan', 'deviceBan', 'changeLevel', 'export', 'import',
+      'recharge', 'search', 'reply', 'manage',
+      'View', 'Create', 'Edit', 'Update', 'Delete',
+      'Approve', 'Reject', 'Block', 'Unblock', 'Moderate',
+      'Export', 'Import', 'Recharge', 'Search', 'Reply', 'Manage',
     ],
   },
-
   superAdmin: {
     name: 'Super Admin',
     allowedRoutes: [
@@ -293,6 +335,12 @@ export const isRouteAllowed = (role: string, route: string): boolean => {
   if (roleDef.allowedRoutes.includes('*')) return true;
 
   const path = route.split('?')[0].split('#')[0];
+
+  if (role === 'operator' && OPERATOR_DENIED_ROUTES.some(
+    (denied) => path === denied || path.startsWith(`${denied}/`)
+  )) {
+    return false;
+  }
 
   return roleDef.allowedRoutes.some((allowed) => {
     if (allowed === path) return true;

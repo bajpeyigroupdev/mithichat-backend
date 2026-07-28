@@ -16,8 +16,8 @@ const userSchema = new Schema<UserInterface>(
   {
     userId: { type: Number, required: true, unique: true },
     name: { type: String, trim: true },
-    email: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
-    phoneNumber: { type: String, trim: true, unique: true, sparse: true },
+    email: { type: String, trim: true, lowercase: true },
+    phoneNumber: { type: String, trim: true },
     gender: {
       type: String,
       enum: Object.values(Gender),
@@ -134,5 +134,29 @@ userSchema.index({ superAdminId: 1 }, { sparse: true });
 userSchema.index({ adminId: 1 }, { sparse: true });
 userSchema.index({ agencyId: 1 }, { sparse: true });
 userSchema.index({ createdAt: -1 });
+userSchema.index(
+  { email: 1, role: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { email: { $type: 'string' } },
+    name: 'email_role_unique',
+  }
+);
+userSchema.index(
+  { phoneNumber: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { phoneNumber: { $type: 'string' }, role: 'user' },
+    name: 'phone_user_unique',
+  }
+);
+userSchema.index(
+  { phoneNumber: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { phoneNumber: { $type: 'string' }, role: 'host' },
+    name: 'phone_host_unique',
+  }
+);
 
 export const User = mongoose.model<UserInterface>("User", userSchema);

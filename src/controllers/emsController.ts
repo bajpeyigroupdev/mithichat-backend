@@ -15,6 +15,7 @@ import { generateUniqueId } from '../utils/generator';
 import { ROLE_PERMISSION_MATRIX } from '../configs/rbacMatrix';
 import { PAGE_PERMISSION_REGISTRY } from '../configs/permissionRegistry';
 import { HierarchyScopeService } from '../utils/hierarchyScope';
+import { permanentlyDeleteUserRecord } from '../services/permanentUserDeletion.service';
 
 const canManagePermissionTarget = async (
   actor: NonNullable<AuthRequest['user']>,
@@ -801,6 +802,117 @@ export const getRequestById = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const deleteRequest = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const actor = req.user!;
+    const allowedRoles = ['owner', 'operator', 'superAdmin', 'admin', 'agency'];
+
+    if (!allowedRoles.includes(actor.role)) {
+      return sendResponse(res, 403, false, 'You do not have permission to permanently delete requests.');
+    }
+
+    const requestObj = await RequestModel.findById(id).lean();
+    if (!requestObj) {
+      return sendResponse(res, 404, false, 'Request not found.');
+    }
+
+    const data = (requestObj.data || {}) as Record<string, any>;
+    const email = String(data.email || data.emailId || data.officialEmail || '').trim().toLowerCase();
+    const phone = String(data.mobile || data.phoneNumber || data.phone || data.mobileNo || '').trim();
+    const applicationIds = [
+      data.applicationId,
+      data.meethiChatId,
+      data.mithiChatId,
+      data.meethiId,
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+
+    const exactInsensitive = (value: string) =>
+      new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+
+    const rawRole = String(requestObj.role || requestObj.requestType || '').toLowerCase();
+    const targetUserRole = rawRole.includes('super') ? 'superAdmin'
+      : rawRole.includes('customer') || rawRole.includes('support') ? 'customerSupport'
+      : rawRole.includes('seller') || rawRole.includes('coin') ? 'coinSeller'
+      : rawRole.includes('operator') ? 'operator'
+      : rawRole.includes('agency') ? 'agency'
+      : rawRole.includes('admin') ? 'admin'
+      : rawRole.includes('host') ? 'host'
+      : rawRole.includes('user') ? 'user'
+      : '';
+    const targetRecruitmentRole = targetUserRole === 'superAdmin' ? 'super-admin'
+      : targetUserRole === 'customerSupport' ? 'customer-service'
+      : targetUserRole === 'coinSeller' ? 'seller'
+      : targetUserRole;
+
+    const recruitmentIdentity: any[] = [];
+    if (applicationIds.length) recruitmentIdentity.push({ applicationId: { $in: applicationIds } });
+    if (email && targetRecruitmentRole) {
+      recruitmentIdentity.push({ 'applicant.email': exactInsensitive(email), role: targetRecruitmentRole });
+    }
+    if (phone && targetRecruitmentRole) {
+      recruitmentIdentity.push({ 'applicant.phone': phone, role: targetRecruitmentRole });
+    }
+
+    const linkedApplications = recruitmentIdentity.length
+      ? await RecruitmentApplication.find({ $or: recruitmentIdentity }).select('_id applicationId').lean()
+      : [];
+    const allApplicationIds = Array.from(new Set([
+      ...applicationIds,
+      ...linkedApplications.map((application) => application.applicationId),
+    ]));
+
+    const userIdentity: any[] = [{ emsRequestId: requestObj._id }];
+    if (requestObj.generatedUserId || requestObj.userId) {
+      userIdentity.push({ userId: requestObj.generatedUserId || requestObj.userId });
+    }
+
+    const usersToDelete = await User.find({ $or: userIdentity });
+    const deletedUsers = [];
+    for (const linkedUser of usersToDelete) {
+      deletedUsers.push(await permanentlyDeleteUserRecord(linkedUser));
+    }
+
+    const requestIdentity: any[] = [{ _id: requestObj._id }];
+    if (allApplicationIds.length) {
+      requestIdentity.push(
+        { 'data.applicationId': { $in: allApplicationIds } },
+        { 'data.meethiChatId': { $in: allApplicationIds } },
+        { 'data.mithiChatId': { $in: allApplicationIds } },
+        { 'data.meethiId': { $in: allApplicationIds } }
+      );
+    }
+
+    const matchingRequests = await RequestModel.find({ $or: requestIdentity }).select('_id').lean();
+    const requestIds = matchingRequests.map((request) => String(request._id));
+
+    const [deletedRequests, deletedApplications, deletedAuditLogs] = await Promise.all([
+      RequestModel.deleteMany({ _id: { $in: matchingRequests.map((request) => request._id) } }),
+      linkedApplications.length
+        ? RecruitmentApplication.deleteMany({ _id: { $in: linkedApplications.map((application) => application._id) } })
+        : Promise.resolve({ deletedCount: 0 }),
+      AuditLog.deleteMany({ target: { $in: requestIds } }),
+    ]);
+
+    return sendResponse(
+      res,
+      200,
+      true,
+      'Request and all matching linked data permanently deleted.',
+      {
+        deletedRequests: deletedRequests.deletedCount,
+        deletedApplications: deletedApplications.deletedCount,
+        deletedUsers: deletedUsers.length,
+        deletedAuditLogs: deletedAuditLogs.deletedCount,
+      }
+    );
+  } catch (error: any) {
+    console.error('Permanent request deletion failed:', error);
+    return sendResponse(res, 500, false, error.message || 'Unable to permanently delete request.');
+  }
+};
 export const updateRequestStatus = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -880,6 +992,11 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
 
     if (password && password.trim() !== '') {
       requestObj.passwordBeforeApproval = password.trim();
+    }
+
+    const targetRequestRole = String(requestObj.role || requestObj.requestType || '').toLowerCase();
+    if (actor.role === 'operator' && targetRequestRole.includes('operator')) {
+      return sendResponse(res, 403, false, 'Operators cannot approve or create another Operator account.');
     }
 
     if (requestObj.status === RequestStatus.APPROVED) {

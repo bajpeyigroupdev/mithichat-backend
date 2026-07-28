@@ -12,6 +12,7 @@ import {
   createRequest,
   listRequests,
   getRequestById,
+  deleteRequest,
   updateRequestStatus,
   updateRequestPassword,
   approveRequest,
@@ -65,6 +66,7 @@ router.post('/workflows', checkPermission('menus', 'Settings'), updateWorkflow);
 router.post('/requests', createRequest);
 router.get('/requests', listRequests);
 router.get('/requests/:id', getRequestById);
+router.delete('/requests/:id', deleteRequest);
 router.patch('/requests/:id/status', updateRequestStatus);
 router.patch('/requests/:id/password', updateRequestPassword);
 router.post('/requests/:id/approve', approveRequest);

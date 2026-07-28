@@ -11,6 +11,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { Logger } from "../utils/logger";
 import { generateSecureHash, verifySecureHash } from "../utils/passwordHelper";
 import { sendPhoneOtp, verifyPhoneOtp } from "../utils/smsOtp";
+import { APP_ACCOUNT_ROLES } from "../utils/accountScope";
 
 // ==================== SEND PHONE OTP ====================
 export const sendOtpToPhone = async (req: Request, res: Response) => {
@@ -58,7 +59,7 @@ export const resetPassword = async (req: Request, res: Response) => {
       return sendResponse(res, 400, false, "Phone number and new password are required");
     }
 
-    const user = await User.findOne({ phoneNumber, isDeleted: false });
+    const user = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
     if (!user) {
       return sendResponse(res, 404, false, "User not found");
     }
@@ -109,6 +110,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
         { phoneNumber },
         { phoneNumber: { $regex: phoneRegex } },
       ],
+      role: { $in: APP_ACCOUNT_ROLES },
       $and: [
         { $or: [{ isDeleted: false }, { isDeleted: { $exists: false } }] }
       ]
@@ -160,7 +162,7 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
     // }
 
     // 🔹 Step 2: Check if phone number already exists
-    const existingUser = await User.findOne({ phoneNumber: phone, isDeleted: false }).lean();
+    const existingUser = await User.findOne({ phoneNumber: phone, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false }).lean();
 
     if (existingUser) {
       if (existingUser.isBlocked) {
@@ -188,7 +190,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "Phone number, password and gender are required");
     }
 
-    const duplicatePhoneUser = await User.findOne({ phoneNumber, isDeleted: false });
+    const duplicatePhoneUser = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
     if (duplicatePhoneUser) {
       return sendResponse(res, 400, false, "Phone number already registered");
     }
@@ -274,7 +276,7 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
     const { phoneNumber, userId, password, deviceId, userFrom } = req.body;
 
     const query = phoneNumber ? { phoneNumber } : { userId };
-    const user = await User.findOne({ ...query, isDeleted: false }).select("+password");
+    const user = await User.findOne({ ...query, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false }).select("+password");
 
     if (!user) {
       return sendResponse(res, 400, false, "Account not found, please sign up.");
@@ -404,7 +406,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
     };
 
     // 1️⃣ Check if user exists
-    let user = await User.findOne({ googleId: googleUserInfo.googleId, isDeleted: false });
+    let user = await User.findOne({ googleId: googleUserInfo.googleId, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
 
     if (user) {
       // Existing user → login
@@ -436,7 +438,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
     }
 
     // Check duplicate email
-    const existingEmailUser = await User.findOne({ email: googleUserInfo.email, isDeleted: false });
+    const existingEmailUser = await User.findOne({ email: googleUserInfo.email, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
     if (existingEmailUser) {
       if (!payload.email_verified) {
         return sendResponse(res, 403, false, "Google email must be verified");
@@ -565,7 +567,7 @@ export const linkAccount = async (req: AuthRequest, res: Response) => {
       if (!payload) return sendResponse(res, 400, false, "Invalid Google credentials");
 
       // Check if another user is using this google account
-      const existingGoogle = await User.findOne({ googleId: payload.sub, isDeleted: false });
+      const existingGoogle = await User.findOne({ googleId: payload.sub, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
       if (existingGoogle && existingGoogle.userId !== user.userId) {
         return sendResponse(res, 409, false, "This Google account is already linked to another user");
       }
@@ -586,7 +588,7 @@ export const linkAccount = async (req: AuthRequest, res: Response) => {
       }
 
       // Check if another user is using this phone number
-      const existingPhone = await User.findOne({ phoneNumber, isDeleted: false });
+      const existingPhone = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
       if (existingPhone && existingPhone.userId !== user.userId) {
         return sendResponse(res, 409, false, "This Phone number is already linked to another user");
       }

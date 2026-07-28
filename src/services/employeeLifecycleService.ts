@@ -4,6 +4,7 @@ import { RecruitmentApplication } from '../models/recruitmentApplication.model';
 import { generateSecureHash } from '../utils/passwordHelper';
 import { generateUniqueId } from '../utils/generator';
 import { Logger } from '../utils/logger';
+import { PANEL_ACCOUNT_ROLES } from '../utils/accountScope';
 
 export async function automateEmployeeCreationOnApproval(applicationId: string) {
     try {
@@ -16,7 +17,10 @@ export async function automateEmployeeCreationOnApproval(applicationId: string) 
         }
 
         // Check if user account already exists by email
-        let user = await User.findOne({ email: app.applicant.email.toLowerCase() });
+        let user = await User.findOne({
+            email: app.applicant.email.toLowerCase(),
+            role: { $in: PANEL_ACCOUNT_ROLES },
+        });
 
         if (!user) {
             const newUserId = await generateUniqueId();
