@@ -3,104 +3,131 @@ import { config } from "../configs/envConfig";
 import { generateOtp } from "./otp";
 import PhoneOtpModel from "../models/phoneOtp.model";
 
-/**
- * Sends an OTP SMS to the given phone number via Fast2SMS.
- * Strips the country code if present (Fast2SMS accepts 10-digit Indian numbers).
- */
-export const sendPhoneOtp = async (phoneNumber: string): Promise<{ success: boolean; message: string }> => {
-  try {
-    const otp = generateOtp(6);
+const SMS_REQUEST_TIMEOUT_MS = 7000;
 
-    // Normalize phone: strip leading + and country code (e.g. +91 -> 10 digits)
-    const digits = phoneNumber.replace(/\D/g, "");
-    const mobile = digits.length > 10 ? digits.slice(-10) : digits;
+const normalizePhoneNumber = (phoneNumber: string): { storageKey: string; mobile: string } => {
+  const digits = String(phoneNumber || "").replace(/\D/g, "");
+  const mobile = digits.slice(-10);
 
-    // Save OTP to DB (upsert so resend overwrites old one)
-    await PhoneOtpModel.findOneAndDelete({ phoneNumber });
-    await PhoneOtpModel.create({ phoneNumber, otp });
-
-    // Send via Fast2SMS using standard OTP route
-    if (config.FAST2SMS_API_KEY) {
-      const response = await axios.get("https://www.fast2sms.com/dev/bulkV2", {
-        params: {
-          authorization: config.FAST2SMS_API_KEY,
-          route: "otp",
-          variables_values: otp,
-          flash: "0",
-          numbers: mobile,
-        },
-        timeout: 10000,
-      });
-
-      if (response.data?.return === true) {
-        console.log(`[sendPhoneOtp] Fast2SMS OTP sent to ${mobile}`);
-        return { success: true, message: "OTP sent successfully" };
-      }
-
-      console.error("[sendPhoneOtp] Fast2SMS error:", response.data);
-      // Fallback: if Fast2SMS route: "otp" failed, attempt route: "q"
-      const fallbackResponse = await axios.get("https://www.fast2sms.com/dev/bulkV2", {
-        params: {
-          authorization: config.FAST2SMS_API_KEY,
-          message: `Your MithiChat OTP is ${otp}. Valid for 10 minutes.`,
-          language: "english",
-          route: "q",
-          numbers: mobile,
-        },
-        timeout: 10000,
-      });
-
-      if (fallbackResponse.data?.return === true) {
-        return { success: true, message: "OTP sent successfully" };
-      }
-    }
-
-    console.warn(`[sendPhoneOtp] SMS API key missing or failed. Generated OTP for ${phoneNumber}: ${otp}`);
-    return { success: true, message: "OTP sent successfully" };
-  } catch (error: any) {
-    console.error("[sendPhoneOtp] Exception:", error?.message);
-    return { success: false, message: error?.message || "Unable to send OTP. Please try again." };
+  if (mobile.length !== 10) {
+    throw new Error("Please enter a valid 10-digit mobile number.");
   }
+
+  return {
+    storageKey: digits.length === 10 ? `+91${mobile}` : `+${digits}`,
+    mobile,
+  };
 };
 
 /**
- * Verifies the OTP for a given phone number.
+ * Sends one OTP through the server SMS provider. The app intentionally does
+ * not use Firebase phone auth, so Android never opens a reCAPTCHA browser and
+ * verification is not tied to a short-lived Firebase confirmation session.
  */
+export const sendPhoneOtp = async (
+  phoneNumber: string
+): Promise<{ success: boolean; message: string }> => {
+  let storageKey = "";
+  let otp = "";
+
+  try {
+    const normalized = normalizePhoneNumber(phoneNumber);
+    storageKey = normalized.storageKey;
+    otp = generateOtp(6);
+
+    if (!config.FAST2SMS_API_KEY) {
+      console.error("[sendPhoneOtp] FAST2SMS_API_KEY is not configured");
+      return { success: false, message: "SMS service is temporarily unavailable. Please try again later." };
+    }
+
+    // One atomic write avoids the delete/create gap that could produce a
+    // missing or stale OTP when two resend requests overlap.
+    await PhoneOtpModel.findOneAndUpdate(
+      { phoneNumber: storageKey },
+      {
+        $set: {
+          otp,
+          attempts: 0,
+          createdAt: new Date(),
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    const response = await axios.get("https://www.fast2sms.com/dev/bulkV2", {
+      params: {
+        authorization: config.FAST2SMS_API_KEY,
+        route: "otp",
+        variables_values: otp,
+        flash: "0",
+        numbers: normalized.mobile,
+      },
+      timeout: SMS_REQUEST_TIMEOUT_MS,
+    });
+
+    if (response.data?.return === true) {
+      console.log(`[sendPhoneOtp] SMS provider accepted OTP for ${normalized.mobile}`);
+      return { success: true, message: "OTP sent successfully" };
+    }
+
+    console.error("[sendPhoneOtp] SMS provider rejected request:", response.data);
+    await PhoneOtpModel.deleteOne({ phoneNumber: storageKey, otp });
+    return { success: false, message: "SMS provider could not send the OTP. Please try again." };
+  } catch (error: any) {
+    console.error("[sendPhoneOtp] Exception:", error?.message);
+
+    // Do not leave a verifiable OTP behind when the SMS was not accepted.
+    if (storageKey && otp) {
+      await PhoneOtpModel.deleteOne({ phoneNumber: storageKey, otp }).catch(() => undefined);
+    }
+
+    const timedOut = error?.code === "ECONNABORTED";
+    return {
+      success: false,
+      message: timedOut
+        ? "SMS service took too long to respond. Please try again."
+        : error?.message || "Unable to send OTP. Please try again.",
+    };
+  }
+};
+
+/** Verifies a single-use OTP. Records expire automatically after 10 minutes. */
 export const verifyPhoneOtp = async (
   phoneNumber: string,
   otp: string
 ): Promise<{ success: boolean; message: string }> => {
   try {
-    // Master / Test OTP support (123456) when SMS gateway is missing or in dev/testing
-    if (otp.trim() === "123456") {
-      await PhoneOtpModel.deleteOne({ phoneNumber });
+    const { storageKey } = normalizePhoneNumber(phoneNumber);
+    const enteredOtp = String(otp || "").trim();
+
+    // A test code must be explicitly configured and is never enabled in production.
+    const testCode = process.env.NODE_ENV !== "production" ? process.env.OTP_TEST_CODE : undefined;
+    if (testCode && enteredOtp === testCode) {
+      await PhoneOtpModel.deleteOne({ phoneNumber: storageKey });
       return { success: true, message: "OTP verified successfully" };
     }
 
-    const record = await PhoneOtpModel.findOne({ phoneNumber });
-
+    const record = await PhoneOtpModel.findOne({ phoneNumber: storageKey });
     if (!record) {
       return { success: false, message: "OTP expired or not found. Please request a new OTP." };
     }
 
-    // Increment attempt counter
     record.attempts += 1;
     await record.save();
 
     if (record.attempts > 5) {
-      await PhoneOtpModel.deleteOne({ phoneNumber });
+      await PhoneOtpModel.deleteOne({ phoneNumber: storageKey });
       return { success: false, message: "Too many attempts. Please request a new OTP." };
     }
 
-    if (record.otp !== otp.trim()) {
+    if (record.otp !== enteredOtp) {
       return { success: false, message: "Invalid OTP. Please try again." };
     }
 
-    // OTP matched — delete it so it can't be reused
-    await PhoneOtpModel.deleteOne({ phoneNumber });
+    await PhoneOtpModel.deleteOne({ phoneNumber: storageKey });
     return { success: true, message: "OTP verified successfully" };
   } catch (error: any) {
     console.error("[verifyPhoneOtp] Exception:", error?.message);
-    return { success: false, message: "Verification failed. Please try again." };
+    return { success: false, message: error?.message || "Verification failed. Please try again." };
   }
 };

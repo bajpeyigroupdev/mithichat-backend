@@ -15,6 +15,7 @@ import mongoose from "mongoose";
 import { generateOtp, sendCustomEmail, sendOtpForEmailVerification } from "../utils/otp";
 import OtpModel from "../models/otp.model";
 import { Logger } from "../utils/logger";
+import { verifyPhoneOtp } from "../utils/smsOtp";
 import { UserInterface } from "../interfaces/user.interface";
 import { getAllHostsService, invalidateHostCache } from "../services/user.service";
 import { getIO, getUserRoom } from "../sockets";
@@ -110,23 +111,32 @@ export const otpVerification = async (req: AuthRequest, res: Response) => {
 export const setVerifiedPhone = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
-    const { token } = req.body;
+    const { phoneNumber, otp } = req.body;
 
-    if (!userId || !token) {
-      return sendResponse(res, 400, false, "UserId and Firebase token are required");
+    if (!userId || !phoneNumber || !otp) {
+      return sendResponse(res, 400, false, "Phone number and OTP are required");
     }
 
-    // ✅ Verify the Firebase token sent from frontend after OTP verification
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    console.log("decoded : ", decodedToken)
-    if (!decodedToken?.phone_number) {
-      return sendResponse(res, 400, false, "Invalid Firebase token");
+    const verification = await verifyPhoneOtp(phoneNumber, otp);
+    if (!verification.success) {
+      return sendResponse(res, 400, false, verification.message);
     }
 
-    // ✅ Update only the verification status
+    const digits = String(phoneNumber).replace(/\D/g, "");
+    const lastTenDigits = digits.slice(-10);
+    const existingUser = await User.findOne({
+      userId: { $ne: Number(userId) },
+      isDeleted: false,
+      phoneNumber: { $regex: new RegExp(`${lastTenDigits}$`) },
+    }).lean();
+
+    if (existingUser) {
+      return sendResponse(res, 409, false, "This phone number is already linked to another account");
+    }
+
     const updatedUser = await User.findOneAndUpdate(
-      { userId: Number(userId) },
-      { phoneVerified: true },
+      { userId: Number(userId), isDeleted: false },
+      { phoneNumber: String(phoneNumber).trim(), phoneVerified: true },
       { new: true }
     );
 
@@ -136,12 +146,10 @@ export const setVerifiedPhone = async (req: AuthRequest, res: Response) => {
 
     return sendResponse(res, 200, true, "Phone verified successfully", updatedUser);
   } catch (error: any) {
-    console.log("error : ", error)
     await Logger("Set Verified Phone Error", error);
-    return sendResponse(res, 500, false, "Please try again later");
+    return sendResponse(res, 500, false, error.message || "Please try again later");
   }
 };
-
 // get users with role based access
 // work as expected
 export const getUsers = async (req: AuthRequest, res: Response) => {
