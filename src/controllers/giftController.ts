@@ -8,6 +8,7 @@ import { CoinsTransaction } from "../models/spentCoinModel";
 import { TransactionType, CallStatus } from "../constants/user";
 import mongoose from "mongoose";
 import { getIO, getUserRoom } from "../sockets";
+import { getCachedSettings } from "./settingsController";
 
 // Get All Gifts
 export const getAllGifts = async (req: AuthRequest, res: Response) => {
@@ -28,13 +29,18 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         const senderId = req.user?.id;
         let { giftId, receiverId, callId, count } = req.body;
         const qty = Math.max(1, parseInt(count as string) || 1);
+        const activeStatuses = [
+            CallStatus.ACCEPTED,
+            CallStatus.CONNECTING,
+            CallStatus.CONNECTED,
+        ];
+        let callTransaction = callId
+            ? await CoinsTransaction.findById(callId).session(session)
+            : null;
 
         // Fallback: If no receiverId, find it from the active transaction (callId)
-        if (!receiverId && callId) {
-            const transaction = await CoinsTransaction.findById(callId).session(session);
-            if (transaction) {
-                receiverId = transaction.hostId;
-            }
+        if (!receiverId && callTransaction) {
+            receiverId = callTransaction.hostId;
         }
 
         if (!receiverId) {
@@ -50,9 +56,44 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
 
         const sender = await User.findById(senderId).session(session);
         const totalCost = gift.cost * qty;
-        if (!sender || (sender.diamonds || 0) < totalCost) {
+        const settings = await getCachedSettings();
+        const giftCommissionPercent = Math.min(100, Math.max(0, Number(settings.giftCommissionPercent || 0)));
+        const hostEarning = Math.floor(totalCost * (100 - giftCommissionPercent) / 100);
+        const platformCommission = totalCost - hostEarning;
+        if (!sender) {
             await session.abortTransaction();
             return sendResponse(res, 400, false, "Insufficient coins");
+        }
+
+        if (
+            !callTransaction ||
+            String(callTransaction.userId) !== String(senderId) ||
+            !activeStatuses.includes(callTransaction.status)
+        ) {
+            callTransaction = await CoinsTransaction.findOne({
+                userId: senderId,
+                status: { $in: activeStatuses },
+            }).session(session);
+        }
+
+        const reservedDiamonds =
+            callTransaction &&
+            String(callTransaction.userId) === String(senderId) &&
+            activeStatuses.includes(callTransaction.status)
+                ? Number((callTransaction.meta as any)?.reservedDiamonds || 0)
+                : 0;
+        const spendableDiamonds = Math.max(0, (sender.diamonds || 0) - reservedDiamonds);
+
+        if (spendableDiamonds < totalCost) {
+            await session.abortTransaction();
+            return sendResponse(
+                res,
+                400,
+                false,
+                reservedDiamonds > 0
+                    ? "Call balance is reserved. Add diamonds or choose a smaller gift."
+                    : "Insufficient coins"
+            );
         }
 
         // Deduct from Sender
@@ -60,7 +101,9 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         await sender.save({ session });
 
         // Add to Receiver
-        await User.findByIdAndUpdate(receiverId, { $inc: { coins: totalCost } }, { session });
+        if (hostEarning > 0) {
+            await User.findByIdAndUpdate(receiverId, { $inc: { coins: hostEarning } }, { session });
+        }
 
         // Record Transaction
         await CoinsTransaction.create([{
@@ -68,9 +111,9 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             hostId: receiverId,
             type: TransactionType.GIFT_SENT || 'gift_sent', // Ensure enum has this or use string
             coinsSpent: totalCost,
-            hostEarning: totalCost, // Host gets full value? Or split? assuming full for now
+            hostEarning,
             status: CallStatus.ENDED, // Immediate transaction
-            meta: { giftId: gift._id, giftName: gift.name, callId, count: qty }
+            meta: { giftId: gift._id, giftName: gift.name, callId, count: qty, giftCommissionPercent, platformCommission }
         }], { session });
 
         await session.commitTransaction();
@@ -86,6 +129,8 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             mediaType: gift.mediaType || 'image',
             count: qty,
             totalCost,
+            hostEarning,
+            giftCommissionPercent,
         };
 
         // Both call participants receive the same real-time payload. This

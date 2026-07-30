@@ -32,6 +32,32 @@ export const startCallCleanupJob = () => {
             const fiveMinutesAgo = new Date(now.getTime() - 5 * 60000);
             const twoMinutesAgo = new Date(now.getTime() - 2 * 60000);
 
+            // Enforce purchased call duration after a server restart or if an
+            // in-memory deadline timer was lost. Billing uses the exact limit,
+            // not the few extra seconds until this cron tick.
+            const deadlineCalls = await CoinsTransaction.find({
+                status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
+                'meta.callDeadlineAt': { $lte: now },
+            });
+
+            for (const txn of deadlineCalls) {
+                const meta = (txn.meta || {}) as any;
+                const deadline = new Date(meta.callDeadlineAt);
+                const maxDurationSeconds = Math.max(1, Number(meta.maxMinutes || 1) * 60);
+                const result = await BillingService.processCallEnd(
+                    txn._id as any,
+                    deadline,
+                    0,
+                    maxDurationSeconds
+                );
+                if (result.success) {
+                    const io = getIO();
+                    const payload = result.data ?? { transactionId: String(txn._id) };
+                    io.to(getUserRoom(String(txn.userId))).emit('callEnded', payload);
+                    io.to(getUserRoom(String(txn.hostId))).emit('callEnded', payload);
+                    io.to(`call:${String(txn._id)}`).emit('callEnded', payload);
+                }
+            }
             // 1. Fix Stuck INITIATED/RINGING Calls
             const stuckPending = await CoinsTransaction.find({
                 status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },

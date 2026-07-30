@@ -219,8 +219,19 @@ router.post('/host-levels', verifyToken, createLevel);
 router.patch('/host-levels/:id', verifyToken, updateLevel);
 router.delete('/host-levels/:id', verifyToken, deleteLevel);
 
+// ============ Default Bio App Management ============
+import { getAdminDefaultBios, createDefaultBio, updateDefaultBio, deleteDefaultBio } from '../controllers/defaultBioController';
+router.get('/default-bios', verifyToken, getAdminDefaultBios);
+router.post('/default-bios', verifyToken, createDefaultBio);
+router.patch('/default-bios/:id', verifyToken, updateDefaultBio);
+router.delete('/default-bios/:id', verifyToken, deleteDefaultBio);
+
 // ============ Event/Offer Broadcast Route ============
-import { broadcastEvent } from '../controllers/managementController';
+import { broadcastEvent, getActivityEvents, createActivityEvent, publishActivityEvent, closeActivityEvent } from '../controllers/managementController';
+router.get('/events', verifyToken, getActivityEvents);
+router.post('/events', verifyToken, createActivityEvent);
+router.post('/events/:id/publish', verifyToken, publishActivityEvent);
+router.patch('/events/:id/close', verifyToken, closeActivityEvent);
 router.post('/events/broadcast', verifyToken, broadcastEvent);
 
 import { listOperators, getOperator, toggleOperatorBlock, deleteOperator, resetOperatorPassword } from '../controllers/operatorController';

@@ -18,6 +18,8 @@ router.get('/settings', async (req: Request, res: Response) => {
             privacyPolicy: settings.privacyPolicy,
             termsAndConditions: settings.termsAndConditions,
             coinPrice: settings.coinPrice,
+            withdrawalPlatformFeePercent: settings.withdrawalPlatformFeePercent,
+            callRatePerMinute: settings.callRatePerMinute,
         };
         return sendResponse(res, 200, true, 'Settings fetched successfully', publicSettings);
     } catch (error) {
@@ -58,7 +60,7 @@ router.get('/banners', async (_req: Request, res: Response) => {
                 { $or: [{ startDate: { $exists: false } }, { startDate: null }, { startDate: { $lte: now } }] },
                 { $or: [{ endDate: { $exists: false } }, { endDate: null }, { endDate: { $gte: startOfToday } }] }
             ]
-        }).select('_id title imageUrl linkUrl priority').sort({ priority: -1, createdAt: -1 }).lean();
+        }).select('_id title imageUrl linkUrl targetType targetScreen priority').sort({ priority: -1, createdAt: -1 }).lean();
         return sendResponse(res, 200, true, 'Active banners fetched successfully', banners);
     } catch (error) {
         await Logger('getPublicBanners', error);

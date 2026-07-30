@@ -112,7 +112,17 @@ const userSchema = new Schema<UserInterface>(
     pendingChildren: { type: Number, default: 0 },
     approvedChildren: { type: Number, default: 0 },
     totalNetworkUsers: { type: Number, default: 0 },
-    lastHierarchyUpdate: { type: Date }
+    lastHierarchyUpdate: { type: Date },
+    faceVerificationStatus: {
+      type: String, enum: ['NOT_SUBMITTED', 'PENDING', 'APPROVED', 'REJECTED'],
+      default: 'NOT_SUBMITTED', index: true,
+    },
+    kycVerificationStatus: {
+      type: String, enum: ['NOT_SUBMITTED', 'PENDING', 'APPROVED', 'REJECTED'],
+      default: 'NOT_SUBMITTED', index: true,
+    },
+    faceVerifiedAt: { type: Date },
+    kycVerifiedAt: { type: Date }
   },
   {
     timestamps: true,

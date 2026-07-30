@@ -14,7 +14,10 @@ export enum WithdrawalMethod {
 
 export interface IWithdrawal extends Document {
     userId: number;
-    amount: number; // In INR
+    amount: number; // Net payout in INR
+    grossAmount?: number;
+    platformFee?: number;
+    platformFeePercent?: number;
     coinsDeducted: number;
     method: WithdrawalMethod;
     details: {
@@ -35,6 +38,9 @@ const withdrawalSchema = new Schema<IWithdrawal>(
     {
         userId: { type: Number, required: true },
         amount: { type: Number, required: true },
+        grossAmount: { type: Number },
+        platformFee: { type: Number },
+        platformFeePercent: { type: Number, default: 5 },
         coinsDeducted: { type: Number, required: true },
         method: {
             type: String,

@@ -11,6 +11,7 @@ import Host from "../models/host.model";
 import { config } from "../configs/envConfig";
 import { Logger } from "../utils/logger";
 import { createNotification } from "./notificationController";
+import { VerificationSettings } from "../models/verification.model";
 
 export const applyHost = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -278,17 +279,26 @@ export const approveHost = async (req: AuthRequest, res: Response) => {
         // If meethiId was userId, then maybe meethiId is also userId? 
         // Request says "use meethiId and there is only role admin...".
         // I'll search by meethiId field on User.
-        const user = await User.findOneAndUpdate(
-            { meethiId: host.meethiId }, // Match by meethiId
-            { role: "host" }, // Just set role to host. Admin linkage is via meethiId.
-            { new: true }
-        );
+        const user = await User.findOne({ meethiId: host.meethiId });
 
         if (!user) {
             return sendResponse(res, 404, false, "User with this Meethi ID not found");
         }
 
-        // ✅ Approve the host
+        const verificationSettings = await VerificationSettings.findOne({ singletonKey: "default" }).lean();
+        const faceRequired = verificationSettings?.faceVerificationEnabled &&
+            verificationSettings.rolesRequiringFaceVerification?.includes("host");
+        const kycRequired = verificationSettings?.kycVerificationEnabled &&
+            verificationSettings.rolesRequiringKycVerification?.includes("host");
+        if ((faceRequired && user.faceVerificationStatus !== "APPROVED") ||
+            (kycRequired && user.kycVerificationStatus !== "APPROVED")) {
+            return sendResponse(res, 403, false, "Face and KYC verification are required before host approval.");
+        }
+
+        user.role = "host" as any;
+        await user.save();
+
+        // Approve the host only after verification requirements pass.
         host.isApproved = true;
         await host.save();
 

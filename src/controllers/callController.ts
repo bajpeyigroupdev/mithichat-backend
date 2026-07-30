@@ -11,7 +11,7 @@ import { AuthRequest } from '../middlewares/authorize.middleware';
 import sendResponse from '../utils/reponse';
 import { getIO, getUserRoom } from '../sockets';
 import { log } from 'console';
-import { config } from '../configs/envConfig';
+import { getAgoraCredentials, getCachedSettings } from './settingsController';
 import { updateBalance } from '../services/coins.service';
 import { convertToHMS } from '../utils/time.util';
 import { User } from '../models/user.model';
@@ -20,8 +20,6 @@ import { sendCallNotification, sendMissedCallNotification } from '../utils/pushN
 import { recalculateAndUpdateHostLevel } from '../services/user.service';
 import { CALL_DIAMONDS_PER_MINUTE } from '../configs/monetization';
 
-const APP_ID = config.AGORA_APP_ID!;
-const APP_CERTIFICATE = config.AGORA_APP_CERTIFICATE!;
 
 // export const startCall = async (req: AuthRequest, res: Response) => {
 //   try {
@@ -214,18 +212,33 @@ export const startCall = async (req: AuthRequest, res: Response) => {
   try {
     const { randomMatch = false } = req.body || {};
     let hostId = req.body?.hostId as string | undefined;
-    const { id: userId, diamonds, name, image: callerImage } = req.user || {};
+    const { id: userId, name, image: callerImage } = req.user || {};
 
-    console.log('🔵 START CALL REQUEST:', { userId, hostId, diamonds });
+    console.log('START CALL REQUEST:', { userId, hostId });
 
-    const CALL_RATE_PER_MINUTE = CALL_DIAMONDS_PER_MINUTE;
+    const [runtimeSettings, agoraCredentials] = await Promise.all([getCachedSettings(), getAgoraCredentials()]);
+    const CALL_RATE_PER_MINUTE = Math.max(1, Number(runtimeSettings.callRatePerMinute || CALL_DIAMONDS_PER_MINUTE));
+    const APP_ID = agoraCredentials.appId;
+    const APP_CERTIFICATE = agoraCredentials.certificate;
+    if (!APP_ID || !APP_CERTIFICATE) {
+      return sendResponse(res, 503, false, 'Calling service is not configured');
+    }
 
-    if (!userId || diamonds == null || (!hostId && !randomMatch)) {
+    if (!userId || (!hostId && !randomMatch)) {
       return sendResponse(res, 400, false, "Required call details are missing");
     }
-    if (diamonds < CALL_RATE_PER_MINUTE) {
+
+    // Re-read the wallet at call start. The auth middleware also loads the DB
+    // user, but this closes the balance-change window before host reservation.
+    const liveCaller = await User.findOne({
+      _id: userId,
+      diamonds: { $gte: CALL_RATE_PER_MINUTE },
+      isDeleted: { $ne: true },
+    }).select('diamonds').lean();
+    if (!liveCaller) {
       return sendResponse(res, 400, false, "Insufficient balance to start a call");
     }
+    const availableDiamonds = Number(liveCaller.diamonds || 0);
 
     let host: any = null;
     if (randomMatch) {
@@ -307,7 +320,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       reservedHostId = String(hostId);
     }
 
-    const maxMinutes = Math.floor(diamonds / CALL_RATE_PER_MINUTE);
+    const maxMinutes = Math.floor(availableDiamonds / CALL_RATE_PER_MINUTE);
     const expirationTimeInSeconds = maxMinutes * 60;
     const channelName = `call${Date.now()}${uuidv4().replace(/-/g, '').slice(0, 6)}`;
 
@@ -349,6 +362,10 @@ export const startCall = async (req: AuthRequest, res: Response) => {
         hostAgoraUid,
         callerToken,
         hostToken,
+        maxMinutes,
+        reservedDiamonds: maxMinutes * CALL_RATE_PER_MINUTE,
+        callDiamondsPerMinute: CALL_RATE_PER_MINUTE,
+        platformCommissionRate: Number(runtimeSettings.commissionRate || 0),
       },
     });
 
@@ -420,6 +437,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       channelName,
       maxMinutes,
       expiresInSeconds: expirationTimeInSeconds,
+      callRatePerMinute: CALL_RATE_PER_MINUTE,
       agora: {
         callerToken,
         callerAgoraUid,
@@ -448,7 +466,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
 // FIXED endCall function
 export const endCall = async (req: AuthRequest, res: Response) => {
   try {
-    const { transactionId } = req.body || {};
+    const { transactionId, durationSeconds } = req.body || {};
     const participantId = req.user?.id;
     if (!transactionId) {
       return sendResponse(res, 400, false, "Required field: transactionId");
@@ -462,7 +480,12 @@ export const endCall = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, "Call not found");
     }
 
-    const result = await BillingService.processCallEnd(transactionId);
+    const result = await BillingService.processCallEnd(
+      transactionId,
+      new Date(),
+      0,
+      durationSeconds
+    );
 
     if (result.success) {
       const payload = { transactionId };
@@ -1070,6 +1093,7 @@ export const getCallStatus = async (req: AuthRequest, res: Response) => {
 
     const meta = transaction.meta as any;
     const channelName = transaction.channelName || meta?.channelName;
+    const fallbackAgora = meta?.appId ? null : await getAgoraCredentials();
 
     console.log(`[CALL_STATUS_CHECK] Timestamp: ${new Date().toISOString()} | TxID: ${transactionId} | Status: ${transaction.status} | Channel: ${channelName}`);
 
@@ -1082,7 +1106,7 @@ export const getCallStatus = async (req: AuthRequest, res: Response) => {
         callerAgoraUid: meta?.callerAgoraUid,
         hostToken: meta?.hostToken,
         hostAgoraUid: meta?.hostAgoraUid,
-        appId: meta?.appId || APP_ID, // Use fallback APP_ID if not saved in meta
+        appId: meta?.appId || fallbackAgora?.appId || ''
       },
     });
   } catch (error: any) {

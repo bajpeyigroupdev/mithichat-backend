@@ -17,6 +17,8 @@ import path from "path";
 import "./utils/pushNotification";
 import { verifyToken } from "./middlewares/authorize.middleware";
 import { getSystemMessages } from "./controllers/notificationController";
+import verificationRoutes from "./routes/verificationRoutes";
+import adminVerificationRoutes from "./routes/adminVerificationRoutes";
 
 const app: Application = express();
 
@@ -141,6 +143,8 @@ app.use("/api/gift", giftRoutes);
 app.use("/api/help", helpRoutes);
 app.use("/api/upload", UploadRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/v1/verifications", verificationRoutes);
+app.use("/api/v1/admin/verifications", adminVerificationRoutes);
 app.use("/api/upi", upiRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/teamleader", publicRoutes);

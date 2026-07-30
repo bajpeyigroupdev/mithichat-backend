@@ -31,6 +31,9 @@ import { createReport } from "../controllers/reportsController";
 
 const router = express.Router();
 
+import { getActiveDefaultBios } from '../controllers/defaultBioController';
+router.get('/default-bios', verifyToken, getActiveDefaultBios);
+
 // set user name for Authorized User
 router.post("/set-username", verifyToken, setUserName)
 

@@ -6,6 +6,7 @@ import { AuthRequest } from "../middlewares/authorize.middleware";
 import { Query } from "mongoose";
 import { BlockedUser } from "../models/blockedUser.model";
 import { RechargeHistory } from "../models/RechargeHistory"; // Import Model
+import { DefaultBio } from '../models/defaultBio.model';
 import { Agency } from "../models/agency.model";
 import { CoinsTransaction } from "../models/spentCoinModel";
 import HostLevel from "../models/hostLevel.model";
@@ -15,7 +16,7 @@ import mongoose from "mongoose";
 import { generateOtp, sendCustomEmail, sendOtpForEmailVerification } from "../utils/otp";
 import OtpModel from "../models/otp.model";
 import { Logger } from "../utils/logger";
-import { verifyPhoneOtp } from "../utils/smsOtp";
+import { verifyFirebasePhoneToken } from "../utils/firebasePhoneVerification";
 import { UserInterface } from "../interfaces/user.interface";
 import { getAllHostsService, invalidateHostCache } from "../services/user.service";
 import { getIO, getUserRoom } from "../sockets";
@@ -111,15 +112,15 @@ export const otpVerification = async (req: AuthRequest, res: Response) => {
 export const setVerifiedPhone = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
-    const { phoneNumber, otp } = req.body;
+    const { phoneNumber, firebaseIdToken } = req.body;
 
-    if (!userId || !phoneNumber || !otp) {
-      return sendResponse(res, 400, false, "Phone number and OTP are required");
+    if (!userId || !phoneNumber || !firebaseIdToken) {
+      return sendResponse(res, 400, false, "Phone number and Firebase verification are required");
     }
 
-    const verification = await verifyPhoneOtp(phoneNumber, otp);
+    const verification = await verifyFirebasePhoneToken(firebaseIdToken, phoneNumber);
     if (!verification.success) {
-      return sendResponse(res, 400, false, verification.message);
+      return sendResponse(res, 401, false, verification.message);
     }
 
     const digits = String(phoneNumber).replace(/\D/g, "");
@@ -191,14 +192,14 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
       case "host":
         const host = await User.findOne({ userId })
-          .select("userId name email phoneNumber gender role bio image audio coins diamonds isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level")
+          .select("userId name email phoneNumber gender role bio image audio coins diamonds isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level faceVerificationStatus kycVerificationStatus")
           .lean();
         if (host && host.level === undefined) host.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user: host });
 
       case "user":
         const user = await User.findOne({ userId })
-          .select("userId name email gender phoneNumber role bio image coins diamonds isBlocked emailVerified phoneVerified language isUserName userName isActive level")
+          .select("userId name email gender phoneNumber role bio image coins diamonds isBlocked emailVerified phoneVerified language isUserName userName isActive level faceVerificationStatus kycVerificationStatus")
           .lean();
         if (user && user.level === undefined) user.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user });
@@ -309,7 +310,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 403, false, "Access Denied: Invalid requester role");
     }
 
-    // 🔍 Find the user to update
+    // ðŸ” Find the user to update
     const userToUpdate: UserInterface | null = await User.findOne({ userId: targetUserId, isDeleted: false });
     if (!userToUpdate) {
       return sendResponse(res, 404, false, "User not found");
@@ -319,10 +320,17 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 403, false, "User is blocked and cannot be updated");
     }
 
+    if (userToUpdate.role === 'host' && bio !== undefined) {
+      const approvedBio = await DefaultBio.exists({ text: String(bio).trim(), audience: 'host', isActive: true });
+      if (!approvedBio) {
+        return sendResponse(res, 400, false, 'Host bio must be selected from the approved App Management list');
+      }
+    }
+
     // Initialize with the specific interface for type safety
     const updatedFields: Partial<UserInterface> = {};
 
-    // 📞 Check for duplicate phoneNumber
+    // ðŸ“ž Check for duplicate phoneNumber
     if (phoneNumber && phoneNumber !== userToUpdate.phoneNumber) {
       const existingPhone = await User.findOne({ phoneNumber, isDeleted: false });
       if (existingPhone && existingPhone.userId !== userToUpdate.userId) { // Ensure it's not the same user
@@ -331,7 +339,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       updatedFields.phoneNumber = phoneNumber;
     }
 
-    // 🛡 Role-based permissions for what fields can be updated
+    // ðŸ›¡ Role-based permissions for what fields can be updated
     switch (requesterRole) {
       case "owner":
       case "operator":
@@ -394,7 +402,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 403, false, "Access Denied: Unknown role");
     }
 
-    // 💾 Apply and save updates
+    // ðŸ’¾ Apply and save updates
     if (Object.keys(updatedFields).length > 0) {
       Object.assign(userToUpdate, updatedFields);
       await userToUpdate.save();
@@ -1072,7 +1080,7 @@ export const toggleActiveStatus = async (req: AuthRequest, res: Response) => {
 
 
 
-// 🛑 Add user to personal blocklist
+// ðŸ›‘ Add user to personal blocklist
 export const blockContact = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
@@ -1101,7 +1109,7 @@ export const blockContact = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// 🟢 Remove user from personal blocklist
+// ðŸŸ¢ Remove user from personal blocklist
 export const unblockContact = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
@@ -1126,7 +1134,7 @@ export const unblockContact = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// 📋 Get blocked contacts list
+// ðŸ“‹ Get blocked contacts list
 export const getBlockedContacts = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
@@ -1148,7 +1156,7 @@ export const getBlockedContacts = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// 🔄 Exchange Coins to Diamonds
+// ðŸ”„ Exchange Coins to Diamonds
 const EXCHANGE_PACKAGES: Record<number, number> = {
   1000: 900,
   2000: 1800,
@@ -1205,7 +1213,7 @@ export const exchangeCoinsToDiamonds = async (req: AuthRequest, res: Response) =
       diamonds: updatedUser.diamonds
     });
   } catch (error: any) {
-    console.error("❌ Exchange coins backend error:", error);
+    console.error("âŒ Exchange coins backend error:", error);
     return sendResponse(res, 500, false, error.message);
   }
 };
@@ -1223,7 +1231,7 @@ export const getMyHelpRequests = async (req: AuthRequest, res: Response) => {
 
     return sendResponse(res, 200, true, "Help requests fetched successfully", helpRequests);
   } catch (error: any) {
-    console.error("❌ Get my help requests backend error:", error);
+    console.error("âŒ Get my help requests backend error:", error);
     return sendResponse(res, 500, false, error.message || "Failed to fetch help requests");
   }
 };
@@ -1260,7 +1268,7 @@ export const replyToHelpTicket = async (req: AuthRequest, res: Response) => {
     await ticket.save();
     return sendResponse(res, 200, true, "Reply submitted successfully", ticket);
   } catch (error: any) {
-    console.error("❌ Reply to ticket error:", error);
+    console.error("âŒ Reply to ticket error:", error);
     return sendResponse(res, 500, false, error.message || "Failed to submit reply");
   }
 };

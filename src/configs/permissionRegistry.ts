@@ -25,6 +25,14 @@ const COMMON_LIST_FIELDS = [
 const COMMON_ACTIONS = ["View", "Create", "Edit", "Approve", "Reject", "Block", "Delete", "Export"];
 const COMMON_BUTTONS = ["create", "view", "edit", "approve", "reject", "block", "delete", "permission"].map((key) => field(key));
 const COMMON_FILTERS = ["search", "status", "date", "role"].map((key) => field(key));
+const VERIFICATION_PERMISSIONS = [
+  "verification.face.view", "verification.face.review", "verification.face.approve",
+  "verification.face.reject", "verification.face.assign", "verification.kyc.view",
+  "verification.kyc.review", "verification.kyc.approve", "verification.kyc.reject",
+  "verification.kyc.assign", "verification.sensitive_data.view",
+  "verification.document.download", "verification.reports.view",
+  "verification.reports.export", "verification.settings.manage",
+];
 
 const definitions: Array<[string, string, string, string, string, string[]?]> = [
   ["/dashboard", "Dashboard", "Dashboard", "Core Console", "Dashboard"],
@@ -60,6 +68,10 @@ const definitions: Array<[string, string, string, string, string, string[]?]> = 
   ["/messages/system", "System Messages", "Notifications", "Security & Verification", "System Message"],
   ["/messages/activity", "Activity Messages", "Notifications", "Security & Verification", "Activity"],
   ["/kyc", "KYC Verification", "Notifications", "Security & Verification", "KYC", ["panNumber", "aadharNumber", "panImage", "aadharFrontImage", "aadharBackImage", "rejectionReason"]],
+  ["/verification/face", "Face Verification Requests", "Notifications", "Verification Management", "Face Verification"],
+  ["/verification/kyc", "KYC Verification Requests", "Notifications", "Verification Management", "KYC Verification"],
+  ["/verification/reports", "Verification Reports", "Reports", "Verification Management", "Reports"],
+  ["/verification/settings", "Verification Settings", "Settings", "Verification Management", "Settings"],
   ["/withdrawals", "Withdrawals", "Finance", "Finance & Recharges", "Withdrawal", ["amount", "coinsDeducted", "method", "details", "transactionId", "rejectionReason"]],
   ["/recharges/user", "User Recharge", "Finance", "Finance & Recharges", "Diamond Recharge"],
   ["/recharges/seller", "Seller Recharge", "Finance", "Finance & Recharges", "Diamond Recharge"],
@@ -93,7 +105,7 @@ export const PAGE_PERMISSION_REGISTRY: RegistrySeed[] = definitions.map(
       pageId: route.replace(/^\//, ""),
       name,
       category,
-      actions: COMMON_ACTIONS,
+      actions: route.startsWith("/verification") ? [...COMMON_ACTIONS, ...VERIFICATION_PERMISSIONS] : COMMON_ACTIONS,
       fields,
       columns: fields,
       buttons: COMMON_BUTTONS,

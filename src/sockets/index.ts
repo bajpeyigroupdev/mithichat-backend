@@ -190,7 +190,25 @@ const chatSocket = (io: Server) => {
                         txn.status = CallStatus.CONNECTED;
                         txn.callStart = txn.callStart || new Date();
                         txn.lastHeartbeat = new Date();
+                        const meta = (txn.meta || {}) as any;
+                        const maxMinutes = Math.max(0, Number(meta.maxMinutes || 0));
+                        const callDeadlineAt = maxMinutes > 0
+                            ? new Date(txn.callStart.getTime() + maxMinutes * 60_000)
+                            : null;
+                        txn.meta = {
+                            ...meta,
+                            ...(callDeadlineAt ? { callDeadlineAt } : {}),
+                        };
                         await txn.save();
+
+                        if (callDeadlineAt) {
+                            scheduleCallDeadline(
+                                io,
+                                String(txn._id),
+                                callDeadlineAt,
+                                maxMinutes * 60
+                            );
+                        }
 
                         console.log(`🚀 Call ${transactionId} is now CONNECTED. Emitting callConnected to room.`);
                         io.to(callRoom).emit("callConnected", {
@@ -263,10 +281,16 @@ const chatSocket = (io: Server) => {
             }
         });
 
-        socket.on("endCall", async ({ transactionId }: { transactionId: string }) => {
+        socket.on("endCall", async ({
+            transactionId,
+            durationSeconds,
+        }: {
+            transactionId: string;
+            durationSeconds?: number;
+        }) => {
             console.log(`🔴 Ending call (Socket): ${transactionId}`);
             if (!transactionId) return;
-            await handleEndCall(io, transactionId);
+            await handleEndCall(io, transactionId, durationSeconds);
         });
 
         // ------------------ Disconnect ------------------
@@ -314,12 +338,21 @@ const chatSocket = (io: Server) => {
 // -------------------- 🔑 Common Call End Logic --------------------
 // BUG-01 FIX: Fetch userId/hostId BEFORE processCallEnd commits the transaction,
 // so we are guaranteed to have the data for socket emission — no second DB read needed.
-const handleEndCall = async (io: Server, transactionId: string) => {
+const handleEndCall = async (
+    io: Server,
+    transactionId: string,
+    durationSeconds?: number
+) => {
     try {
         // Fetch participant IDs before billing so they are always available for routing
         const txRef = await CoinsTransaction.findById(transactionId).select('userId hostId').lean() as any;
 
-        const result = await BillingService.processCallEnd(transactionId);
+        const result = await BillingService.processCallEnd(
+            transactionId,
+            new Date(),
+            0,
+            durationSeconds
+        );
 
         if (result.success) {
             const payload = result.data ?? { transactionId };
@@ -339,6 +372,24 @@ const handleEndCall = async (io: Server, transactionId: string) => {
     }
 };
 
+const scheduleCallDeadline = (
+    io: Server,
+    transactionId: string,
+    deadline: Date,
+    maxDurationSeconds: number
+) => {
+    const delayMs = Math.max(0, deadline.getTime() - Date.now());
+    // Node timers above 2^31-1 ms fire immediately. Long-balance calls rely
+    // on the persistent cron fallback instead of an unsafe in-memory timer.
+    if (delayMs > 2_147_483_647) return;
+
+    const timer = setTimeout(() => {
+        handleEndCall(io, transactionId, maxDurationSeconds).catch(error => {
+            console.error(`Call deadline end failed for ${transactionId}:`, error);
+        });
+    }, delayMs);
+    timer.unref?.();
+};
 export default chatSocket;
 // Export onlineUsers to keep other files from crashing, but it is empty/useless now.
 export const onlineUsers = {}; 

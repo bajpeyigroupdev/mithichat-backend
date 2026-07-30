@@ -16,6 +16,7 @@ import AppError from '../utils/errorHandler';
 import dayjs from 'dayjs';
 import HelpRequest from '../models/help.model';
 import DeletionRequest from '../models/deletionRequest.model';
+import { ActivityEvent, ActivityEventAudience } from '../models/activityEvent.model';
 
 // Helper to log administrative actions
 const logAudit = async (req: Request, action: string, target: string, details: string) => {
@@ -160,47 +161,172 @@ export const kickUserFromRoom = async (req: Request, res: Response, next: NextFu
     }
 };
 
+const canManageActivityEvents = (req: Request) =>
+    ['owner', 'operator', 'superAdmin', 'admin'].includes(String((req as any).user?.role));
+
+const activityAudienceFilter = (audience: ActivityEventAudience) => {
+    const base: any = { isDeleted: false, isBlocked: { $ne: true }, role: { $in: ['user', 'host'] } };
+    if (audience === 'users') base.role = 'user';
+    if (audience === 'hosts') base.role = 'host';
+    if (audience === 'verified') {
+        base.faceVerificationStatus = 'APPROVED';
+        base.kycVerificationStatus = 'APPROVED';
+    }
+    return base;
+};
+
+const publishEventToAudience = async (event: any) => {
+    const users = await User.find(activityAudienceFilter(event.audience)).select('fcmToken _id').lean();
+    const eventData = {
+        type: 'event',
+        action: 'open_activity',
+        eventId: String(event._id),
+        rewardCoins: String(event.rewardCoins || 0),
+        startAt: event.startAt?.toISOString?.() || String(event.startAt),
+        endAt: event.endAt?.toISOString?.() || (event.endAt ? String(event.endAt) : ''),
+        imageUrl: event.imageUrl || '',
+        actionUrl: event.actionUrl || '',
+    };
+
+    if (users.length > 0) {
+        const { default: Notification } = await import('../models/notification.model');
+        await Notification.insertMany(users.map(user => ({
+            userId: user._id,
+            title: event.title,
+            message: event.description,
+            type: 'event',
+            data: eventData,
+        })), { ordered: false });
+        getIO().emit('notification:new', { refresh: true, type: 'event' });
+    }
+
+    const tokens = users.map(user => user.fcmToken).filter(Boolean) as string[];
+    if (tokens.length > 0) {
+        const { sendPushNotification } = await import('../utils/pushNotification');
+        for (let i = 0; i < tokens.length; i += 500) {
+            await sendPushNotification(tokens.slice(i, i + 500), {
+                title: event.title,
+                body: event.description,
+                data: eventData,
+            });
+        }
+    }
+
+    event.status = 'published';
+    event.publishedAt = new Date();
+    event.recipientCount = users.length;
+    await event.save();
+    return users.length;
+};
+
+export const getActivityEvents = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        if (!canManageActivityEvents(req)) return sendResponse(res, 403, false, 'Admin access required');
+        const events = await ActivityEvent.find()
+            .populate('createdBy', 'name userId role')
+            .sort({ createdAt: -1 })
+            .lean();
+        return sendResponse(res, 200, true, 'Activity events fetched successfully', events);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error fetching activity events', 500));
+    }
+};
+
+export const createActivityEvent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        if (!canManageActivityEvents(req)) return sendResponse(res, 403, false, 'Admin access required');
+        const {
+            title, description, audience = 'all', rewardCoins = 0,
+            imageUrl = '', actionUrl = '', startAt, endAt, publishNow = false,
+        } = req.body;
+        if (!title?.trim() || !description?.trim() || !startAt) {
+            return sendResponse(res, 400, false, 'Title, description and start date are required');
+        }
+        if (!['all', 'users', 'hosts', 'verified'].includes(audience)) {
+            return sendResponse(res, 400, false, 'Invalid event audience');
+        }
+        if (endAt && new Date(endAt) < new Date(startAt)) {
+            return sendResponse(res, 400, false, 'End date must be after start date');
+        }
+
+        const event = await ActivityEvent.create({
+            title: title.trim(),
+            description: description.trim(),
+            audience,
+            rewardCoins: Math.max(0, Number(rewardCoins) || 0),
+            imageUrl: imageUrl.trim(),
+            actionUrl: actionUrl.trim(),
+            startAt: new Date(startAt),
+            endAt: endAt ? new Date(endAt) : undefined,
+            createdBy: (req as any).user.id,
+        });
+        let recipients = 0;
+        if (publishNow) recipients = await publishEventToAudience(event);
+        await logAudit(req, publishNow ? 'CREATE_PUBLISH_EVENT' : 'CREATE_EVENT', String(event._id), event.title);
+        return sendResponse(res, 201, true, publishNow ? `Event published to ${recipients} users` : 'Event saved as draft', event);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error creating activity event', 500));
+    }
+};
+
+export const publishActivityEvent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        if (!canManageActivityEvents(req)) return sendResponse(res, 403, false, 'Admin access required');
+        const event = await ActivityEvent.findById(req.params.id);
+        if (!event) return sendResponse(res, 404, false, 'Event not found');
+        if (event.status === 'published') return sendResponse(res, 409, false, 'Event is already published');
+        if (event.status === 'closed') return sendResponse(res, 409, false, 'Closed event cannot be published');
+        const recipients = await publishEventToAudience(event);
+        await logAudit(req, 'PUBLISH_EVENT', String(event._id), `${event.title}; recipients=${recipients}`);
+        return sendResponse(res, 200, true, `Event published to ${recipients} users`, event);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error publishing activity event', 500));
+    }
+};
+
+export const closeActivityEvent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        if (!canManageActivityEvents(req)) return sendResponse(res, 403, false, 'Admin access required');
+        const event = await ActivityEvent.findById(req.params.id);
+        if (!event) return sendResponse(res, 404, false, 'Event not found');
+        event.status = 'closed';
+        event.closedAt = new Date();
+        await event.save();
+        await logAudit(req, 'CLOSE_EVENT', String(event._id), event.title);
+        return sendResponse(res, 200, true, 'Event closed successfully', event);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error closing activity event', 500));
+    }
+};
+
 export const broadcastEvent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const { title, body } = req.body;
-        if (!title || !body) {
-            return sendResponse(res, 400, false, 'Title and body are required for event broadcast');
+        if (!canManageActivityEvents(req)) return sendResponse(res, 403, false, 'Admin access required');
+        const {
+            title, body, description, audience = 'all', rewardCoins = 0,
+            imageUrl = '', actionUrl = '', startAt, endAt,
+        } = req.body;
+        const eventDescription = description || body;
+        if (!title?.trim() || !eventDescription?.trim()) {
+            return sendResponse(res, 400, false, 'Title and message are required for event broadcast');
         }
-
-        const users = await User.find({ isDeleted: false, fcmToken: { $ne: null } }).select('fcmToken _id');
-        const tokens = users.map(u => u.fcmToken).filter(Boolean) as string[];
-
-        // 1. Save generic notifications in DB for all these users
-        // Note: For 100k+ users this should be done via a background job, but keeping it simple for now
-        const notifications = users.map(user => ({
-            userId: user._id,
-            title,
-            message: body,
-            type: 'event',
-            data: { action: 'open_activity' },
-        }));
-        
-        if (notifications.length > 0) {
-            const { default: Notification } = await import('../models/notification.model');
-            await Notification.insertMany(notifications, { ordered: false }).catch(() => {});
+        if (!['all', 'users', 'hosts', 'verified'].includes(audience)) {
+            return sendResponse(res, 400, false, 'Invalid event audience');
         }
-
-        // 2. Send FCM Multicast
-        if (tokens.length > 0) {
-            const { sendPushNotification } = await import('../utils/pushNotification');
-            // send in chunks of 500 (firebase limit)
-            for (let i = 0; i < tokens.length; i += 500) {
-                const chunk = tokens.slice(i, i + 500);
-                await sendPushNotification(chunk, {
-                    title,
-                    body,
-                    data: { type: 'event', action: 'open_activity' }
-                });
-            }
-        }
-
-        await logAudit(req as any, 'BROADCAST_EVENT', 'ALL', `Broadcasted event: ${title}`);
-        return sendResponse(res, 200, true, 'Event broadcasted successfully');
+        const event = await ActivityEvent.create({
+            title: title.trim(),
+            description: eventDescription.trim(),
+            audience,
+            rewardCoins: Math.max(0, Number(rewardCoins) || 0),
+            imageUrl: imageUrl.trim(),
+            actionUrl: actionUrl.trim(),
+            startAt: startAt ? new Date(startAt) : new Date(),
+            endAt: endAt ? new Date(endAt) : undefined,
+            createdBy: (req as any).user.id,
+        });
+        const recipients = await publishEventToAudience(event);
+        await logAudit(req, 'BROADCAST_EVENT', String(event._id), `${event.title}; recipients=${recipients}`);
+        return sendResponse(res, 200, true, `Activity message sent to ${recipients} users`, event);
     } catch (error: any) {
         next(new AppError(error.message || 'Error broadcasting event', 500));
     }
@@ -232,6 +358,12 @@ export const muteUserInRoom = async (req: Request, res: Response, next: NextFunc
 };
 
 
+const BANNER_INTERNAL_SCREENS = new Set([
+    'Wallet', 'Recharge', 'Level', 'Frame', 'Withdrawal', 'Kyc', 'VerificationHub',
+    'HelpAndSupport', 'Notifications', 'SystemMessage', 'CallHistory', 'Earning',
+    'ExchangeCoins', 'HostApply', 'Setting', 'Profile',
+]);
+
 // ==================== BANNERS MANAGEMENT ====================
 
 export const getAllBanners = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -245,15 +377,23 @@ export const getAllBanners = async (req: Request, res: Response, next: NextFunct
 
 export const createBanner = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const { title, imageUrl, linkUrl, priority, startDate, endDate } = req.body;
+        const { title, imageUrl, linkUrl, targetType = linkUrl ? 'external' : 'none', targetScreen, priority, startDate, endDate } = req.body;
         if (!title || !imageUrl) {
             return sendResponse(res, 400, false, 'Title and imageUrl are required');
         }
 
+        if (targetType === 'internal' && !BANNER_INTERNAL_SCREENS.has(String(targetScreen))) {
+            return sendResponse(res, 400, false, 'Invalid internal app page');
+        }
+        if (targetType === 'external' && linkUrl && !/^https?:\/\//i.test(String(linkUrl))) {
+            return sendResponse(res, 400, false, 'External banner URL must start with http:// or https://');
+        }
         const banner = await Banner.create({
             title,
             imageUrl,
-            linkUrl: linkUrl || '',
+            linkUrl: targetType === 'external' ? (linkUrl || '') : '',
+            targetType,
+            targetScreen: targetType === 'internal' ? targetScreen : '',
             priority: priority ? parseInt(priority) : 0,
             startDate: startDate ? new Date(startDate) : undefined,
             endDate: endDate ? new Date(endDate) : undefined
@@ -284,7 +424,7 @@ export const deleteBanner = async (req: Request, res: Response, next: NextFuncti
 export const updateBannerPriority = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
-        const { title, imageUrl, linkUrl, priority, startDate, endDate, isActive } = req.body;
+        const { title, imageUrl, linkUrl, targetType, targetScreen, priority, startDate, endDate, isActive } = req.body;
 
         const banner = await Banner.findById(id);
         if (!banner) {
@@ -294,6 +434,14 @@ export const updateBannerPriority = async (req: Request, res: Response, next: Ne
         if (title !== undefined) banner.title = title;
         if (imageUrl !== undefined) banner.imageUrl = imageUrl;
         if (linkUrl !== undefined) banner.linkUrl = linkUrl;
+        if (targetType !== undefined) {
+            if (!['none', 'internal', 'external'].includes(targetType)) return sendResponse(res, 400, false, 'Invalid banner target type');
+            if (targetType === 'internal' && !BANNER_INTERNAL_SCREENS.has(String(targetScreen))) return sendResponse(res, 400, false, 'Invalid internal app page');
+            if (targetType === 'external' && linkUrl && !/^https?:\/\//i.test(String(linkUrl))) return sendResponse(res, 400, false, 'External banner URL must start with http:// or https://');
+            banner.targetType = targetType;
+            banner.targetScreen = targetType === 'internal' ? String(targetScreen) : '';
+            banner.linkUrl = targetType === 'external' ? String(linkUrl || '') : '';
+        }
         if (priority !== undefined) banner.priority = parseInt(priority);
         if (startDate !== undefined) banner.startDate = startDate ? new Date(startDate) : undefined;
         if (endDate !== undefined) banner.endDate = endDate ? new Date(endDate) : undefined;
@@ -528,7 +676,7 @@ export const getAllAgencies = async (req: Request, res: Response, next: NextFunc
 
         const query: any = {};
         // Data isolation: admin/agency only see their own sub-agencies
-        if (adminRole === 'admin' || adminRole === 'agency') {
+        if (adminRole === 'agency') {
             // Find agencies whose owner was referred by this admin
             const mySubUsers = await User.find({ referredBy: adminMongoId, isDeleted: false }).select('_id');
             const mySubIds = mySubUsers.map(u => u._id);
@@ -723,16 +871,23 @@ export const getHelpTickets = async (req: Request, res: Response, next: NextFunc
         }
 
         // Data isolation: admins only see tickets from their sub-users
-        if (adminRole === 'admin' || adminRole === 'agency') {
+        if (adminRole === 'agency') {
             const mySubUsers = await User.find({ referredBy: adminMongoId, isDeleted: false }).select('userId');
             const mySubUserIds = mySubUsers.map(u => u.userId);
             query.userId = { $in: mySubUserIds };
         }
 
-        const tickets = await HelpRequest.find(query)
-            .populate('userId', 'name email userId image role meethiId employeeCode')
-            .sort({ createdAt: -1 });
-        return sendResponse(res, 200, true, 'Help tickets fetched successfully', tickets);
+        const tickets = await HelpRequest.find(query).sort({ createdAt: -1 }).lean();
+        const userIds = [...new Set(tickets.map(ticket => Number(ticket.userId)).filter(Number.isFinite))];
+        const users = await User.find({ userId: { $in: userIds } })
+            .select('name email userId image role meethiId employeeCode')
+            .lean();
+        const usersById = new Map(users.map(user => [Number(user.userId), user]));
+        const enrichedTickets = tickets.map(ticket => ({
+            ...ticket,
+            user: usersById.get(Number(ticket.userId)) || null,
+        }));
+        return sendResponse(res, 200, true, 'Help tickets fetched successfully', enrichedTickets);
     } catch (error: any) {
         next(new AppError(error.message || 'Error fetching help tickets', 500));
     }

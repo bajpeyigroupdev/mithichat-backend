@@ -6,6 +6,7 @@ import { updateBalance } from './coins.service';
 import Conversation from '../models/conversation.model';
 import HostLevel from '../models/hostLevel.model';
 import { recalculateAndUpdateHostLevel } from './user.service';
+import { getCachedSettings } from '../controllers/settingsController';
 import {
     CALL_DIAMONDS_PER_MINUTE,
     HOST_LEVEL_COINS_PER_MINUTE,
@@ -22,7 +23,8 @@ export class BillingService {
     static async processCallEnd(
         transactionId: string | Types.ObjectId,
         callEndTime: Date = new Date(),
-        retryAttempt: number = 0
+        retryAttempt: number = 0,
+        reportedDurationSec?: number
     ): Promise<{
         success: boolean;
         data?: any;
@@ -84,11 +86,36 @@ export class BillingService {
             }
 
             // 4. Calculate Duration & Cost
-            const durationSec = Math.floor(
-                (callEndTime.getTime() - new Date(transaction.callStart).getTime()) / 1000
+            // Store the actual connected duration. Ceil avoids a connected sub-second
+            // call being recorded as zero seconds.
+            const serverDurationSec = Math.max(
+                1,
+                Math.ceil(
+                    (callEndTime.getTime() - new Date(transaction.callStart).getTime()) / 1000
+                )
             );
-
-            const CALL_RATE_PER_SECOND = CALL_DIAMONDS_PER_MINUTE / 60;
+            const maxPossibleDurationSec = Math.max(
+                1,
+                Math.ceil(
+                    (callEndTime.getTime() - new Date(transaction.createdAt).getTime()) / 1000
+                )
+            );
+            const normalizedReportedDuration = Number.isFinite(Number(reportedDurationSec))
+                ? Math.max(1, Math.floor(Number(reportedDurationSec)))
+                : 0;
+            const safeReportedDurationSec = Math.min(
+                normalizedReportedDuration,
+                maxPossibleDurationSec,
+                serverDurationSec + 20
+            );
+            // When the app reports its connected-call timer, use it as the
+            // authoritative duration after validation. Server receipt time can
+            // include HTTP/socket teardown delay after the visible timer stops.
+            const durationSec =
+                normalizedReportedDuration > 0
+                    ? safeReportedDurationSec
+                    : serverDurationSec;
+            const billedMinutes = Math.ceil(durationSec / 60);
 
             // ===== Level-based host earning =====
             // Recalculate and update host's current level, then find coinPerMinute from HostLevel config
@@ -103,15 +130,39 @@ export class BillingService {
             console.log(`📊 Host Lv.${hostLevel} → coinPerMinute: ${hostSharePerMinute}`);
             // ====================================
 
-            const coinsSpent = Math.round(durationSec * CALL_RATE_PER_SECOND);
+            // Caller pays per started minute, while host earning stays proportional
+            // to the exact connected seconds at the configured level rate.
+            const startMeta = transaction.meta as any;
+            const fallbackSettings = startMeta?.callDiamondsPerMinute ? null : await getCachedSettings();
+            const callDiamondsPerMinute = Math.max(1, Number(
+                startMeta?.callDiamondsPerMinute || fallbackSettings?.callRatePerMinute || CALL_DIAMONDS_PER_MINUTE
+            ));
+            const coinsSpent = billedMinutes * callDiamondsPerMinute;
             const hostEarning = Math.round(durationSec * HOST_SHARE_PER_SECOND);
 
             // 5. Update Transaction State
             transaction.callEnd = callEndTime;
+            if (normalizedReportedDuration > 0) {
+                transaction.callStart = new Date(
+                    callEndTime.getTime() - durationSec * 1000
+                );
+            }
             transaction.status = CallStatus.ENDED;
             transaction.duration = durationSec;
             transaction.coinsSpent = coinsSpent;
             transaction.hostEarning = hostEarning;
+            transaction.meta = {
+                ...(transaction.meta || {}),
+                billing: {
+                    hostLevel,
+                    hostCoinPerMinute: hostSharePerMinute,
+                    callDiamondsPerMinute,
+                    platformCommissionRate: Number(startMeta?.platformCommissionRate || fallbackSettings?.commissionRate || 0),
+                    billedMinutes,
+                    billingMode: 'started_minute',
+                    reportedDurationSec: normalizedReportedDuration || undefined,
+                },
+            };
 
             // 6. Deduct from User (Atomic Check)
             if (durationSec > 0 && coinsSpent > 0) {
@@ -141,19 +192,16 @@ export class BillingService {
                         // Update transaction to reflect actuals
                         transaction.coinsSpent = availableCoins;
 
-                        // Adjust Host Earning proportional to partial payment?
-                        const ratio = availableCoins / coinsSpent;
-                        transaction.hostEarning = Math.floor(hostEarning * ratio);
-
                         console.warn(`⚠️ Partial payment for Tx ${transactionId}: Required ${coinsSpent}, Took ${availableCoins}`);
                     } else {
                         // User is broke.
                         transaction.coinsSpent = 0;
-                        transaction.hostEarning = 0;
                     }
                 }
 
-                // Receiver earnings are always Coins, including partial payments.
+                // The host completed the connected call and must receive the configured
+                // level rate. A caller balance race (for example, an in-call gift) must
+                // not silently reduce the host's advertised coins/min payout.
                 if (transaction.hostEarning > 0) {
                     await User.findByIdAndUpdate(
                         transaction.hostId,
@@ -197,7 +245,12 @@ export class BillingService {
 
             if (isTransient && retryAttempt < 2) {
                 await new Promise(resolve => setTimeout(resolve, 80 * (retryAttempt + 1)));
-                return BillingService.processCallEnd(transactionId, callEndTime, retryAttempt + 1);
+                return BillingService.processCallEnd(
+                    transactionId,
+                    callEndTime,
+                    retryAttempt + 1,
+                    reportedDurationSec
+                );
             }
             console.error('Processing Call End Failed:', error);
             return {

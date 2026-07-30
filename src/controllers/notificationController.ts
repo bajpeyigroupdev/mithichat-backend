@@ -2,6 +2,7 @@ import { Response } from "express";
 import Notification from "../models/notification.model";
 import sendResponse from "../utils/reponse";
 import { AuthRequest } from "../middlewares/authorize.middleware";
+import { getIO, getUserRoom } from "../sockets";
 
 // Helper to create notification internally
 export const createNotification = async (
@@ -12,13 +13,22 @@ export const createNotification = async (
     data: Record<string, unknown> = {}
 ) => {
     try {
-        await Notification.create({
+        const notification = await Notification.create({
             userId,
             title,
             message,
             type,
             data,
         });
+        const unreadCount = await Notification.countDocuments({ userId, isRead: false });
+        try {
+            getIO().to(getUserRoom(String(userId))).emit("notification:new", {
+                notification,
+                unreadCount,
+            });
+        } catch (socketError) {
+            console.warn("Notification saved; live socket update deferred", socketError);
+        }
     } catch (error) {
         console.error("Failed to create notification:", error);
     }

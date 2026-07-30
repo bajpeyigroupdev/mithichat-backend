@@ -104,4 +104,8 @@ export interface UserInterface extends Document {
   deletedBy?: Types.ObjectId;
   deletedAt?: Date;
   deleteReason?: string;
+  faceVerificationStatus?: 'NOT_SUBMITTED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+  kycVerificationStatus?: 'NOT_SUBMITTED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+  faceVerifiedAt?: Date;
+  kycVerifiedAt?: Date;
 }

@@ -4,7 +4,7 @@ import { AuthRequest } from "../middlewares/authorize.middleware";
 import sendResponse from "../utils/reponse";
 import { Withdrawal, WithdrawalStatus, WithdrawalMethod } from "../models/withdrawal.model";
 import { User } from "../models/user.model";
-import { Kyc, KycStatus } from "../models/kyc.model";
+import { VerificationSettings } from "../models/verification.model";
 import { Logger } from "../utils/logger";
 import mongoose from "mongoose";
 import { createNotification } from "./notificationController";
@@ -12,8 +12,10 @@ import {
     MIN_WITHDRAWAL_COINS,
     MIN_WITHDRAWAL_INR,
     WITHDRAWAL_COINS_PER_INR,
+    WITHDRAWAL_PLATFORM_FEE_PERCENT,
 } from "../configs/monetization";
 import { HierarchyScopeService } from "../utils/hierarchyScope";
+import { getCachedSettings } from "./settingsController";
 
 const ADMIN_ROLES = new Set(["owner", "operator", "superAdmin", "admin", "agency"]);
 
@@ -26,6 +28,10 @@ export const requestWithdrawal = async (req: AuthRequest, res: Response) => {
         const { amount, method, details } = req.body; // amount in INR
 
         const requestedAmount = Number(amount);
+        const appSettings = await getCachedSettings();
+        const withdrawalPlatformFeePercent = Math.min(100, Math.max(0, Number(
+            appSettings.withdrawalPlatformFeePercent ?? WITHDRAWAL_PLATFORM_FEE_PERCENT
+        )));
         if (!Number.isFinite(requestedAmount) || requestedAmount < MIN_WITHDRAWAL_INR) {
             await session.abortTransaction();
             return sendResponse(res, 400, false, `Minimum withdrawal is ₹${MIN_WITHDRAWAL_INR} (${MIN_WITHDRAWAL_COINS} coins)`);
@@ -36,21 +42,29 @@ export const requestWithdrawal = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 400, false, "Invalid withdrawal method");
         }
 
-        // 1. Check KYC
-        const kyc = await Kyc.findOne({ userId });
-        if (!kyc || kyc.status !== KycStatus.APPROVED) {
-            await session.abortTransaction();
-            return sendResponse(res, 403, false, "KYC not verified. Please complete KYC first.");
-        }
-
-        // 2. Check Balance
+        // 1. Apply configurable manual verification gates.
         const user = await User.findOne({ userId }).session(session);
         if (!user) {
             await session.abortTransaction();
             return sendResponse(res, 404, false, "User not found");
         }
+        const verificationSettings = await VerificationSettings.findOne({ singletonKey: "default" }).lean();
+        const faceRequired = verificationSettings?.faceVerificationEnabled &&
+            verificationSettings.rolesRequiringFaceVerification?.includes(String(user.role));
+        const kycRequired = verificationSettings?.kycVerificationEnabled &&
+            verificationSettings.rolesRequiringKycVerification?.includes(String(user.role));
+        if ((faceRequired && user.faceVerificationStatus !== "APPROVED") ||
+            (kycRequired && user.kycVerificationStatus !== "APPROVED")) {
+            await session.abortTransaction();
+            return sendResponse(res, 403, false, "Face and KYC verification are required for this action.");
+        }
 
-        const coinsRequired = Math.ceil(requestedAmount * WITHDRAWAL_COINS_PER_INR);
+        // 2. Check Balance
+
+        const grossAmount = Math.round(requestedAmount * 100) / 100;
+        const platformFee = Math.round(grossAmount * withdrawalPlatformFeePercent) / 100;
+        const netAmount = Math.round((grossAmount - platformFee) * 100) / 100;
+        const coinsRequired = Math.ceil(grossAmount * WITHDRAWAL_COINS_PER_INR);
         const currentCoins = user.coins || 0;
 
         if (currentCoins < coinsRequired) {
@@ -65,7 +79,10 @@ export const requestWithdrawal = async (req: AuthRequest, res: Response) => {
         // 4. Create Request
         await Withdrawal.create([{
             userId,
-            amount: requestedAmount,
+            amount: netAmount,
+            grossAmount,
+            platformFee,
+            platformFeePercent: withdrawalPlatformFeePercent,
             coinsDeducted: coinsRequired,
             method,
             details,
@@ -73,7 +90,7 @@ export const requestWithdrawal = async (req: AuthRequest, res: Response) => {
         }], { session });
 
         await session.commitTransaction();
-        return sendResponse(res, 200, true, "Withdrawal request submitted successfully");
+        return sendResponse(res, 200, true, "Withdrawal request submitted successfully", { grossAmount, platformFee, platformFeePercent: withdrawalPlatformFeePercent, netAmount, coinsDeducted: coinsRequired });
 
     } catch (error: any) {
         await session.abortTransaction();

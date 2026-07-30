@@ -20,10 +20,25 @@ export interface ICoinsTransaction extends Document {
 
   // ✅ Meta object for tokens & UIDs
   meta?: {
-    callerToken: string;
-    callerAgoraUid: number;
-    hostToken: string;
-    hostAgoraUid: number;
+    channelName?: string;
+    appId?: string;
+    callerToken?: string;
+    callerAgoraUid?: number;
+    hostToken?: string;
+    hostAgoraUid?: number;
+    maxMinutes?: number;
+    reservedDiamonds?: number;
+    callDeadlineAt?: Date | string;
+    billing?: {
+      hostLevel: number;
+      hostCoinPerMinute: number;
+      callDiamondsPerMinute: number;
+      platformCommissionRate?: number;
+      billedMinutes?: number;
+      billingMode?: 'started_minute';
+      reportedDurationSec?: number;
+    };
+    [key: string]: unknown;
   };
 
 }

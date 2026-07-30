@@ -48,11 +48,12 @@ const helpRequestSchema = new Schema<IHelpRequest>(
     { timestamps: true }
 );
 
-// Auto-generate ticket number before save
-helpRequestSchema.pre('save', async function (next) {
+// Generate a collision-resistant, user-readable ticket number.
+helpRequestSchema.pre('save', function (next) {
     if (!this.ticketNumber) {
-        const count = await mongoose.model('HelpRequest').countDocuments();
-        this.ticketNumber = `TKT-${String(count + 1).padStart(5, '0')}`;
+        const time = Date.now().toString(36).toUpperCase();
+        const random = Math.random().toString(36).slice(2, 7).toUpperCase();
+        this.ticketNumber = `TKT-${time}-${random}`;
     }
     next();
 });

@@ -10,53 +10,21 @@ import { generateRandomName, generateToken, generateUniqueId } from "../utils/ge
 import { OAuth2Client } from 'google-auth-library';
 import { Logger } from "../utils/logger";
 import { generateSecureHash, verifySecureHash } from "../utils/passwordHelper";
-import { sendPhoneOtp, verifyPhoneOtp } from "../utils/smsOtp";
+import { verifyFirebasePhoneToken } from "../utils/firebasePhoneVerification";
 import { APP_ACCOUNT_ROLES } from "../utils/accountScope";
-
-// ==================== SEND PHONE OTP ====================
-export const sendOtpToPhone = async (req: Request, res: Response) => {
-  try {
-    const { phoneNumber } = req.body;
-    if (!phoneNumber) {
-      return sendResponse(res, 400, false, "Phone number is required");
-    }
-    const result = await sendPhoneOtp(phoneNumber);
-    if (!result.success) {
-      return sendResponse(res, 500, false, result.message);
-    }
-    return sendResponse(res, 200, true, result.message);
-  } catch (error: any) {
-    await Logger("sendOtpToPhone", error);
-    return sendResponse(res, 500, false, error.message || "Internal Server Error");
-  }
-};
-
-// ==================== VERIFY PHONE OTP ====================
-export const verifyOtpFromPhone = async (req: Request, res: Response) => {
-  try {
-    const { phoneNumber, otp } = req.body;
-    if (!phoneNumber || !otp) {
-      return sendResponse(res, 400, false, "Phone number and OTP are required");
-    }
-    const result = await verifyPhoneOtp(phoneNumber, otp);
-    if (!result.success) {
-      return sendResponse(res, 400, false, result.message);
-    }
-    return sendResponse(res, 200, true, result.message);
-  } catch (error: any) {
-    await Logger("verifyOtpFromPhone", error);
-    return sendResponse(res, 500, false, error.message || "Internal Server Error");
-  }
-};
-
 
 export const resetPassword = async (req: Request, res: Response) => {
 
   try {
-    const { phoneNumber, newPassword } = req.body;
+    const { phoneNumber, newPassword, firebaseIdToken } = req.body;
 
-    if (!phoneNumber || !newPassword) {
-      return sendResponse(res, 400, false, "Phone number and new password are required");
+    if (!phoneNumber || !newPassword || !firebaseIdToken) {
+      return sendResponse(res, 400, false, "Phone number, new password and Firebase verification are required");
+    }
+
+    const firebaseVerification = await verifyFirebasePhoneToken(firebaseIdToken, phoneNumber);
+    if (!firebaseVerification.success) {
+      return sendResponse(res, 401, false, firebaseVerification.message);
     }
 
     const user = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
@@ -126,13 +94,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
       return sendResponse(res, 403, false, "Your account is currently blocked. Please contact support.");
     }
 
-    // Phone found — send OTP for forgot password reset
-    const otpResult = await sendPhoneOtp(phoneNumber);
-    if (!otpResult.success) {
-      return sendResponse(res, 500, false, otpResult.message || "Failed to send OTP");
-    }
-
-    return sendResponse(res, 200, true, "Phone number verified. OTP sent successfully.");
+    return sendResponse(res, 200, true, "Phone number is eligible for Firebase verification.");
   } catch (error: any) {
     await Logger("forgotPassword", error);
     return sendResponse(res, 500, false, error.message || "Internal Server Error");
@@ -147,7 +109,7 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
     if (!phone) return sendResponse(res, 400, false, "Phone number is required.");
     if (!deviceId) return sendResponse(res, 400, false, "Device ID is required.");
 
-    // 🔹 Step 1: Check if this device already has an account
+    // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€šÃ‚Â¹ Step 1: Check if this device already has an account
     // const userByDevice = await User.findOne({
     //   $or: [
     //     { "device.createdDeviceId": deviceId },
@@ -161,7 +123,7 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
     //   return sendResponse(res, 403, false, "This device already has an account.");
     // }
 
-    // 🔹 Step 2: Check if phone number already exists
+    // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€šÃ‚Â¹ Step 2: Check if phone number already exists
     const existingUser = await User.findOne({ phoneNumber: phone, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false }).lean();
 
     if (existingUser) {
@@ -172,7 +134,7 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
       return sendResponse(res, 400, false, "Phone number already registered.");
     }
 
-    // 🔹 Step 3: New device + new phone → send OTP for registration
+    // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€šÃ‚Â¹ Step 3: New device + new phone ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ send OTP for registration
     return sendResponse(res, 200, true, "New device & phone. Send OTP for registration.");
   } catch (err) {
     await Logger("checkPhoneAvailability", err);
@@ -184,10 +146,15 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
 // ==================== REGISTER ====================
 export const userRegister = async (req: AuthRequest, res: Response) => {
   try {
-    const { phoneNumber, password, gender, deviceId, userFrom, language, country, age } = req.body;
+    const { phoneNumber, password, gender, deviceId, userFrom, language, country, age, firebaseIdToken } = req.body;
 
-    if (!phoneNumber || !password || !gender) {
-      return sendResponse(res, 400, false, "Phone number, password and gender are required");
+    if (!phoneNumber || !password || !gender || !firebaseIdToken) {
+      return sendResponse(res, 400, false, "Phone number, password, gender and Firebase verification are required");
+    }
+
+    const firebaseVerification = await verifyFirebasePhoneToken(firebaseIdToken, phoneNumber);
+    if (!firebaseVerification.success) {
+      return sendResponse(res, 401, false, firebaseVerification.message);
     }
 
     const duplicatePhoneUser = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
@@ -200,7 +167,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 400, false, "deviceId is required for app users");
       }
 
-      // ❌ Temporarily disabled per user request: one device can create multiple accounts
+      // ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ Temporarily disabled per user request: one device can create multiple accounts
       // const existingUser = await User.findOne({
       //   "device.createdDeviceId": deviceId,
       //   isDeleted: false,
@@ -210,7 +177,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       // }
     }
 
-    // ✅ Unique ID and defaults
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Unique ID and defaults
     const userId = await generateUniqueId();
     const name = await generateRandomName();
     const hashedPassword = await generateSecureHash(password);
@@ -249,14 +216,14 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
 
     await newUser.save();
 
-    // ✅ Generate tokens
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Generate tokens
     const accessToken = await generateToken(newUser.userId.toString(), "access");
     const refreshToken = await generateToken(newUser.userId.toString(), "refresh");
 
     newUser.refreshToken = refreshToken;
     await newUser.save();
 
-    // ✅ Response with tokens
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Response with tokens
     return sendResponse(res, 201, true, "User created successfully", {
       accessToken,
       refreshToken,
@@ -286,7 +253,7 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
       return sendResponse(res, 403, false, "You are blocked due to some reason.");
     }
 
-    // ✅ For app users: handle device logic
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ For app users: handle device logic
     if (userFrom === "app") {
       if (!deviceId) {
         return sendResponse(res, 400, false, "deviceId is required for app users.");
@@ -298,8 +265,8 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
         loggedInDeviceIds: [],
       };
 
-      // ❌ createdDeviceId never changes after signup
-      // ✅ Update current + loggedIn devices
+      // ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ createdDeviceId never changes after signup
+      // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Update current + loggedIn devices
       user.device.currentDeviceId = deviceId;
       if (!user.device.loggedInDeviceIds.includes(deviceId)) {
         user.device.loggedInDeviceIds.push(deviceId);
@@ -308,7 +275,7 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
       await user.save();
     }
 
-    // ✅ Password match
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Password match
     const isMatch = await verifySecureHash(password, user.password as string);
     if (!isMatch) {
       return sendResponse(res, 400, false, "Invalid credentials.");
@@ -359,7 +326,7 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
         return sendResponse(res, 400, false, "This device is not currently logged in.");
       }
 
-      // ✅ Remove only that device
+      // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Remove only that device
       user.device.loggedInDeviceIds = user.device.loggedInDeviceIds.filter(
         (id) => id !== deviceId
       );
@@ -371,7 +338,7 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
       await user.save();
     }
 
-    // ✅ Invalidate refresh token globally
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Invalidate refresh token globally
     user.refreshToken = "";
     await user.save();
 
@@ -405,11 +372,11 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       googleId: payload.sub,
     };
 
-    // 1️⃣ Check if user exists
+    // 1ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢Ãƒâ€ Ã¢â‚¬â„¢Ãƒâ€šÃ‚Â£ Check if user exists
     let user = await User.findOne({ googleId: googleUserInfo.googleId, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
 
     if (user) {
-      // Existing user → login
+      // Existing user ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ login
       if (userFrom === "app") {
         user.device = user.device || { createdDeviceId: "", currentDeviceId: "", loggedInDeviceIds: [] };
         if (!user.device.createdDeviceId) user.device.createdDeviceId = deviceId;
@@ -432,7 +399,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       });
     }
 
-    // 2️⃣ New user → require gender & language
+    // 2ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢Ãƒâ€ Ã¢â‚¬â„¢Ãƒâ€šÃ‚Â£ New user ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ require gender & language
     if (!gender || !Array.isArray(language) || language.length < 2 || !country?.name) {
       return sendResponse(res, 428, false, "Complete gender, country and 2 languages to create your account");
     }
