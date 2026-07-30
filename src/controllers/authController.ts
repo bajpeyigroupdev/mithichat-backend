@@ -167,7 +167,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 400, false, "deviceId is required for app users");
       }
 
-      // ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ Temporarily disabled per user request: one device can create multiple accounts
+      // ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚Â Ãƒâ€¦Ã¢â‚¬â„¢ Temporarily disabled per user request: one device can create multiple accounts
       // const existingUser = await User.findOne({
       //   "device.createdDeviceId": deviceId,
       //   isDeleted: false,
@@ -177,8 +177,11 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       // }
     }
 
-    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Unique ID and defaults
-    const userId = await generateUniqueId();
+    // ✅ Custom ID support: User/Admin can specify their own custom ID
+    const requestedUserId = req.body?.customUserId || req.body?.userId;
+    const userId = requestedUserId ? Number(requestedUserId) : await generateUniqueId();
+    const customMeethiId = req.body?.meethiId || req.body?.customId || String(userId);
+
     const name = await generateRandomName();
     const hashedPassword = await generateSecureHash(password);
     let image = "";
@@ -192,7 +195,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
         break;
       }
       default: {
-        image = ""
+        image = "";
       }
     }
     const newUser = new User({
@@ -200,6 +203,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       password: hashedPassword,
       gender,
       userId,
+      meethiId: customMeethiId,
       phoneVerified: true,
       name,
       image,
