@@ -14,10 +14,10 @@ import { verifyToken } from "../middlewares/authorize.middleware";
 
 const router = express.Router();
 
-router.post("/apply", verifyToken, applyHost);
+router.post("/apply", applyHost as any);
 router.get("/", verifyToken, getAppliedHosts);
 router.post("/send-form/:hostId", verifyToken, sendFormForHost);
-router.post("/submit-form", submitHostForm as any)
+router.post("/submit-form", submitHostForm as any);
 
 router.post("/:id", verifyToken, approveHost);
 router.get("/", verifyToken, getHosts as any);

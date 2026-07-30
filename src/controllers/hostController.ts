@@ -15,19 +15,11 @@ import { VerificationSettings } from "../models/verification.model";
 
 export const applyHost = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const { userId, role } = req.user || {};
-        if (!userId || !role) {
-            return sendResponse(res, 400, false, "User not authenticated");
-        }
+        const userId = req.user?.userId || req.body.userId || req.body.meethiChatId || await generateUniqueId();
+        const audioUrl = req.body.audio || req.body.voiceAudioUrl;
 
-        if (!["user"].includes(role)) {
-            return sendResponse(res, 400, false, "Invalid role. Only 'user' can apply.");
-        }
-
-        const { audio } = req.body; // Expecting Cloudinary URL
-
-        if (!audio) {
-            return sendResponse(res, 400, false, "Audio file URL is required.");
+        if (!audioUrl) {
+            return sendResponse(res, 400, false, "Voice recording audio URL is required.");
         }
 
         const hostId = await generateUniqueId();
@@ -36,7 +28,7 @@ export const applyHost = async (req: AuthRequest, res: Response, next: NextFunct
             query: req.body.query || null,
             hostId,
             userId,
-            audioURL: audio, // Direct URL
+            audioURL: audioUrl,
             isVerified: false,
         });
 
@@ -45,11 +37,7 @@ export const applyHost = async (req: AuthRequest, res: Response, next: NextFunct
 
     } catch (error: any) {
         Logger("applyHost", error);
-        // Cleanup if DB fails
-        if (req.body.audio) {
-            // await deleteImageFromCloudinary(req.body.audio); // Add this if you import it
-        }
-        return sendResponse(res, 500, false, error.message);
+        return sendResponse(res, 500, false, error?.message || "Internal server error");
     }
 };
 
