@@ -1,111 +1,90 @@
-import { Request, Response, NextFunction } from 'express';
-import { DefaultBio, DefaultBioSeedState } from '../models/defaultBio.model';
+import { Request, Response } from 'express';
+import { DefaultBio } from '../models/defaultBio.model';
 import sendResponse from '../utils/reponse';
-import AppError from '../utils/errorHandler';
+import { AuthRequest } from '../middlewares/authorize.middleware';
 
-const canManageDefaultBios = (req: Request) =>
-    ['owner', 'operator', 'superAdmin', 'admin'].includes(String((req as any).user?.role));
+// 1. Get All Default Bios (App Users & Admin)
+export const getDefaultBios = async (req: Request, res: Response) => {
+  try {
+    const { activeOnly } = req.query;
+    const filter: any = {};
 
-const initialBios = [
-    'Good vibes, sweet talks, and a little fun - say hello!',
-    'Your favorite conversation might be one call away.',
-    'Friendly, cheerful, and always ready for an interesting chat.',
-    'Let us turn an ordinary moment into a memorable conversation.',
-    'Come for the smile, stay for the conversation.',
-    'Positive energy, playful chats, and genuine connections.',
-    'Tell me your story - I am a great listener with a cheerful vibe.',
-    'Looking for a fun conversation? You are in the right place.',
-    'A warm hello can start something wonderful.',
-    'Let us laugh, talk, and make your day a little brighter.',
-];
-const ensureInitialBios = async () => {
-    await DefaultBio.updateMany({ audience: 'female_host' as any }, { $set: { audience: 'host' } });
-    const state = await DefaultBioSeedState.findOneAndUpdate(
-        { key: 'host_defaults_v2' },
-        { $setOnInsert: { initialized: false } },
-        { upsert: true, new: true },
-    );
-    if (state.initialized) return;
-    await DefaultBio.insertMany(initialBios.map((text, sortOrder) => ({
-        text, audience: 'host', isActive: true, sortOrder,
-    })), { ordered: false }).catch(() => undefined);
-    state.initialized = true;
-    await state.save();
-};
-export const getActiveDefaultBios = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-        await ensureInitialBios();
-        const bios = await DefaultBio.find({ audience: 'host', isActive: true })
-            .sort({ sortOrder: 1, createdAt: 1 })
-            .select('text sortOrder')
-            .lean();
-        return sendResponse(res, 200, true, 'Default bios fetched successfully', bios);
-    } catch (error: any) {
-        next(new AppError(error.message || 'Error fetching default bios', 500));
+    if (activeOnly === 'true' || activeOnly === undefined) {
+      filter.isActive = true;
     }
+
+    const bios = await DefaultBio.find(filter).sort({ sortOrder: 1, createdAt: -1 });
+    return sendResponse(res, 200, true, 'Default bios fetched successfully', bios);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error?.message || 'Server error fetching default bios');
+  }
 };
 
-export const getAdminDefaultBios = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-        if (!canManageDefaultBios(req)) return sendResponse(res, 403, false, 'Admin access required');
-        await ensureInitialBios();
-        const bios = await DefaultBio.find().sort({ sortOrder: 1, createdAt: 1 }).lean();
-        return sendResponse(res, 200, true, 'Default bios fetched successfully', bios);
-    } catch (error: any) {
-        next(new AppError(error.message || 'Error fetching default bios', 500));
+export const getActiveDefaultBios = getDefaultBios;
+export const getAdminDefaultBios = getDefaultBios;
+
+// 2. Create Default Bio (Admin)
+export const createDefaultBio = async (req: AuthRequest, res: Response) => {
+  try {
+    const { text, isActive, sortOrder } = req.body;
+
+    if (!text || !text.trim()) {
+      return sendResponse(res, 400, false, 'Default bio text is required');
     }
+
+    const existing = await DefaultBio.findOne({ text: text.trim() });
+    if (existing) {
+      return sendResponse(res, 400, false, 'A default bio with this text already exists');
+    }
+
+    const bio = new DefaultBio({
+      text: text.trim(),
+      isActive: isActive !== undefined ? isActive : true,
+      sortOrder: Number(sortOrder) || 0,
+      createdBy: req.user?.id,
+    });
+
+    await bio.save();
+    return sendResponse(res, 201, true, 'Default bio created successfully', bio);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error?.message || 'Server error creating default bio');
+  }
 };
 
-export const createDefaultBio = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-        if (!canManageDefaultBios(req)) return sendResponse(res, 403, false, 'Admin access required');
-        const currentCount = await DefaultBio.countDocuments({ audience: 'host' });
-        if (currentCount >= 10) return sendResponse(res, 400, false, 'Maximum 10 default host bios are allowed. Delete one before adding another.');
-        const text = String(req.body.text || '').trim();
-        if (!text) return sendResponse(res, 400, false, 'Bio text is required');
-        if (text.length > 100) return sendResponse(res, 400, false, 'Bio cannot exceed 100 characters');
-        const bio = await DefaultBio.create({
-            text,
-            audience: 'host',
-            isActive: req.body.isActive !== false,
-            sortOrder: Number(req.body.sortOrder) || 0,
-            createdBy: (req as any).user.id,
-        });
-        return sendResponse(res, 201, true, 'Default bio added successfully', bio);
-    } catch (error: any) {
-        if (error?.code === 11000) return sendResponse(res, 409, false, 'This bio already exists');
-        next(new AppError(error.message || 'Error adding default bio', 500));
+// 3. Update Default Bio (Admin)
+export const updateDefaultBio = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { text, isActive, sortOrder } = req.body;
+
+    const bio = await DefaultBio.findById(id);
+    if (!bio) {
+      return sendResponse(res, 404, false, 'Default bio not found');
     }
+
+    if (text) bio.text = text.trim();
+    if (isActive !== undefined) bio.isActive = Boolean(isActive);
+    if (sortOrder !== undefined) bio.sortOrder = Number(sortOrder);
+
+    await bio.save();
+    return sendResponse(res, 200, true, 'Default bio updated successfully', bio);
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error?.message || 'Server error updating default bio');
+  }
 };
 
-export const updateDefaultBio = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-        if (!canManageDefaultBios(req)) return sendResponse(res, 403, false, 'Admin access required');
-        const update: any = {};
-        if (req.body.text !== undefined) {
-            const text = String(req.body.text).trim();
-            if (!text) return sendResponse(res, 400, false, 'Bio text is required');
-            if (text.length > 100) return sendResponse(res, 400, false, 'Bio cannot exceed 100 characters');
-            update.text = text;
-        }
-        if (req.body.isActive !== undefined) update.isActive = Boolean(req.body.isActive);
-        if (req.body.sortOrder !== undefined) update.sortOrder = Number(req.body.sortOrder) || 0;
-        const bio = await DefaultBio.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true });
-        if (!bio) return sendResponse(res, 404, false, 'Default bio not found');
-        return sendResponse(res, 200, true, 'Default bio updated successfully', bio);
-    } catch (error: any) {
-        if (error?.code === 11000) return sendResponse(res, 409, false, 'This bio already exists');
-        next(new AppError(error.message || 'Error updating default bio', 500));
-    }
-};
+// 4. Delete Default Bio (Admin)
+export const deleteDefaultBio = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const bio = await DefaultBio.findByIdAndDelete(id);
 
-export const deleteDefaultBio = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-        if (!canManageDefaultBios(req)) return sendResponse(res, 403, false, 'Admin access required');
-        const bio = await DefaultBio.findByIdAndDelete(req.params.id);
-        if (!bio) return sendResponse(res, 404, false, 'Default bio not found');
-        return sendResponse(res, 200, true, 'Default bio deleted successfully');
-    } catch (error: any) {
-        next(new AppError(error.message || 'Error deleting default bio', 500));
+    if (!bio) {
+      return sendResponse(res, 404, false, 'Default bio not found');
     }
+
+    return sendResponse(res, 200, true, 'Default bio deleted successfully');
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error?.message || 'Server error deleting default bio');
+  }
 };
