@@ -12,6 +12,7 @@ import { config } from "../configs/envConfig";
 import { Logger } from "../utils/logger";
 import { createNotification } from "./notificationController";
 import { VerificationSettings } from "../models/verification.model";
+import { Agency } from "../models/agency.model";
 
 export const applyHost = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -431,5 +432,135 @@ export const blockHost = async (req: AuthRequest, res: Response) => {
     } catch (error: any) {
         await Logger("blockHost", error)
         return sendResponse(res, 500, false, error.message);
+    }
+};
+
+export const getMyHostStatus = async (req: AuthRequest, res: Response) => {
+    try {
+        const userId = req.user?.id || req.user?.userId;
+        if (!userId) {
+            return sendResponse(res, 401, false, "User not authenticated");
+        }
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return sendResponse(res, 404, false, "User record not found");
+        }
+
+        // 1. Check if user is already an APPROVED Host
+        if (user.role === "host") {
+            const hostRecord = await Host.findOne({
+                $or: [{ meethiId: user.meethiId }, { mobileNumber: user.phoneNumber }, { emailId: user.email }],
+                isDeleted: false,
+            }).sort({ createdAt: -1 });
+
+            // Find agency details linked via meethiId or createdBy
+            let agencyInfo: any = null;
+            if (user.meethiId) {
+                const agencyUser = await User.findOne({
+                    $or: [{ meethiId: user.meethiId }, { userId: !isNaN(Number(user.meethiId)) ? Number(user.meethiId) : undefined }],
+                    role: { $in: ["agency", "admin", "owner"] },
+                }).select("name phoneNumber email image meethiId role agencyName agencyLogo");
+
+                const agencyModel = await Agency.findOne({
+                    $or: [{ code: user.meethiId }, { ownerId: agencyUser?._id }],
+                });
+
+                if (agencyUser || agencyModel) {
+                    agencyInfo = {
+                        agencyName: agencyModel?.name || (agencyUser as any)?.agencyName || agencyUser?.name || "Mithi Official Agency",
+                        agencyNumber: agencyUser?.phoneNumber || agencyUser?.email || "Support Available",
+                        agencyLogo: (agencyUser as any)?.agencyLogo || agencyUser?.image || "",
+                        agencyCode: agencyModel?.code || user.meethiId || "AGENCY-101",
+                    };
+                }
+            }
+
+            if (!agencyInfo) {
+                agencyInfo = {
+                    agencyName: "Mithi Official Agency",
+                    agencyNumber: "+91 9876543210",
+                    agencyLogo: "",
+                    agencyCode: user.meethiId || "AGENCY-MAIN",
+                };
+            }
+
+            return sendResponse(res, 200, true, "Host status fetched successfully", {
+                status: "APPROVED",
+                role: "host",
+                hostId: hostRecord?.hostId || user.userId,
+                meethiId: user.meethiId || hostRecord?.meethiId || user.userId,
+                hostingCreatedAt: hostRecord?.createdAt || user.createdAt,
+                agencyDetails: agencyInfo,
+            });
+        }
+
+        // 2. Check for PENDING application in TempHostModel or Host (isApproved: false)
+        const tempHost = await TempHostModel.findOne({ userId: user.userId });
+        const pendingHost = await Host.findOne({
+            $or: [{ meethiId: user.meethiId }, { mobileNumber: user.phoneNumber }, { emailId: user.email }],
+            isApproved: false,
+            isDeleted: false,
+        });
+
+        if (tempHost || pendingHost) {
+            // Find linked agency / creator info to build approval stage chain
+            let creatorRole = "superAdmin";
+            if (user.createdBy) {
+                const creator = await User.findById(user.createdBy).select("role");
+                if (creator?.role) creatorRole = creator.role;
+            }
+
+            const hasAgency = Boolean(user.meethiId);
+            const stages = [];
+
+            if (hasAgency) {
+                stages.push({
+                    title: "Agency Verification",
+                    description: "Agency is reviewing your hosting details & documents.",
+                    status: "in_progress",
+                    icon: "business",
+                });
+            }
+
+            stages.push({
+                title: "Operator Review",
+                description: "Operator team is inspecting host voice intro and credentials.",
+                status: hasAgency ? "pending" : "in_progress",
+                icon: "support-agent",
+            });
+
+            stages.push({
+                title: "Admin Approval",
+                description: "Administrative staff verifying compliance and payout tier.",
+                status: "pending",
+                icon: "admin-panel-settings",
+            });
+
+            if (creatorRole === "superAdmin") {
+                stages.push({
+                    title: "Super Admin Final Audit",
+                    description: "Super Admin final security seal & host role activation.",
+                    status: "pending",
+                    icon: "verified-user",
+                });
+            }
+
+            return sendResponse(res, 200, true, "Host application under review", {
+                status: "PENDING",
+                role: user.role,
+                appliedAt: tempHost?.createdAt || pendingHost?.createdAt || user.createdAt,
+                stages,
+            });
+        }
+
+        // 3. User has NOT applied yet
+        return sendResponse(res, 200, true, "Host status fetched", {
+            status: "NOT_APPLIED",
+            role: user.role,
+        });
+    } catch (error: any) {
+        await Logger("getMyHostStatus", error);
+        return sendResponse(res, 500, false, error.message || "Failed to fetch host status");
     }
 };

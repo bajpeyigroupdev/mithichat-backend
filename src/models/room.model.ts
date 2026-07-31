@@ -25,7 +25,6 @@ const RoomSchema = new Schema<IRoom>({
 }, { timestamps: true });
 
 RoomSchema.index({ ownerId: 1 });
-RoomSchema.index({ channelName: 1 });
 RoomSchema.index({ category: 1, isActive: 1 });
 
 export const Room = mongoose.model<IRoom>('Room', RoomSchema);

@@ -289,6 +289,7 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
     const refreshToken = await generateToken(user.userId.toString(), "refresh");
 
     user.refreshToken = refreshToken;
+    user.activeToken = accessToken;
     await user.save();
 
     return sendResponse(res, 200, true, "Login successful", {
@@ -342,8 +343,9 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
       await user.save();
     }
 
-    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Invalidate refresh token globally
+    // Invalidate refresh token & active token globally
     user.refreshToken = "";
+    user.activeToken = "";
     await user.save();
 
     return sendResponse(res, 200, true, "Logout successful.");
@@ -392,6 +394,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       const accessToken = await generateToken(user.userId.toString(), "access");
       const refreshToken = await generateToken(user.userId.toString(), "refresh");
       user.refreshToken = refreshToken;
+      user.activeToken = accessToken;
       await user.save();
 
       return sendResponse(res, 200, true, "Google login successful", {
@@ -466,6 +469,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
     const accessToken = await generateToken(newUser.userId.toString(), "access");
     const refreshToken = await generateToken(newUser.userId.toString(), "refresh");
     newUser.refreshToken = refreshToken;
+    newUser.activeToken = accessToken;
     const userCreated = await newUser.save();
 
     return sendResponse(res, 201, true, "Google signup successful", { accessToken, refreshToken, role: userCreated.role, gender: userCreated.gender });

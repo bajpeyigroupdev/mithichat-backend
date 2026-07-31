@@ -36,6 +36,7 @@ export interface UserInterface extends Document {
   age?: number;
   frameId?: string;
   refreshToken?: string;
+  activeToken?: string;
   audio?: string;
   isUserName?: boolean;
   userName?: string;

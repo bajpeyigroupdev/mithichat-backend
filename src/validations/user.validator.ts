@@ -25,6 +25,11 @@ export const validationUpdateUserLimited = [
     .isString()
     .withMessage("Each language must be a string"),
 
+  body("image")
+    .optional()
+    .isString()
+    .withMessage("Image must be a valid string"),
+
   body("age")
     .optional()
     .isInt({ min: 1, max: 120 })

@@ -13,6 +13,7 @@ export interface ISettings extends Document {
     callRatePerMinute: number;
     hostSharePerMinute: number;
     chatMessageCost: number;
+    chatMessageLimit: number;
     agoraAppId: string;
     agoraCertificateEncrypted: string;
     privacyPolicy: string;
@@ -32,6 +33,7 @@ const SettingsSchema = new Schema<ISettings>({
     callRatePerMinute: { type: Number, default: 100, min: 1 },
     hostSharePerMinute: { type: Number, default: 28, min: 0 },
     chatMessageCost: { type: Number, default: 10, min: 0 },
+    chatMessageLimit: { type: Number, default: 50, min: 1, max: 5000 },
     agoraAppId: { type: String, default: '', trim: true },
     agoraCertificateEncrypted: { type: String, default: '', select: false },
     privacyPolicy: {

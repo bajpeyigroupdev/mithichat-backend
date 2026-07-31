@@ -5,9 +5,6 @@ import { User } from "../models/user.model";
 import sendResponse from "../utils/reponse";
 import { config } from "../configs/envConfig";
 
-
-
-
 export interface AuthRequest extends Request {
   user?: {
     role: "owner" | "operator" | "superAdmin" | "admin" | "agency" | "coinSeller" | "customerSupport" | "host" | "user";
@@ -26,15 +23,11 @@ export interface AuthRequest extends Request {
   };
 }
 
-
 /**
  * Middleware: Verify JWT Token & Attach User to Request
  */
 export const verifyToken = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  // Extract token from Authorization header OR query parameter
   const token = req.header("Authorization")?.split(" ")[1] || req.query.token as string;
-  // console.log("Authorization header:", req.header("Authorization"));
-  // console.log("Extracted token:", token);
 
   if (!token) {
     return sendResponse(res, 401, false, "Unauthorized - No token provided");
@@ -47,7 +40,6 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
       return sendResponse(res, 401, false, "Unauthorized - Invalid token payload");
     }
 
-    // Explicitly exclude sensitive fields
     const user = await User.findOne({
       $or: [
         ...(targetUserId ? [{ userId: targetUserId }] : []),
@@ -58,6 +50,15 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
 
     if (!user) {
       return sendResponse(res, 401, false, "Unauthorized - User not found");
+    }
+
+    if (user.isBlocked) {
+      return sendResponse(res, 403, false, "Aapka account admin dwara block kar diya gaya hai.", undefined, undefined, "ACCOUNT_BLOCKED");
+    }
+
+    // Single Device Login Enforcement: If user logged in on another device, current token is invalid
+    if ((user as any).activeToken && (user as any).activeToken !== token) {
+      return sendResponse(res, 401, false, "Aapka account kisi aur device me login ho gaya hai.", undefined, undefined, "SINGLE_DEVICE_LOGOUT");
     }
 
     // Optimize: Only update lastOnline every 5 minutes to reduce DB writes
@@ -117,7 +118,6 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
     const { fieldSecurityFilter } = require("./fieldSecurity.middleware");
     await fieldSecurityFilter(req, res, next);
   } catch (error) {
-
     if (error instanceof TokenExpiredError) {
       return sendResponse(res, 401, false, "Unauthorized - Token has expired");
     }

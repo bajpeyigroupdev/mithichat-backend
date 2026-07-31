@@ -8,12 +8,14 @@ import {
     approveHost,
     blockHost,
     sendFormForHost,
+    getMyHostStatus,
 } from "../controllers/hostController";
 import { verifyToken } from "../middlewares/authorize.middleware";
 // import { upload } from "../utils/multer";
 
 const router = express.Router();
 
+router.get("/my-status", verifyToken, getMyHostStatus);
 router.post("/apply", applyHost as any);
 router.get("/", verifyToken, getAppliedHosts);
 router.post("/send-form/:hostId", verifyToken, sendFormForHost);

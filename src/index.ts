@@ -147,6 +147,8 @@ app.use("/api/v1/verifications", verificationRoutes);
 app.use("/api/v1/admin/verifications", adminVerificationRoutes);
 import avatarRequestRoutes from "./routes/avatarRequestRoutes";
 import defaultBioRoutes from "./routes/defaultBioRoutes";
+app.use("/api/avatar-request", avatarRequestRoutes);
+app.use("/api/avatar-requests", avatarRequestRoutes);
 app.use("/api/v1/avatar-requests", avatarRequestRoutes);
 app.use("/api/default-bios", defaultBioRoutes);
 app.use("/api/v1/default-bios", defaultBioRoutes);
@@ -171,6 +173,9 @@ app.get('/metrics', (_req, res) => res.type('text/plain').send(`# HELP process_c
 
 app.use("/api/recruitment", recruitmentRoutes);
 app.use("/api/v1/recruitment", recruitmentRoutes);
+import chatViolationRoutes from "./routes/chatViolationRoutes";
+app.use("/api/moderation", chatViolationRoutes);
+app.use("/api/v1/moderation", chatViolationRoutes);
 app.get("/api/v1/search", globalSearch);
 app.get("/api/v1/monitoring/health", getSystemHealth);
 app.get("/api/v1/activity-feed", getActivityFeed);

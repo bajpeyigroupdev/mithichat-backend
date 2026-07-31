@@ -83,11 +83,16 @@ async function migrateUserIds() {
 
     // Update Counter collection
     await counterCollection.updateOne(
+      { modelName: "user" },
+      { $set: { seq: currentSeq } },
+      { upsert: true }
+    );
+    await counterCollection.updateOne(
       { modelName: "user_10digit" },
       { $set: { seq: currentSeq } },
       { upsert: true }
     );
-    console.log(`✅ Counter 'user_10digit' updated to seq: ${currentSeq}`);
+    console.log(`✅ Counter 'user' and 'user_10digit' updated to seq: ${currentSeq}`);
 
     console.log("==================================================");
     console.log("🎉 10-DIGIT USER ID MIGRATION COMPLETE!");

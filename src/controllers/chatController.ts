@@ -17,6 +17,8 @@ import { Types } from "mongoose";
 import { User } from "../models/user.model";
 import { updateBalance } from "../services/coins.service";
 import { getCachedSettings } from "./settingsController";
+import { detectChatViolation } from "../utils/chatModeration";
+import { ChatViolation } from "../models/chatViolation.model";
 import { sendPushNotification } from '../utils/pushNotification';
 
 export const sendMessageController = async (req: AuthRequest, res: Response) => {
@@ -27,6 +29,58 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
 
     if (!userId || !receiverId || !content) {
       return sendResponse(res, 400, false, "Missing required fields");
+    }
+
+    const settings = await getCachedSettings();
+    const MAX_MESSAGE_LIMIT = settings.chatMessageLimit || 50;
+
+    // 📏 DYNAMIC MESSAGE LENGTH CHECK
+    if (content.length > MAX_MESSAGE_LIMIT) {
+      return res.status(400).json({
+        success: false,
+        code: "MESSAGE_TOO_LONG",
+        message: `1 message me maximum ${MAX_MESSAGE_LIMIT} characters hi bhej sakte hain.`,
+      });
+    }
+
+    // 🛡️ CHAT CONTENT MODERATION CHECK (BEFORE coin deduction or delivery)
+    const moderation = detectChatViolation(content);
+    if (moderation.isViolated) {
+      // Abuse prevention: Check if recent duplicate violation exists within 5 mins
+      const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const existingViolation = await ChatViolation.findOne({
+        sender: userId,
+        receiver: receiverId,
+        violationType: moderation.type,
+        createdAt: { $gte: fiveMinsAgo },
+      });
+
+      if (existingViolation) {
+        existingViolation.attemptCount = (existingViolation.attemptCount || 1) + 1;
+        existingViolation.content = content;
+        await existingViolation.save();
+      } else {
+        await ChatViolation.create({
+          sender: userId,
+          receiver: receiverId,
+          content,
+          normalizedContent: moderation.normalizedContent,
+          violationType: moderation.type,
+          reason: moderation.reason,
+          matchedPattern: moderation.matchedPattern,
+          severity: moderation.severity || "MEDIUM",
+          status: "PENDING",
+          source: "PRIVATE_CHAT",
+          actionTaken: "NONE",
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        code: "CHAT_CONTENT_VIOLATION",
+        violationType: moderation.type,
+        message: "Sharing contact information, social handles, or external links is not allowed.",
+      });
     }
 
     // 💰 Deduct coins if the sender is a user

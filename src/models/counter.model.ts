@@ -7,7 +7,7 @@ export interface ICounter extends Document {
 
 const counterSchema = new Schema<ICounter>({
   modelName: { type: String, required: true, unique: true },
-  seq: { type: Number, default: 100000 }
+  seq: { type: Number, default: 1000000000 }
 });
 
 export const Counter = mongoose.model<ICounter>('Counter', counterSchema);

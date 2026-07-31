@@ -320,10 +320,13 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 403, false, "User is blocked and cannot be updated");
     }
 
-    if (userToUpdate.role === 'host' && bio !== undefined) {
-      const approvedBio = await DefaultBio.exists({ text: String(bio).trim(), audience: 'host', isActive: true });
-      if (!approvedBio) {
-        return sendResponse(res, 400, false, 'Host bio must be selected from the approved App Management list');
+    if (userToUpdate.role === 'host' && bio !== undefined && String(bio).trim() !== '') {
+      const isUnchangedBio = String(bio).trim() === String(userToUpdate.bio || '').trim();
+      if (!isUnchangedBio) {
+        const approvedBio = await DefaultBio.exists({ text: String(bio).trim(), audience: 'host', isActive: true });
+        if (!approvedBio) {
+          return sendResponse(res, 400, false, 'Host bio must be selected from the approved App Management list');
+        }
       }
     }
 
@@ -363,6 +366,8 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
         if (age !== undefined) updatedFields.age = age;
         if (level !== undefined) updatedFields.level = level;
         if (image !== undefined) updatedFields.image = image;
+        if (req.body.faceVerificationStatus !== undefined) updatedFields.faceVerificationStatus = req.body.faceVerificationStatus;
+        if (req.body.kycVerificationStatus !== undefined) updatedFields.kycVerificationStatus = req.body.kycVerificationStatus;
         if (password !== undefined && password.trim() !== "") {
           updatedFields.password = await generateSecureHash(password);
         }
@@ -575,14 +580,8 @@ export const blockUser = async (req: AuthRequest, res: Response) => {
     const { userId } = req.params;
     const { reason } = req.body; // Block reason
 
-    // Only SuperAdmin & Admin can block users
-    if (!["superAdmin", "admin"].includes(role)) {
+    if (!role || !["owner", "operator", "superAdmin", "admin"].includes(role)) {
       return sendResponse(res, 403, false, "Permission denied");
-    }
-
-    // If Admin, reason is required
-    if (role === "admin" && !reason) {
-      return sendResponse(res, 400, false, "Reason is required for Admin");
     }
 
     // Check if user is already blocked
@@ -595,16 +594,32 @@ export const blockUser = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "User is already blocked");
     }
 
-    // Update user (Set isBlocked: true)
+    // Update user (Set isBlocked: true and clear active session)
     existingUser.isBlocked = true;
+    existingUser.activeToken = "";
+    existingUser.refreshToken = "";
     await existingUser.save();
 
     // Store block details in BlockedUser model
     await BlockedUser.create({
       userId,
       blockedBy: adminId,
-      reason: role === "superAdmin" ? reason || "" : reason, // Optional for SuperAdmin
+      reason: reason || "Blocked by admin",
     });
+
+    // Force disconnect active sockets for blocked user
+    try {
+      const io = getIO();
+      const userRoom = getUserRoom(String(existingUser.userId));
+      io.to(userRoom).emit("force_logout", {
+        message: "Aapka account admin dwara block kar diya gaya hai.",
+        code: "ACCOUNT_BLOCKED",
+        reason: reason || "Account blocked by admin",
+      });
+      io.in(userRoom).disconnectSockets(true);
+    } catch (e: any) {
+      console.warn("Socket force logout error on block:", e.message);
+    }
 
     return sendResponse(res, 200, true, "User blocked successfully");
   } catch (error: any) {
@@ -613,15 +628,14 @@ export const blockUser = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// user unblock by userID with role only superAdmin
+// user unblock by userID
 export const unblockUser = async (req: AuthRequest, res: Response) => {
   try {
     const { role } = req.user || {}; // Authenticated user
     const { userId } = req.params;
 
-    // Only SuperAdmin can unblock users
-    if (role !== "superAdmin") {
-      return sendResponse(res, 403, false, "Only SuperAdmin can unblock users");
+    if (!role || !["owner", "operator", "superAdmin", "admin"].includes(role)) {
+      return sendResponse(res, 403, false, "Permission denied");
     }
 
     // Find the user

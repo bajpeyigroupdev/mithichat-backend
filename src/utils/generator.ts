@@ -24,6 +24,28 @@ export function generateRandomName() {
     return randomWord + randomNumber;
 }
 
-export const generateUniqueId = (): number => {
-    return Math.floor(100000 + Math.random() * 900000);
+import { Counter } from "../models/counter.model";
+
+export const generateUniqueId = async (): Promise<number> => {
+    try {
+        const counterDoc = await Counter.findOneAndUpdate(
+            { modelName: "user" },
+            { $inc: { seq: 1 } },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+
+        if (!counterDoc || counterDoc.seq < 1000000001) {
+            const updated = await Counter.findOneAndUpdate(
+                { modelName: "user" },
+                { $set: { seq: 1000000001 } },
+                { new: true, upsert: true }
+            );
+            return updated?.seq || 1000000001;
+        }
+
+        return counterDoc.seq;
+    } catch (error) {
+        console.error("Error generating 10-digit sequential userId:", error);
+        return Math.floor(1000000000 + Math.random() * 9000000000);
+    }
 };

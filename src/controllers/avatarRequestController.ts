@@ -21,9 +21,10 @@ export const submitAvatarRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, 'User account not found');
     }
 
-    // Verify host role
-    if (user.role !== 'host') {
-      return sendResponse(res, 403, false, 'Only verified hosts can submit avatar requests');
+    // Verify verification status (Face or KYC must be APPROVED)
+    const isVerified = user.faceVerificationStatus === 'APPROVED' || user.kycVerificationStatus === 'APPROVED';
+    if (!isVerified) {
+      return sendResponse(res, 403, false, 'Verification is required to submit avatar requests. Please complete Face or KYC verification first.');
     }
 
     // Check existing pending request

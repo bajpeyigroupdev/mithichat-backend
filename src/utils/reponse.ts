@@ -11,7 +11,8 @@ const sendResponse = <T>(
     currentPage: number;
     totalPages: number;
     limit: number;
-  }
+  },
+  code?: string
 ) => {
   res.status(statusCode).json({
     success,
@@ -19,6 +20,7 @@ const sendResponse = <T>(
     statusCode,
     ...(data && { data }),
     ...(pagination && { pagination }),
+    ...(code && { code }),
   });
 };
 

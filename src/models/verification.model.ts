@@ -55,7 +55,6 @@ const faceSchema = new Schema({
   faceImageMimeType: { type: String, required: true },
   deviceInfo: { type: Schema.Types.Mixed, default: {} },
 }, { timestamps: true });
-faceSchema.index({ userId: 1, status: 1 });
 faceSchema.index({ userId: 1, status: 1 }, { unique: true, partialFilterExpression: { status: "PENDING" } });
 
 const kycSchema = new Schema({
@@ -70,7 +69,6 @@ const kycSchema = new Schema({
   bankDetails: { type: Schema.Types.Mixed },
   expiresAt: Date,
 }, { timestamps: true });
-kycSchema.index({ userId: 1, overallStatus: 1 });
 kycSchema.index({ userId: 1, overallStatus: 1 }, { unique: true, partialFilterExpression: { overallStatus: "PENDING" } });
 
 const auditSchema = new Schema({

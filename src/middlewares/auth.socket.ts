@@ -52,6 +52,10 @@ export const socketAuth = async (
             return next(new Error("Unauthorized - User not found"));
         }
 
+        if (user.isBlocked) {
+            return next(new Error("Unauthorized - User account is blocked"));
+        }
+
         // 4️⃣ Attach user to socket
         socket.user = {
             role: user.role ?? "user",

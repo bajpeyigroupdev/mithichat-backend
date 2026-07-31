@@ -64,7 +64,7 @@ async function runMigration() {
     const numericUserIdMap = new Map<number, number>();
     const numericHostIdMap = new Map<number, number>();
 
-    let currentUserIdSeq = 100000;
+    let currentUserIdSeq = 1000000000;
 
     const allUsers = await userCollection.find({}).toArray();
     console.log(`🔍 Processing ${allUsers.length} Users...`);
@@ -75,8 +75,8 @@ async function runMigration() {
         const newObjId = new mongoose.Types.ObjectId();
         objectIdMap.set(oldIdStr, newObjId);
 
+        currentUserIdSeq++;
         if (u.userId && !preservedReviewNumericIds.has(u.userId)) {
-          currentUserIdSeq++;
           numericUserIdMap.set(u.userId, currentUserIdSeq);
         }
       }
@@ -96,6 +96,7 @@ async function runMigration() {
         ...u,
         _id: newObjId,
         userId: newNumericId,
+        meethiId: String(newNumericId),
         createdBy: u.createdBy && objectIdMap.has(u.createdBy.toString()) ? objectIdMap.get(u.createdBy.toString()) : u.createdBy,
         parentId: u.parentId && objectIdMap.has(u.parentId.toString()) ? objectIdMap.get(u.parentId.toString()) : u.parentId,
         ownerId: u.ownerId && objectIdMap.has(u.ownerId.toString()) ? objectIdMap.get(u.ownerId.toString()) : u.ownerId,
