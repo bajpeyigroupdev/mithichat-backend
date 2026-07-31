@@ -243,6 +243,18 @@ export const getMyPermissions = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 401, false, 'Unauthorized - No user attached');
     }
 
+    if (['owner', 'superAdmin', 'admin', 'operator'].includes(user.role)) {
+      return sendResponse(res, 200, true, 'Full Management Permissions', {
+        menus: ['*'],
+        pages: ['*'],
+        modules: ['*'],
+        actions: ['*'],
+        buttons: ['*'],
+        columns: {},
+        dashboardWidgets: ['*'],
+      });
+    }
+
     // Check user-level override first
     let permission = await Permission.findOne({ targetType: 'user', targetId: user.id.toString() });
     if (!permission) {
