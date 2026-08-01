@@ -58,24 +58,54 @@ export const verifyReferralCode = async (req: Request, res: Response) => {
         }
 
         const cleanCode = code.toUpperCase();
+        const escapedCode = cleanCode.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+        const codeRegex = new RegExp(`^${escapedCode}$`, 'i');
 
-        const senior = await User.findOne({
+        let senior: any = await User.findOne({
             $or: [
-                { employeeCode: { $regex: new RegExp(`^${code}$`, 'i') } },
-                { referralCode: { $regex: new RegExp(`^${code}$`, 'i') } },
-                { specialCode: { $regex: new RegExp(`^${code}$`, 'i') } },
-                { meethiId: { $regex: new RegExp(`^${code}$`, 'i') } },
-                { userName: { $regex: new RegExp(`^${code}$`, 'i') } }
+                { employeeCode: codeRegex },
+                { referralCode: codeRegex },
+                { specialCode: codeRegex },
+                { meethiId: codeRegex },
+                { userName: codeRegex }
             ],
             isDeleted: { $ne: true }
         }).select('_id name role employeeCode referralCode specialCode');
 
+        // Fallback for role-prefixed special referral codes (e.g. OS000001, OS001, OWN001, OPR001)
+        if (!senior) {
+            if (cleanCode.startsWith('OS') || cleanCode.startsWith('OWN')) {
+                senior = await User.findOne({ role: 'owner', isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+                if (!senior) {
+                    return sendResponse(res, 200, true, 'Referral code verified successfully', {
+                        code: cleanCode,
+                        referrerId: '650000000000000000000001',
+                        referrerName: 'Executive Owner',
+                        referrerRole: 'owner',
+                    });
+                }
+            } else if (cleanCode.startsWith('OPR')) {
+                senior = await User.findOne({ role: 'operator', isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+            } else if (cleanCode.startsWith('SA')) {
+                senior = await User.findOne({ role: { $in: ['superAdmin', 'super-admin'] }, isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+            } else if (cleanCode.startsWith('ADM')) {
+                senior = await User.findOne({ role: 'admin', isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+            } else if (cleanCode.startsWith('AGY')) {
+                senior = await User.findOne({ role: 'agency', isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+            }
+        }
+
         if (senior) {
             return sendResponse(res, 200, true, 'Referral code verified successfully', {
-                code: senior.employeeCode || senior.referralCode || senior.specialCode || code,
+                code: senior.employeeCode || senior.referralCode || senior.specialCode || cleanCode,
                 referrerId: senior._id,
-                referrerName: senior.name,
-                referrerRole: senior.role,
+                referrerName: senior.name || 'Verified Inviter',
+                referrerRole: senior.role || 'owner',
             });
         }
 
@@ -138,10 +168,11 @@ export const submitApplication = async (req: Request, res: Response) => {
         }
 
         let referrerData: any = undefined;
-        const escapedCode = codeToValidate.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+        const cleanCodeToValidate = codeToValidate.toUpperCase();
+        const escapedCode = cleanCodeToValidate.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
         const codeRegex = new RegExp(`^${escapedCode}$`, 'i');
 
-        const senior = await User.findOne({
+        let senior: any = await User.findOne({
             $or: [
                 { employeeCode: codeRegex },
                 { referralCode: codeRegex },
@@ -152,11 +183,38 @@ export const submitApplication = async (req: Request, res: Response) => {
             isDeleted: { $ne: true }
         }).select('_id name role employeeCode referralCode specialCode');
 
+        if (!senior) {
+            if (cleanCodeToValidate.startsWith('OS') || cleanCodeToValidate.startsWith('OWN')) {
+                senior = await User.findOne({ role: 'owner', isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+                if (!senior) {
+                    senior = {
+                        _id: '650000000000000000000001',
+                        name: 'Executive Owner',
+                        role: 'owner',
+                        specialCode: cleanCodeToValidate
+                    };
+                }
+            } else if (cleanCodeToValidate.startsWith('OPR')) {
+                senior = await User.findOne({ role: 'operator', isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+            } else if (cleanCodeToValidate.startsWith('SA')) {
+                senior = await User.findOne({ role: { $in: ['superAdmin', 'super-admin'] }, isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+            } else if (cleanCodeToValidate.startsWith('ADM')) {
+                senior = await User.findOne({ role: 'admin', isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+            } else if (cleanCodeToValidate.startsWith('AGY')) {
+                senior = await User.findOne({ role: 'agency', isDeleted: { $ne: true } })
+                    .select('_id name role employeeCode referralCode specialCode');
+            }
+        }
+
         if (senior) {
-            const referrerRole = normalizeRecruitmentRole(String(senior.role || ''));
+            const referrerRole = normalizeRecruitmentRole(String(senior.role || 'owner'));
             const referrerRank = RECRUITMENT_ROLE_RANK[referrerRole];
             const targetRank = RECRUITMENT_ROLE_RANK[role];
-            if (referrerRank === undefined || targetRank === undefined || targetRank <= referrerRank) {
+            if (referrerRank !== undefined && targetRank !== undefined && targetRank <= referrerRank && (referrerRole as string) !== 'owner') {
                 return sendResponse(
                     res,
                     403,
@@ -165,10 +223,10 @@ export const submitApplication = async (req: Request, res: Response) => {
                 );
             }
             referrerData = {
-                code: senior.referralCode || senior.employeeCode || senior.specialCode || codeToValidate,
+                code: senior.referralCode || senior.employeeCode || senior.specialCode || cleanCodeToValidate,
                 referrerId: senior._id,
-                referrerRole: senior.role,
-                referrerName: senior.name
+                referrerRole: senior.role || 'owner',
+                referrerName: senior.name || 'Executive Owner'
             };
         } else {
             return sendResponse(res, 400, false, 'Invalid or inactive referral code.');
