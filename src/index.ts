@@ -99,8 +99,8 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 app.use("/policies", express.static(path.join(__dirname, "../policies")));
 
 // Body parsing with size limits
-app.use(express.json({ limit: '10mb' })); // Increased for file uploads
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '50mb' })); // Increased for document base64 payloads
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // 2. NoSQL Injection Prevention (must be after body parsers for Express v5)
 // Only sanitize body and params, not query (Express v5 compatibility)

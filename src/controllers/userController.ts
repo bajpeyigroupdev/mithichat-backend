@@ -26,6 +26,8 @@ import DeletionRequest from "../models/deletionRequest.model";
 import { deleteImageFromCloudinary } from "../utils/cloudinary";
 import { getAccessibleUserFilter } from "./formsController";
 import { generateSecureHash } from "../utils/passwordHelper";
+import { PANEL_ACCOUNT_ROLES } from "../utils/accountScope";
+
 
 // set user name by authorized users
 export const setUserName = async (req: AuthRequest, res: Response) => {
@@ -152,76 +154,86 @@ export const setVerifiedPhone = async (req: AuthRequest, res: Response) => {
   }
 };
 // get users with role based access
-// work as expected
 export const getUsers = async (req: AuthRequest, res: Response) => {
   try {
     const { role, userId } = req.user || {};
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, role: targetRole, search } = req.query;
 
-    const pageNumber = parseInt(page as string, 10);
-    const limitNumber = parseInt(limit as string, 10);
+    const pageNumber = Math.max(1, parseInt(page as string, 10) || 1);
+    const limitNumber = Math.max(1, parseInt(limit as string, 10) || 10);
     const skip = (pageNumber - 1) * limitNumber;
-
-    let usersQuery: Query<any[], any>;
-    let totalUsers = 0;
 
     switch (role) {
       case "owner":
       case "operator":
-        totalUsers = await User.countDocuments({
+      case "superAdmin":
+      case "admin": {
+        const filter: any = {
           isDeleted: false,
-          role: { $ne: "superAdmin" }, // Exclude superAdmins
-        });
-        usersQuery = User.find({
-          isDeleted: false,
-          role: { $ne: "superAdmin" },
-        })
-          .select("userId name coins isBlocked createdAt role email phoneNumber image")
+        };
+
+        if (targetRole && targetRole !== 'all') {
+          filter.role = targetRole;
+        } else {
+          // Exclude Admin Panel Staff roles from regular user management list
+          filter.role = { $nin: PANEL_ACCOUNT_ROLES };
+        }
+
+        if (search) {
+          const searchStr = String(search).trim();
+          const searchRegex = new RegExp(searchStr, 'i');
+          const orConditions: any[] = [
+            { name: searchRegex },
+            { email: searchRegex },
+            { userName: searchRegex },
+            { phoneNumber: searchRegex }
+          ];
+          if (!isNaN(Number(searchStr))) {
+            orConditions.push({ userId: Number(searchStr) });
+          }
+          filter.$or = orConditions;
+        }
+
+        const totalUsers = await User.countDocuments(filter);
+        const users = await User.find(filter)
+          .select("userId name coins diamonds isBlocked createdAt role email phoneNumber image gender level isVIP")
           .sort({ createdAt: -1 })
           .skip(skip)
-          .limit(limitNumber);
-        break;
+          .limit(limitNumber)
+          .lean();
 
-      case "superAdmin":
-      case "admin":
-      case "agency":
-      case "coinSeller":
-      case "customerSupport":
-        return sendResponse(res, 403, false, "Only owner and operator can view the user list");
+        return sendResponse(res, 200, true, "Users fetched successfully", {
+          usersData: {
+            users,
+            totalUsers,
+            currentPage: pageNumber,
+            totalPages: Math.ceil(totalUsers / limitNumber),
+            limit: limitNumber,
+          }
+        });
+      }
 
-
-      case "host":
+      case "host": {
         const host = await User.findOne({ userId })
           .select("userId name email phoneNumber gender role bio image audio coins diamonds isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level faceVerificationStatus kycVerificationStatus")
           .lean();
         if (host && host.level === undefined) host.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user: host });
+      }
 
-      case "user":
+      case "user": {
         const user = await User.findOne({ userId })
           .select("userId name email gender phoneNumber role bio image coins diamonds isBlocked emailVerified phoneVerified language isUserName userName isActive level faceVerificationStatus kycVerificationStatus")
           .lean();
         if (user && user.level === undefined) user.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user });
+      }
 
       default:
         return sendResponse(res, 403, false, "Access Denied");
     }
-
-    // Fetch users from the query
-    const users = await usersQuery.exec();
-
-    return sendResponse(res, 200, true, "Users fetched successfully", {
-      usersData: {
-        users,
-        totalUsers,
-        currentPage: pageNumber,
-        totalPages: Math.ceil(totalUsers / limitNumber),
-        limit: limitNumber,
-      }
-    });
   } catch (error: any) {
-    await Logger("getUsers", error)
+    await Logger("getUsers", error);
     return sendResponse(res, 500, false, error.message);
   }
 };

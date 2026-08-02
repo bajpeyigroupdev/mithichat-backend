@@ -9,6 +9,8 @@ import AppError from '../utils/errorHandler';
 import { Logger } from '../utils/logger';
 import dayjs from 'dayjs';
 import { CallStatus, TransactionType } from '../constants/user';
+import { PANEL_ACCOUNT_ROLES } from '../utils/accountScope';
+
 
 // Helper to get host filter based on role
 const getHostFilter = async (req: Request): Promise<any> => {
@@ -87,8 +89,8 @@ export const getDashboardStats = async (
             User.countDocuments({ isDeleted: true }),
         ]);
 
-        // Total users (Global count)
-        const totalUsers = await User.countDocuments({ isDeleted: false });
+        // Total users (Global count of app users, excluding panel staff)
+        const totalUsers = await User.countDocuments({ isDeleted: false, role: { $nin: PANEL_ACCOUNT_ROLES } });
         const activeUsers = activeUsersCount;
 
         // Base match for transactions + host filter

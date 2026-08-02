@@ -614,11 +614,12 @@ export const listEmployees = async (req: AuthRequest, res: Response) => {
 
         const allowedRoles = canCreate[role];
 
-        // owners/operators/superAdmins see ALL
+        // owners/operators/superAdmins see ALL staff members by default
         // admins and agencies only see their own sub-employees
         const roleFilter = targetRole && allowedRoles.includes(targetRole as string)
             ? [targetRole as string]
-            : allowedRoles;
+            : allowedRoles.filter(r => PANEL_ACCOUNT_ROLES.includes(r as any));
+
 
         if (roleFilter.includes('user') && !['owner', 'operator'].includes(role)) {
             return sendResponse(res, 403, false, 'Only owner and operator can view users');

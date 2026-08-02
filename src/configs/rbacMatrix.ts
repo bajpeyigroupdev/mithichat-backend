@@ -27,6 +27,7 @@ const OPERATOR_DENIED_ROUTES = [
   '/messages',
   '/kyc',
   '/withdrawals',
+  '/moderation',
 ];
 
 export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
