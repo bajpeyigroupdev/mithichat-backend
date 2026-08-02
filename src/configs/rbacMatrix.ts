@@ -5,6 +5,15 @@ export interface RoleDefinition {
   allowedActions: string[];
 }
 
+const SUPER_ADMIN_DENIED_ROUTES = [
+  '/users',
+  '/super-admins',
+  '/avatar-requests',
+  '/bios',
+  '/host-management',
+  '/recharges',
+];
+
 const OPERATOR_DENIED_ROUTES = [
   '/operators',
   '/organization',
@@ -136,8 +145,6 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
       '/hosts/create',
       '/hosts/request',
       '/hosts',
-      '/avatar-requests',
-      '/bios',
       '/customer-support/create',
       '/customer-support/request',
       '/customer-support',
@@ -333,6 +340,12 @@ export const isRouteAllowed = (role: string, route: string): boolean => {
   if (roleDef.allowedRoutes.includes('*')) return true;
 
   const path = route.split('?')[0].split('#')[0];
+
+  if (role === 'superAdmin' && SUPER_ADMIN_DENIED_ROUTES.some(
+    (denied) => path === denied || path.startsWith(`${denied}/`)
+  )) {
+    return false;
+  }
 
   if (role === 'operator' && OPERATOR_DENIED_ROUTES.some(
     (denied) => path === denied || path.startsWith(`${denied}/`)
