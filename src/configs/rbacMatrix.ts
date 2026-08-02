@@ -8,6 +8,19 @@ export interface RoleDefinition {
 const SUPER_ADMIN_DENIED_ROUTES = [
   '/users',
   '/super-admins',
+  '/admins',
+  '/avatar-requests',
+  '/bios',
+  '/host-management',
+  '/recharges',
+  '/withdrawals',
+  '/sellers',
+];
+
+const ADMIN_DENIED_ROUTES = [
+  '/users',
+  '/super-admins',
+  '/admins',
   '/avatar-requests',
   '/bios',
   '/host-management',
@@ -344,6 +357,12 @@ export const isRouteAllowed = (role: string, route: string): boolean => {
   const path = route.split('?')[0].split('#')[0];
 
   if (role === 'superAdmin' && SUPER_ADMIN_DENIED_ROUTES.some(
+    (denied) => path === denied || path.startsWith(`${denied}/`)
+  )) {
+    return false;
+  }
+
+  if (role === 'admin' && ADMIN_DENIED_ROUTES.some(
     (denied) => path === denied || path.startsWith(`${denied}/`)
   )) {
     return false;
