@@ -244,7 +244,6 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
       '/hosts/request',
       '/hosts',
       '/my-hosts',
-      '/host-management',
       '/referrals',
       '/referrals/links',
       '/profile',
