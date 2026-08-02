@@ -216,10 +216,12 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
     ],
     allowedModules: [
       'Dashboard',
+      'Users',
+      'Reports',
+      'Settings',
       'Agency',
       'Host',
       'CustomerSupport',
-      'Reports',
       'HelpSupport',
       'Referrals',
       'Profile',
@@ -249,6 +251,8 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
     ],
     allowedModules: [
       'Dashboard',
+      'Users',
+      'Settings',
       'Host',
       'Referrals',
       'Profile',
