@@ -12,6 +12,8 @@ const SUPER_ADMIN_DENIED_ROUTES = [
   '/bios',
   '/host-management',
   '/recharges',
+  '/withdrawals',
+  '/sellers',
 ];
 
 const OPERATOR_DENIED_ROUTES = [
