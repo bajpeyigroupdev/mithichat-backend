@@ -8,7 +8,6 @@ export interface RoleDefinition {
 const SUPER_ADMIN_DENIED_ROUTES = [
   '/users',
   '/super-admins',
-  '/admins',
   '/avatar-requests',
   '/bios',
   '/host-management',
