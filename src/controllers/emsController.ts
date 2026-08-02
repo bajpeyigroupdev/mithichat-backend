@@ -243,7 +243,7 @@ export const getMyPermissions = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 401, false, 'Unauthorized - No user attached');
     }
 
-    if (['owner', 'superAdmin', 'admin'].includes(user.role)) {
+    if (['owner', 'superAdmin', 'admin', 'agency', 'operator', 'coinSeller', 'customerSupport'].includes(user.role)) {
       return sendResponse(res, 200, true, 'Full Management Permissions', {
         menus: ['*'],
         pages: ['*'],
