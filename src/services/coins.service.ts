@@ -22,23 +22,52 @@ async function updateBalance(
   switch (operation.toLowerCase() as BalanceOperation) {
     case 'add':
       targetField = 'coins';
-      break;
-
-    case 'deduct':
-      targetField = 'diamonds';
-      filter['diamonds'] = { $gte: amount };
-      operatorValue = -amount;
+      updateObject = { $inc: { coins: amount } };
       break;
 
     case 'earn':
-      targetField = 'coins'; // Or earnings
+      targetField = 'diamonds';
+      updateObject = { $inc: { diamonds: amount } };
       break;
+
+    case 'deduct': {
+      const userToDeduct = await User.findById(userId).session(session || null);
+      const totalAvail = Number(userToDeduct?.coins || 0) + Number(userToDeduct?.diamonds || 0);
+      if (!userToDeduct || totalAvail < amount) {
+        throw new Error(`Insufficient balance. Available: ${totalAvail}, Required: ${amount}`);
+      }
+      let remainingDeduct = amount;
+      let coinsDeduct = Math.min(userToDeduct.coins || 0, remainingDeduct);
+      remainingDeduct -= coinsDeduct;
+      let diamondsDeduct = Math.min(userToDeduct.diamonds || 0, remainingDeduct);
+
+      const updatedUser = await User.findByIdAndUpdate(
+        userId,
+        { $inc: { coins: -coinsDeduct, diamonds: -diamondsDeduct } },
+        { new: true, runValidators: true, session }
+      ).exec();
+
+      if (!updatedUser) {
+        throw new Error(`User with ID ${userId} update failed.`);
+      }
+      try {
+        const { getIO, getUserRoom } = require('../sockets');
+        const io = getIO();
+        if (io) {
+          io.to(getUserRoom(String(updatedUser._id))).emit('balanceUpdated', {
+            userId: String(updatedUser._id),
+            coins: Number(updatedUser.coins || 0),
+            diamonds: Number(updatedUser.diamonds || 0),
+            totalBalance: Number(updatedUser.coins || 0) + Number(updatedUser.diamonds || 0),
+          });
+        }
+      } catch (e) {}
+      return updatedUser;
+    }
 
     default:
       throw new Error(`Invalid operation type: ${operation}. Must be 'add', 'deduct', or 'earn'.`);
   }
-
-  updateObject = { $inc: { [targetField]: operatorValue } };
 
   const updatedUser = await User.findOneAndUpdate(
     filter,
@@ -47,15 +76,21 @@ async function updateBalance(
   ).exec();
 
   if (!updatedUser) {
-    // If it failed during deduct, it might be due to insufficient funds (filter constraint)
-    if (operation === 'deduct') {
-      const userExists = await User.findById(userId).session(session || null);
-      if (userExists && (userExists.diamonds || 0) < amount) {
-        throw new Error(`Insufficient balance. Available: ${userExists.diamonds || 0}, Required: ${amount}`);
-      }
-    }
     throw new Error(`User with ID ${userId} not found or update failed.`);
   }
+
+  try {
+    const { getIO, getUserRoom } = require('../sockets');
+    const io = getIO();
+    if (io) {
+      io.to(getUserRoom(String(updatedUser._id))).emit('balanceUpdated', {
+        userId: String(updatedUser._id),
+        coins: Number(updatedUser.coins || 0),
+        diamonds: Number(updatedUser.diamonds || 0),
+        totalBalance: Number(updatedUser.coins || 0) + Number(updatedUser.diamonds || 0),
+      });
+    }
+  } catch (e) {}
 
   return updatedUser;
 }

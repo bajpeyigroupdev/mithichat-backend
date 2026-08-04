@@ -695,23 +695,29 @@ export const getAllAgencies = async (req: Request, res: Response, next: NextFunc
 
 export const createAgency = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const { name, ownerId, commissionRate } = req.body;
+        const { name, ownerId, commissionRate, logo, agencyLogo } = req.body;
         if (!name || !ownerId) {
             return sendResponse(res, 400, false, 'Name and ownerId are required');
         }
 
+        const logoUrl = logo || agencyLogo || '';
         // Auto-generate a unique code
-        const code = `AGE${Math.floor(1000 + Math.random() * 9000)}`;
+        const code = `AGY-${Math.floor(10000 + Math.random() * 90000)}`;
 
         const agency = await Agency.create({
             name,
             code,
             ownerId,
+            logo: logoUrl,
             commissionRate: commissionRate ? parseFloat(commissionRate) : 10
         });
 
         // Set the owner role as an agency-level admin so it stays separate from standard admins.
-        await User.findByIdAndUpdate(ownerId, { role: 'agency' });
+        await User.findByIdAndUpdate(ownerId, {
+            role: 'agency',
+            agencyName: name,
+            ...(logoUrl ? { agencyLogo: logoUrl, image: logoUrl } : {})
+        });
 
         await logAudit(req, 'CREATE_AGENCY', agency.code, `Agency Name: ${name}`);
         return sendResponse(res, 201, true, 'Agency profile created successfully', agency);

@@ -46,14 +46,10 @@ const chatSocket = (io: Server) => {
         const userIdStr = socket.user.id.toString();
         const userRoom = getUserRoom(userIdStr);
 
-        // Single-device enforcement: Notify previous device via Socket to force logout immediately
-        socket.to(userRoom).emit("force_logout", {
-            message: "Aapka account kisi aur device me login ho gaya hai.",
-            code: "SINGLE_DEVICE_LOGOUT"
-        });
-
-        // Join personal room for targeting
+        // Join personal rooms for targeting across aliases (_id, numeric userId, meethiId)
         socket.join(userRoom);
+        socket.join(`user:${userIdStr}`);
+        if (socket.user.userId) socket.join(`user:${socket.user.userId}`);
 
         // Mark Online in Redis
         await redis.sadd("online_users", userIdStr);

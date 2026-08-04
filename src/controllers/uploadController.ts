@@ -21,7 +21,14 @@ export const getUploadSignature = async (req: AuthRequest, res: Response) => {
         const normalizedType = type?.toLowerCase().trim();
 
         switch (normalizedType) {
+            case 'image':
+            case 'images':
+            case 'photo':
+            case 'photos':
             case 'kyc':
+            case 'doc':
+            case 'document':
+            case 'documents':
                 folderName = 'kyc_documents';
                 break;
             case 'avatar':
@@ -46,8 +53,15 @@ export const getUploadSignature = async (req: AuthRequest, res: Response) => {
             case 'banners':
                 folderName = 'banners';
                 break;
+            case 'raw':
+            case 'audio':
+            case 'voice':
+            case 'video':
+            case 'file':
+                folderName = 'voice_recordings';
+                break;
             default:
-                return sendResponse(res, 400, false, `Invalid upload type: ${type}. Allowed: kyc, avatar, frame, help, chat, host, banner`);
+                return sendResponse(res, 400, false, `Invalid upload type: ${type}. Allowed: kyc, avatar, frame, help, chat, host, banner, raw, audio, voice, doc`);
         }
 
         // Generate a unique public_id on the backend

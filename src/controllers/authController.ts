@@ -198,6 +198,10 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
         image = "";
       }
     }
+    const countryObj = (typeof country === 'object' && country !== null)
+      ? country
+      : { name: typeof country === 'string' ? country : '', code: '', flag: '' };
+
     const newUser = new User({
       phoneNumber,
       password: hashedPassword,
@@ -208,7 +212,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       name,
       image,
       language,
-      country,
+      country: countryObj,
       authType: "phone",
       age: Number(age) || 18,
       device: {

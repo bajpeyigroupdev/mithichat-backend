@@ -189,20 +189,6 @@ router.get('/agencies', verifyToken, getAllAgencies);
 router.post('/agencies', verifyToken, createAgency);
 router.patch('/agencies/:id', verifyToken, blockAgency);
 router.post('/agencies/assign-host', verifyToken, assignHostToAgency);
-
-// Content Moderation
-router.get('/moderation/blocked-words', verifyToken, getBlockedWords);
-router.post('/moderation/blocked-words', verifyToken, addBlockedWord);
-router.delete('/moderation/blocked-words/:id', verifyToken, deleteBlockedWord);
-
-// Security & Logs
-router.get('/security/audit-logs', verifyToken, getAuditLogs);
-router.get('/security/system-logs', verifyToken, getSystemLogs);
-
-// Help Desk Support
-router.get('/help', verifyToken, getHelpTickets);
-router.patch('/help/:id/reply', verifyToken, replyHelpTicket);
-
 // User Deletion Approval Management
 router.get('/deletion-requests', verifyToken, getDeletionRequests);
 router.post('/deletion-requests/:id/process', verifyToken, processDeletionRequest);
@@ -225,6 +211,10 @@ router.get('/default-bios', verifyToken, getAdminDefaultBios);
 router.post('/default-bios', verifyToken, createDefaultBio);
 router.patch('/default-bios/:id', verifyToken, updateDefaultBio);
 router.delete('/default-bios/:id', verifyToken, deleteDefaultBio);
+
+// System Messages Broadcast
+import { sendSystemNotification } from '../controllers/notificationController';
+router.post('/system-messages', verifyToken, sendSystemNotification as any);
 
 // ============ Event/Offer Broadcast Route ============
 import { broadcastEvent, getActivityEvents, createActivityEvent, publishActivityEvent, closeActivityEvent } from '../controllers/managementController';

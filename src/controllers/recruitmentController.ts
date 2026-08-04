@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { RecruitmentApplication, RecruitmentRole, ApplicationStatus } from '../models/recruitmentApplication.model';
 import { User } from '../models/user.model';
-import { Request as RequestModel } from '../models/request.model';
+import { Request as RequestModel, RequestStatus } from '../models/request.model';
 import sendResponse from '../utils/reponse';
 import { Logger } from '../utils/logger';
 import { sendRecruitmentWorkflowNotification } from '../services/recruitmentNotification';
@@ -292,12 +292,16 @@ export const submitApplication = async (req: Request, res: Response) => {
                 const adharFrontDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('front') || d.documentType === 'GovtID');
                 const adharBackDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('back'));
                 const panDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('pan') || d.documentType === 'Certificate');
+                const voiceDoc = parsedDocs.find(d => d.documentType === 'Voice' || d.documentType === 'Audio' || d.name?.toLowerCase().includes('voice') || d.name?.toLowerCase().includes('portfolio') || d.documentType === 'Portfolio');
+
+                const voiceUrl = body.voiceAudioUrl || body.audio || body.voice || voiceDoc?.url || body.portfolio || '';
 
                 const generatedPassword = generateStrongPassword(applicantName, applicantPhone, applicantEmail);
 
                 await RequestModel.create({
                     requestType,
                     role,
+                    workflowSteps: role === 'agency' ? ['Admin Review', 'Super Admin Review', 'Operator / Owner Approval'] : (role === 'host' ? ['Stage 1: Operator Review', 'Stage 2: Owner Approval'] : []),
                     passwordBeforeApproval: generatedPassword,
                     referralCode: referrerData?.code || referralCode || '',
                     referralUserId: referrerData?.referrerId ? referrerData.referrerId.toString() : '',
@@ -324,10 +328,14 @@ export const submitApplication = async (req: Request, res: Response) => {
                         adharFront: adharFrontDoc?.url || '',
                         adharBack: adharBackDoc?.url || '',
                         pan: panDoc?.url || '',
+                        audio: voiceUrl,
+                        voiceAudioUrl: voiceUrl,
+                        voice: voiceUrl,
+                        documents: parsedDocs,
                         specialCode: roleSpecificFields.specialCode || roleSpecificFields.adminCode || roleSpecificFields.superAdminCode || roleSpecificFields.operatorCode || '',
                         ...roleSpecificFields
                     },
-                    status: 'pending',
+                    status: role === 'host' ? RequestStatus.UNDER_REVIEW : RequestStatus.PENDING,
                     createdBy: referrerData?.referrerId || 'public_recruitment',
                     createdByRole: referrerData?.referrerRole || 'public'
                 });

@@ -1,106 +1,126 @@
-
 import { Response } from "express";
 import { AuthRequest } from "../middlewares/authorize.middleware";
-import sendResponse from "../utils/reponse";
 import { Gift } from "../models/gift.model";
 import { User } from "../models/user.model";
+import sendResponse from "../utils/reponse";
 import { CoinsTransaction } from "../models/spentCoinModel";
-import { TransactionType, CallStatus } from "../constants/user";
+import { CallStatus, TransactionType } from "../constants/user";
 import mongoose from "mongoose";
 import { getIO, getUserRoom } from "../sockets";
 import { getCachedSettings } from "./settingsController";
 
-// Get All Gifts
+const DEFAULT_COMMISSION_PERCENT = 30;
+
+// Get All Active Gifts (grouped by category for users)
 export const getAllGifts = async (req: AuthRequest, res: Response) => {
     try {
         const gifts = await Gift.find({ isActive: true }).sort({ cost: 1 });
-        return sendResponse(res, 200, true, "Gifts fetched", gifts);
+        return sendResponse(res, 200, true, "Gifts fetched successfully", gifts);
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
     }
-}
+};
 
-// Send Gift (During Call)
+export const getGifts = getAllGifts;
+
+// Send Gift (In-Call or Direct)
 export const sendGift = async (req: AuthRequest, res: Response) => {
     const session = await mongoose.startSession();
     session.startTransaction();
-    try {
-        // Use req.user.id (MongoDB _id) NOT req.user.userId (numeric custom ID like 330003)
-        const senderId = req.user?.id;
-        let { giftId, receiverId, callId, count } = req.body;
-        const qty = Math.max(1, parseInt(count as string) || 1);
-        const activeStatuses = [
-            CallStatus.ACCEPTED,
-            CallStatus.CONNECTING,
-            CallStatus.CONNECTED,
-        ];
-        let callTransaction = callId
-            ? await CoinsTransaction.findById(callId).session(session)
-            : null;
 
-        // Fallback: If no receiverId, find it from the active transaction (callId)
-        if (!receiverId && callTransaction) {
-            receiverId = callTransaction.hostId;
+    try {
+        const { giftId, callId, count } = req.body;
+        const senderId = req.user?.id;
+
+        if (!giftId) {
+            await session.abortTransaction();
+            return sendResponse(res, 400, false, "giftId is required");
+        }
+
+        const qty = Math.max(1, Number(count) || 1);
+
+        const giftDoc = await Gift.findById(giftId).session(session);
+        if (!giftDoc || !giftDoc.isActive) {
+            await session.abortTransaction();
+            return sendResponse(res, 404, false, "Gift not found or inactive");
+        }
+
+        const totalCost = giftDoc.cost * qty;
+        const sender = await User.findById(senderId).session(session);
+        if (!sender) {
+            await session.abortTransaction();
+            return sendResponse(res, 404, false, "Sender not found");
+        }
+
+        let receiverId: string | mongoose.Types.ObjectId | null = null;
+        let callTransaction: any = null;
+
+        if (callId) {
+            callTransaction = await CoinsTransaction.findById(callId).session(session);
+            if (callTransaction) {
+                receiverId = String(callTransaction.userId) === String(senderId)
+                    ? callTransaction.hostId
+                    : callTransaction.userId;
+            }
+        }
+
+        if (!receiverId && req.body.receiverId) {
+            receiverId = req.body.receiverId;
         }
 
         if (!receiverId) {
             await session.abortTransaction();
-            return sendResponse(res, 400, false, "Receiver not identified");
+            return sendResponse(res, 400, false, "Receiver not found for gift");
         }
 
-        const gift = await Gift.findById(giftId).session(session);
-        if (!gift) {
+        const receiver = await User.findById(receiverId).session(session);
+        if (!receiver) {
             await session.abortTransaction();
-            return sendResponse(res, 404, false, "Gift not found");
+            return sendResponse(res, 404, false, "Gift recipient not found");
         }
 
-        const sender = await User.findById(senderId).session(session);
-        const totalCost = gift.cost * qty;
-        const settings = await getCachedSettings();
-        const giftCommissionPercent = Math.min(100, Math.max(0, Number(settings.giftCommissionPercent || 0)));
-        const hostEarning = Math.floor(totalCost * (100 - giftCommissionPercent) / 100);
-        const platformCommission = totalCost - hostEarning;
-        if (!sender) {
-            await session.abortTransaction();
-            return sendResponse(res, 400, false, "Insufficient coins");
-        }
+        const systemSettings = await getCachedSettings();
+        const giftCommissionPercent = Math.max(
+            0,
+            Math.min(100, Number(systemSettings.giftCommissionPercent ?? DEFAULT_COMMISSION_PERCENT))
+        );
+        const hostEarningShare = (100 - giftCommissionPercent) / 100;
+        const hostEarning = Math.round(totalCost * hostEarningShare);
+        const platformCommission = Math.max(0, totalCost - hostEarning);
 
-        if (
-            !callTransaction ||
-            String(callTransaction.userId) !== String(senderId) ||
-            !activeStatuses.includes(callTransaction.status)
-        ) {
-            callTransaction = await CoinsTransaction.findOne({
-                userId: senderId,
-                status: { $in: activeStatuses },
-            }).session(session);
-        }
-
-        const reservedDiamonds =
+        const activeStatuses = [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED, CallStatus.RINGING];
+        const callRate = Number((callTransaction?.meta as any)?.callDiamondsPerMinute || 100);
+        const reservedCoinsForCall =
             callTransaction &&
             String(callTransaction.userId) === String(senderId) &&
             activeStatuses.includes(callTransaction.status)
-                ? Number((callTransaction.meta as any)?.reservedDiamonds || 0)
+                ? callRate
                 : 0;
-        const spendableDiamonds = Math.max(0, (sender.diamonds || 0) - reservedDiamonds);
 
-        if (spendableDiamonds < totalCost) {
+        const totalBalance = Number(sender.coins || 0) + Number(sender.diamonds || 0);
+        const spendableBalance = Math.max(0, totalBalance - reservedCoinsForCall);
+
+        if (totalBalance < totalCost) {
             await session.abortTransaction();
             return sendResponse(
                 res,
                 400,
                 false,
-                reservedDiamonds > 0
-                    ? "Call balance is reserved. Add diamonds or choose a smaller gift."
-                    : "Insufficient coins"
+                "Insufficient coins to send this gift"
             );
         }
 
-        // Deduct from Sender
-        sender.diamonds = (sender.diamonds || 0) - totalCost;
+        // Deduct from Sender (coins first, then diamonds)
+        let remainingDeduct = totalCost;
+        let coinsDeduct = Math.min(sender.coins || 0, remainingDeduct);
+        remainingDeduct -= coinsDeduct;
+        let diamondsDeduct = Math.min(sender.diamonds || 0, remainingDeduct);
+
+        sender.coins = (sender.coins || 0) - coinsDeduct;
+        sender.diamonds = (sender.diamonds || 0) - diamondsDeduct;
         await sender.save({ session });
 
-        // Add to Receiver
+        // Add to Receiver (Host earns coins)
         if (hostEarning > 0) {
             await User.findByIdAndUpdate(receiverId, { $inc: { coins: hostEarning } }, { session });
         }
@@ -109,11 +129,11 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         await CoinsTransaction.create([{
             userId: sender._id,
             hostId: receiverId,
-            type: TransactionType.GIFT_SENT || 'gift_sent', // Ensure enum has this or use string
+            type: TransactionType.GIFT_SENT || 'gift_sent',
             coinsSpent: totalCost,
             hostEarning,
-            status: CallStatus.ENDED, // Immediate transaction
-            meta: { giftId: gift._id, giftName: gift.name, callId, count: qty, giftCommissionPercent, platformCommission }
+            status: CallStatus.ENDED,
+            meta: { giftId: giftDoc._id, giftName: giftDoc.name, callId, count: qty, giftCommissionPercent, platformCommission }
         }], { session });
 
         await session.commitTransaction();
@@ -122,47 +142,51 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             callId: callId ? String(callId) : '',
             senderId: String(sender._id),
             receiverId: String(receiverId),
-            giftId: String(gift._id),
-            name: gift.name,
-            icon: gift.icon,
-            animationUrl: gift.animationUrl || '',
-            mediaType: gift.mediaType || 'image',
+            giftId: String(giftDoc._id),
+            name: giftDoc.name,
+            icon: giftDoc.icon,
+            animationUrl: giftDoc.animationUrl || '',
+            mediaType: giftDoc.mediaType || 'image',
             count: qty,
             totalCost,
             hostEarning,
             giftCommissionPercent,
         };
 
-        // Both call participants receive the same real-time payload. This
-        // keeps the animation synchronized on sender and receiver screens.
         const io = getIO();
         io.to(getUserRoom(String(receiverId))).emit('giftReceived', giftPayload);
         io.to(getUserRoom(String(sender._id))).emit('giftReceived', giftPayload);
 
-        return sendResponse(res, 200, true, "Gift sent successfully", {
-            newBalance: sender.diamonds,
-            giftName: gift.name,
-            ...giftPayload,
+        io.to(getUserRoom(String(sender._id))).emit('balanceUpdated', {
+            userId: String(sender._id),
+            coins: Number(sender.coins || 0),
+            diamonds: Number(sender.diamonds || 0),
+            totalBalance: Number(sender.coins || 0) + Number(sender.diamonds || 0),
         });
 
+        return sendResponse(res, 200, true, "Gift sent successfully", {
+            newBalance: sender.coins,
+            giftName: giftDoc.name,
+            ...giftPayload,
+        });
     } catch (error: any) {
         await session.abortTransaction();
         return sendResponse(res, 500, false, error.message);
     } finally {
         session.endSession();
     }
-}
+};
 
 // Admin: Add Gift
 export const createGift = async (req: AuthRequest, res: Response) => {
     try {
         const { name, icon, animationUrl, mediaType, cost, category } = req.body;
-        const gift = await Gift.create({ name, icon, animationUrl, mediaType, cost, category });
-        return sendResponse(res, 201, true, "Gift created", gift);
+        const giftDoc = await Gift.create({ name, icon, animationUrl, mediaType, cost, category });
+        return sendResponse(res, 201, true, "Gift created", giftDoc);
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
     }
-}
+};
 
 // Admin: Get All Gifts (including inactive)
 export const getAllGiftsAdmin = async (req: AuthRequest, res: Response) => {
@@ -172,29 +196,29 @@ export const getAllGiftsAdmin = async (req: AuthRequest, res: Response) => {
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
     }
-}
+};
 
 // Admin: Toggle gift active/inactive
 export const toggleGiftActive = async (req: AuthRequest, res: Response) => {
     try {
         const { id } = req.params;
         const { isActive } = req.body;
-        const gift = await Gift.findByIdAndUpdate(id, { isActive }, { new: true });
-        if (!gift) return sendResponse(res, 404, false, "Gift not found");
-        return sendResponse(res, 200, true, `Gift ${isActive ? 'enabled' : 'disabled'}`, gift);
+        const giftDoc = await Gift.findByIdAndUpdate(id, { isActive }, { new: true });
+        if (!giftDoc) return sendResponse(res, 404, false, "Gift not found");
+        return sendResponse(res, 200, true, `Gift ${isActive ? 'enabled' : 'disabled'}`, giftDoc);
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
     }
-}
+};
 
 // Admin: Delete Gift (hard delete)
 export const deleteGift = async (req: AuthRequest, res: Response) => {
     try {
         const { id } = req.params;
-        const gift = await Gift.findByIdAndDelete(id);
-        if (!gift) return sendResponse(res, 404, false, "Gift not found");
-        return sendResponse(res, 200, true, "Gift deleted");
+        const giftDoc = await Gift.findByIdAndDelete(id);
+        if (!giftDoc) return sendResponse(res, 404, false, "Gift not found");
+        return sendResponse(res, 200, true, "Gift deleted successfully");
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
     }
-}
+};

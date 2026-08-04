@@ -164,44 +164,30 @@ export class BillingService {
                 },
             };
 
-            // 6. Deduct from User (Atomic Check)
+            // 6. Deduct from User (coins first, then diamonds)
             if (durationSec > 0 && coinsSpent > 0) {
-                // Attempt deduction
-                const userUpdate = await User.findOneAndUpdate(
-                    {
-                        _id: transaction.userId,
-                        diamonds: { $gte: coinsSpent },
-                    },
-                    { $inc: { diamonds: -coinsSpent } },
-                    { session, new: true }
-                );
+                const user = await User.findById(transaction.userId).session(session);
+                if (user) {
+                    let remaining = coinsSpent;
+                    let coinsDeduct = Math.min(user.coins || 0, remaining);
+                    remaining -= coinsDeduct;
+                    let diamondsDeduct = Math.min(user.diamonds || 0, remaining);
 
-                if (!userUpdate) {
-                    // RETRY STRATEGY: Partial Deduction
-                    // If full amount failed, take whatever is left.
-                    const user = await User.findById(transaction.userId).session(session);
-                    const availableCoins = user?.diamonds || 0;
+                    await User.findByIdAndUpdate(
+                        transaction.userId,
+                        {
+                            $inc: {
+                                coins: -coinsDeduct,
+                                diamonds: -diamondsDeduct,
+                            }
+                        },
+                        { session }
+                    );
 
-                    if (availableCoins > 0) {
-                        await User.findByIdAndUpdate(
-                            transaction.userId,
-                            { $inc: { diamonds: -availableCoins } },
-                            { session }
-                        );
-
-                        // Update transaction to reflect actuals
-                        transaction.coinsSpent = availableCoins;
-
-                        console.warn(`⚠️ Partial payment for Tx ${transactionId}: Required ${coinsSpent}, Took ${availableCoins}`);
-                    } else {
-                        // User is broke.
-                        transaction.coinsSpent = 0;
-                    }
+                    transaction.coinsSpent = coinsDeduct + diamondsDeduct;
                 }
 
-                // The host completed the connected call and must receive the configured
-                // level rate. A caller balance race (for example, an in-call gift) must
-                // not silently reduce the host's advertised coins/min payout.
+                // Host earns coins
                 if (transaction.hostEarning > 0) {
                     await User.findByIdAndUpdate(
                         transaction.hostId,
@@ -217,7 +203,6 @@ export class BillingService {
             await session.commitTransaction();
 
             // 7. Post-commit: Check if chat should be enabled (10-minute rule)
-            // We do this after commit to avoid bloating the billing transaction
             this.checkAndEnableChat(transaction.userId, transaction.hostId).catch(err =>
                 console.error("Failed to enable chat after call:", err)
             );
@@ -233,17 +218,9 @@ export class BillingService {
                     hostEarning: transaction.hostEarning,
                 },
             };
-
         } catch (error: any) {
-            // BUG-05 FIX: Check inTransaction() before aborting — calling abort on an already-aborted
-            // session throws and overwrites the original error, making debugging impossible
             if (session.inTransaction()) await session.abortTransaction();
-            const isTransient =
-                error?.errorLabels?.includes('TransientTransactionError') ||
-                [112, 251].includes(Number(error?.code)) ||
-                /WriteConflict|TransientTransactionError/i.test(error?.message || '');
-
-            if (isTransient && retryAttempt < 2) {
+            if (error.code === 11000 || retryAttempt < 3) {
                 await new Promise(resolve => setTimeout(resolve, 80 * (retryAttempt + 1)));
                 return BillingService.processCallEnd(
                     transactionId,
@@ -266,7 +243,6 @@ export class BillingService {
     static async processPulse(transactionId: string): Promise<boolean> {
         try {
             const now = new Date();
-            // Atomically update lastHeartbeat, transition status to CONNECTED, and set callStart if it doesn't exist
             await CoinsTransaction.updateOne(
                 { 
                     _id: transactionId,

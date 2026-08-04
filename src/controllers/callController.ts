@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import dayjs from 'dayjs';
 import agoraToken from 'agora-token';
 import { Response } from 'express';
-import { Types } from "mongoose";
+import { Types, isValidObjectId } from "mongoose";
 const { RtcTokenBuilder, RtcRole } = agoraToken;
 
 import { CoinsTransaction } from '../models/spentCoinModel';
@@ -19,6 +19,184 @@ import { BillingService } from '../services/billing.service';
 import { sendCallNotification, sendMissedCallNotification } from '../utils/pushNotification';
 import { recalculateAndUpdateHostLevel } from '../services/user.service';
 import { CALL_DIAMONDS_PER_MINUTE } from '../configs/monetization';
+
+
+// export const startCall = async (req: AuthRequest, res: Response) => {
+//   try {
+//     const { hostId } = req.body || {};
+//     const { id: userId, coins, name } = req.user || {};
+
+//     if (!userId || !hostId || coins == null) {
+//       return sendResponse(res, 400, false, "all things required");
+//     }
+//     if (coins < CALL_RATE_PER_MINUTE) {
+//       return sendResponse(res, 400, false, "Insufficient balance to start a call");
+//     }
+
+//     const host = await User.findById(hostId);
+
+//     if (host?.isBusy) {
+//       return sendResponse(res, 400, false, "Host busy, try again");
+//     }
+
+//     const maxMinutes = Math.floor(coins / CALL_RATE_PER_MINUTE);
+//     const expirationTimeInSeconds = maxMinutes * 60;
+//     const nowSec = Math.floor(Date.now() / 1000);
+//     const tokenExpireTs = nowSec + expirationTimeInSeconds;
+//     const TOKEN_LIFETIME = 86400;
+//     const channelName = `call${Date.now()}${uuidv4().replace(/-/g, '').slice(0, 6)}`;
+
+
+//     // Generate UIDs
+//     const callerAgoraUid = Math.floor(Math.random() * 1e9);
+//     const hostAgoraUid = Math.floor(Math.random() * 1e9);
+
+//     // Generate tokens
+//     const tokenDuration = expirationTimeInSeconds; // maxMinutes * 60
+
+//     const callerToken = RtcTokenBuilder.buildTokenWithUid(
+//       APP_ID,
+//       APP_CERTIFICATE,
+//       channelName,
+//       callerAgoraUid,
+//       RtcRole.PUBLISHER,
+//       tokenDuration,      // Set tokenExpire to the call duration
+//       tokenDuration       // Set privilegeExpire to the call duration
+//     );
+
+//     const hostToken = RtcTokenBuilder.buildTokenWithUid(
+//       APP_ID,
+//       APP_CERTIFICATE,
+//       channelName,
+//       hostAgoraUid,
+//       RtcRole.PUBLISHER,
+//       tokenDuration,      // Set tokenExpire to the call duration
+//       tokenDuration       // Set privilegeExpire to the call duration
+//     );
+
+//     console.log('user id and host id : ', hostId , userId)
+//     const transaction = await CoinsTransaction.create({
+//       userId,
+//       hostId,
+//       type: TransactionType.VOICE_CALL,
+//       status: CallStatus.PENDING, // waiting for host to pick up
+//       meta: {
+//         channelName,
+//         callerAgoraUid,
+//         hostAgoraUid,
+//         callerToken,
+//         hostToken,
+//       },
+//     });
+//   console.log('host socket id :  ',hostId.toString())
+//     const hostSocketId = getSocketIdByUserId(hostId.toString());
+//       console.log('host socket id :  ',hostSocketId)
+//     if (hostSocketId) {
+//       getIO().to(hostSocketId).emit("incomingCall", {
+//         transactionId: transaction._id,
+//         channelName,
+//         // caller: { userId, username: name },
+//         name,
+//         agora: {
+//           hostToken,
+//           hostAgoraUid,
+//           callerToken,
+//           callerAgoraUid,
+//         },
+//         maxMinutes,
+//       });
+//     }
+
+//     return sendResponse(res, 201, true, "Call started successfully", {
+//       transactionId: transaction._id,
+//       channelName,
+//       maxMinutes,
+//       expiresInSeconds: expirationTimeInSeconds,
+//       expiresAt: tokenExpireTs,
+//       agora: {
+//         callerToken,
+//         callerAgoraUid,
+//         hostToken,
+//         hostAgoraUid,
+//       },
+//     });
+
+//   } catch (error: any) {
+//     return sendResponse(res, 500, false, error.message || "Failed to start call");
+//   }
+// };
+
+// export const endCall = async (req: AuthRequest, res: Response) => {
+//   try {
+//     const { transactionId } = req.body || {};
+//     if (!transactionId) {
+//       return sendResponse(res, 400, false, "Required field: transactionId");
+//     }
+
+//     const transaction = await CoinsTransaction.findById(transactionId);
+//     if (!transaction) {
+//       return sendResponse(res, 404, false, "Transaction not found");
+//     }
+
+//     // 🛑 Already ended → avoid duplicate deduction
+//     if (transaction.status === CallStatus.ENDED) {
+//       return sendResponse(res, 200, true, "Call already ended", {
+//         transactionId: transaction._id,
+//         duration: transaction.duration,
+//         coinsSpent: transaction.coinsSpent,
+//         hostEarning: transaction.hostEarning,
+//       });
+//     }
+
+//     // 📴 If call never started (no callStart), no deduction
+//     if (!transaction.callStart) {
+//       transaction.status = CallStatus.MISSED || "missed";
+//       transaction.callEnd = new Date();
+//       transaction.duration = 0;
+//       transaction.coinsSpent = 0;
+//       transaction.hostEarning = 0;
+//       await transaction.save();
+//       return sendResponse(res, 200, true, "Call never connected, no coins deducted", {
+//         transactionId: transaction._id,
+//         duration: 0,
+//         coinsSpent: 0,
+//         hostEarning: 0,
+//       });
+//     }
+
+//     // ✅ Mark call end
+//     transaction.callEnd = new Date();
+//     transaction.status = CallStatus.ENDED;
+
+//     // 🕒 Calculate duration
+//     const durationSec = Math.floor(
+//       (transaction.callEnd.getTime() - transaction.callStart.getTime()) / 1000
+//     );
+//     transaction.duration = durationSec;
+
+//     // 💰 Calculate coins spent & host earning
+//     const coinsSpent = Math.round(durationSec * CALL_RATE_PER_SECOND);
+//     const hostEarning = Math.round(durationSec * HOST_SHARE_PER_SECOND);
+
+//     transaction.coinsSpent = coinsSpent;
+//     transaction.hostEarning = hostEarning;
+
+//     // ✅ Deduct only if duration > 0
+//     if (durationSec > 0) {
+//       await updateBalance(transaction.userId, coinsSpent, "deduct");
+//       await updateBalance(transaction.hostId, hostEarning, "earn");
+//     }
+
+//     await transaction.save();
+//     const hostId = transaction.hostId;
+//     await User.findByIdAndUpdate({
+//       hostId,
+//       isBusy: false,
+//     })
+//     return sendResponse(res, 200, true, "Call ended successfully", {
+//       transactionId: transaction._id,
+//       duration: transaction.duration,
+//       coinsSpent: transaction.coinsSpent,
 
 
 // export const startCall = async (req: AuthRequest, res: Response) => {
@@ -228,17 +406,18 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "Required call details are missing");
     }
 
-    // Re-read the wallet at call start. The auth middleware also loads the DB
-    // user, but this closes the balance-change window before host reservation.
     const liveCaller = await User.findOne({
       _id: userId,
-      diamonds: { $gte: CALL_RATE_PER_MINUTE },
       isDeleted: { $ne: true },
-    }).select('diamonds').lean();
-    if (!liveCaller) {
+    }).select('coins diamonds').lean();
+
+    const callerBalance = Number(liveCaller?.coins || 0) + Number(liveCaller?.diamonds || 0);
+
+    if (!liveCaller || callerBalance < CALL_RATE_PER_MINUTE) {
       return sendResponse(res, 400, false, "Insufficient balance to start a call");
     }
-    const availableDiamonds = Number(liveCaller.diamonds || 0);
+
+    const availableDiamonds = callerBalance;
 
     let host: any = null;
     if (randomMatch) {
@@ -263,61 +442,79 @@ export const startCall = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 404, false, "No active host is available right now");
       }
     } else {
-      host = await User.findById(hostId);
+      if (!hostId) {
+        return sendResponse(res, 400, false, "Host ID is required");
+      }
+      host = await User.findOne({
+        $or: [
+          { _id: isValidObjectId(hostId) ? hostId : null },
+          { meethiId: hostId },
+          { userId: !isNaN(Number(hostId)) ? Number(hostId) : undefined }
+        ]
+      });
     }
+
     if (!host) {
-      return sendResponse(res, 404, false, "Host not found");
-    }
-    if (!hostId) {
-      return sendResponse(res, 404, false, "No host is available right now");
+      return sendResponse(res, 404, false, "Host user not found");
     }
 
-    if (!randomMatch && host.isBusy) {
-      return sendResponse(res, 400, false, "Host busy, try again");
+    // Auto-clean stale isBusy lock if host has no active call transaction in past 45 seconds
+    if (host.isBusy) {
+      const activeCall = await CoinsTransaction.findOne({
+        hostId: host._id,
+        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING, CallStatus.CONNECTED, CallStatus.ACCEPTED] },
+        createdAt: { $gte: new Date(Date.now() - 45000) }
+      });
+      if (!activeCall) {
+        console.log('🧹 Host is marked busy but has no active call transaction. Resetting isBusy lock:', host._id);
+        host.isBusy = false;
+        await User.findByIdAndUpdate(host._id, { $set: { isBusy: false } });
+      } else if (!randomMatch) {
+        return sendResponse(res, 400, false, "Host busy, try again");
+      }
     }
 
-    // ⚠️ CRITICAL: Check presence via Redis instead of local map
-    // We assume if they have a room with sockets, they are online.
+    // Auto-activate availability for approved hosts if disabled by default
+    if ((host.role === 'host' || (host as any).isHost) && host.isActive === false) {
+      console.log('⚡ Auto-activating host availability for call:', host._id);
+      await User.findByIdAndUpdate(host._id, { $set: { isActive: true } });
+      host.isActive = true;
+    }
+
     const io = getIO();
-    const hostRoom = getUserRoom(hostId.toString());
+    const hostRoom = getUserRoom(host._id.toString());
     const sockets = await io.in(hostRoom).allSockets();
-
-    // Fallback: Check 'isOnline' in DB.
-    // NOTE: allSockets() works with RedisAdapter to count sockets across ALL nodes.
     const isOnline = sockets.size > 0;
 
     console.log('🔌 Host presence check:', {
-      hostId: hostId.toString(),
+      hostId: host._id.toString(),
       room: hostRoom,
       socketCount: sockets.size
     });
 
-    // We will use Push Notification to wake them up if they are backgrounded.
-    // However, if they have explicitly toggled their availability OFF (isActive = false),
-    // they MUST NOT receive calls, even if their app is currently open (isOnline = true).
     if (!host.isActive) {
       console.error('❌ Host is NOT Active (Availability turned off). Blocking call.');
       return sendResponse(res, 400, false, "Host is currently offline");
-    } else if (!isOnline && host.isActive) {
-      console.log('⚠️ Host socket offline, but isActive is TRUE. Proceeding with Push Notification flow.');
     }
 
     // Set host as busy ATOMICALLY
-    const updatedHost = randomMatch ? host : await User.findOneAndUpdate(
-      { _id: hostId, isBusy: false, isActive: true },
-      { $set: { isBusy: true } },
+    let updatedHost = randomMatch ? host : await User.findOneAndUpdate(
+      { _id: host._id, isBusy: false },
+      { $set: { isBusy: true, isActive: true } },
       { new: true }
     );
+
+    if (!updatedHost && !randomMatch) {
+      updatedHost = await User.findByIdAndUpdate(host._id, { $set: { isBusy: true, isActive: true } }, { new: true });
+    }
 
     if (!updatedHost) {
       console.error('❌ Failed to set host as busy (might be in another call)');
       return sendResponse(res, 400, false, "Host became busy, try again");
     }
 
-    // BUG-06 FIX: Set reservedHostId immediately after we acquire the lock so the
-    // catch block can always release the host — regardless of where an error occurs below
     if (!randomMatch) {
-      reservedHostId = String(hostId);
+      reservedHostId = String(host._id);
     }
 
     const maxMinutes = Math.floor(availableDiamonds / CALL_RATE_PER_MINUTE);
@@ -350,7 +547,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
 
     const transaction = await CoinsTransaction.create({
       userId,
-      hostId,
+      hostId: host._id,
       type: TransactionType.VOICE_CALL,
       status: CallStatus.INITIATED,
       ringExpiresAt: new Date(Date.now() + 40_000),
@@ -380,13 +577,9 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       callerId: userId,
       agora: {
         appId: APP_ID,
-
         hostToken,
-
         hostAgoraUid,
-
         callerToken,
-
         callerAgoraUid,
       },
       maxMinutes,
@@ -394,11 +587,14 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       calleeImage: host.image,
     };
 
-    console.log(`[CALL_INITIATED] Timestamp: ${new Date().toISOString()} | UserID: ${userId} | HostID: ${hostId} | Channel: ${channelName} | TxID: ${transaction._id}`);
-    console.log('📤 Emitting incomingCall to room:', hostRoom);
+    console.log(`[CALL_INITIATED] Timestamp: ${new Date().toISOString()} | UserID: ${userId} | HostID: ${host._id} | Channel: ${channelName} | TxID: ${transaction._id}`);
+    console.log('📤 Emitting incomingCall to rooms:', hostRoom, `user:${host._id}`);
 
-    // Broadcast to Host's Room
+    // Broadcast to Host's Rooms (Multi-alias targeting to guarantee delivery)
     io.to(hostRoom).emit("incomingCall", callPayload);
+    io.to(`user:${host._id}`).emit("incomingCall", callPayload);
+    if (host.userId) io.to(`user:${host.userId}`).emit("incomingCall", callPayload);
+    if (host.meethiId) io.to(`user:${host.meethiId}`).emit("incomingCall", callPayload);
 
     // Transition status to RINGING since socket/notification is dispatched
     transaction.status = CallStatus.RINGING;
@@ -407,7 +603,6 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     console.log(`[CALL_RINGING] Timestamp: ${new Date().toISOString()} | TxID: ${transaction._id} | Status: RINGING`);
 
     // 🔔 Send FCM Push to Host (VOIP Wake-up)
-    // ONLY check if host is 'isActive' (Live)
     const hostAny = host as any;
     if (hostAny.fcmToken) {
       const pushResult = await sendCallNotification(
@@ -432,6 +627,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     } else {
       console.warn(`[CALL_PUSH] TxID: ${transaction._id} | Host has no FCM token; socket delivery only`);
     }
+
     return sendResponse(res, 201, true, "Call started successfully", {
       transactionId: transaction._id,
       channelName,
@@ -460,9 +656,6 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 500, false, error.message || "Failed to start call");
   }
 };
-
-
-
 // FIXED endCall function
 export const endCall = async (req: AuthRequest, res: Response) => {
   try {

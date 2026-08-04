@@ -15,6 +15,8 @@ import { generateUniqueId } from '../utils/generator';
 import { ROLE_PERMISSION_MATRIX } from '../configs/rbacMatrix';
 import { PAGE_PERMISSION_REGISTRY } from '../configs/permissionRegistry';
 import { HierarchyScopeService } from '../utils/hierarchyScope';
+import mongoose from 'mongoose';
+import TempHostModel from '../models/temp.host.model';
 import { permanentlyDeleteUserRecord } from '../services/permanentUserDeletion.service';
 
 const canManagePermissionTarget = async (
@@ -215,18 +217,24 @@ export const getPermissions = async (req: AuthRequest, res: Response) => {
         dashboardWidgets: [],
       };
 
-      permission = await Permission.create({
-        targetType,
-        targetId,
-        menus: fallback.menus,
-        pages: fallback.pages,
-        modules: fallback.modules,
-        actions: fallback.actions,
-        fields: {},
-        buttons: fallback.buttons,
-        columns: fallback.columns,
-        dashboardWidgets: fallback.dashboardWidgets,
-      });
+      permission = await Permission.findOneAndUpdate(
+        { targetType, targetId },
+        {
+          $setOnInsert: {
+            targetType,
+            targetId,
+            menus: fallback.menus,
+            pages: fallback.pages,
+            modules: fallback.modules,
+            actions: fallback.actions,
+            fields: {},
+            buttons: fallback.buttons,
+            columns: fallback.columns,
+            dashboardWidgets: fallback.dashboardWidgets,
+          }
+        },
+        { upsert: true, new: true }
+      ).catch(() => null);
     }
 
     return sendResponse(res, 200, true, 'Permissions retrieved successfully', permission);
@@ -564,7 +572,10 @@ export const createRequest = async (req: AuthRequest, res: Response) => {
 
     // Resolve workflow config
     const workflow = await Workflow.findOne({ requestType, isActive: true });
-    const steps = workflow ? workflow.steps : [];
+    let steps: string[] = workflow ? workflow.steps.map((s: any) => typeof s === 'string' ? s : (s.title || s.roleRequired)) : [];
+    if ((!steps || steps.length === 0) && (detectedRole === 'agency' || rt.includes('agency'))) {
+      steps = ['Admin Review', 'Super Admin Review', 'Operator / Owner Approval'];
+    }
     // NEVER auto-approve — all requests must go through manual review
     const autoApprove = false;
 
@@ -641,6 +652,7 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
           await RequestModel.create({
             requestType: reqType,
             role: app.role,
+            workflowSteps: app.role === 'agency' ? ['Admin Review', 'Super Admin Review', 'Operator / Owner Approval'] : [],
             referralCode: app.referrer?.code || '',
             referralUserId: app.referrer?.referrerId ? app.referrer.referrerId.toString() : '',
             referralOwner: app.referrer?.referrerName || '',
@@ -788,8 +800,51 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
       RequestModel.countDocuments(filter),
     ]);
 
+    const mappedRequests = await Promise.all(requests.map(async (reqItem: any) => {
+      const docObj = reqItem.toObject ? reqItem.toObject() : { ...reqItem };
+      if (docObj.role === 'host' || docObj.requestType === 'Host Request') {
+        docObj.data = docObj.data || {};
+        if (!docObj.data.voiceAudioUrl && !docObj.data.audio && !docObj.data.voice) {
+          let foundVoice = docObj.data.portfolio || docObj.data.introAudio || docObj.data.voiceUrl || docObj.data.audioURL;
+
+          if (!foundVoice && (docObj.data.email || docObj.data.meethiChatId || docObj.data.mithiChatId)) {
+            const app = await RecruitmentApplication.findOne({
+              $or: [
+                { 'applicant.email': docObj.data.email?.toLowerCase() },
+                { applicationId: docObj.data.meethiChatId || docObj.data.mithiChatId }
+              ]
+            }).lean();
+            if (app) {
+              const voiceDoc = (app.documents || []).find((d: any) =>
+                d.documentType === 'Voice' || d.documentType === 'Audio' || d.documentType === 'Portfolio' ||
+                d.name?.toLowerCase().includes('voice') || d.name?.toLowerCase().includes('portfolio') || d.name?.toLowerCase().includes('audition')
+              );
+              foundVoice = (app.roleData as any)?.voiceAudioUrl || (app.roleData as any)?.audio || (app.roleData as any)?.portfolio || voiceDoc?.url;
+            }
+          }
+
+          if (!foundVoice && (docObj.data.email || docObj.data.phoneNumber || docObj.data.mobile)) {
+            const user = await User.findOne({
+              $or: [
+                { email: docObj.data.email },
+                { phoneNumber: docObj.data.phoneNumber || docObj.data.mobile }
+              ]
+            }).select('audio').lean();
+            if (user?.audio) foundVoice = user.audio;
+          }
+
+          if (foundVoice) {
+            docObj.data.voiceAudioUrl = foundVoice;
+            docObj.data.audio = foundVoice;
+            docObj.data.voice = foundVoice;
+          }
+        }
+      }
+      return docObj;
+    }));
+
     return sendResponse(res, 200, true, 'Requests listed successfully', {
-      data: requests,
+      data: mappedRequests,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -824,8 +879,41 @@ export const deleteRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 403, false, 'You do not have permission to permanently delete requests.');
     }
 
-    const requestObj = await RequestModel.findById(id).lean();
+    let requestObj: any = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      requestObj = await RequestModel.findById(id).lean();
+    }
+
     if (!requestObj) {
+      const searchNum = !isNaN(Number(id)) ? Number(id) : null;
+      const findConditions: any[] = [
+        { 'data.applicationId': id },
+        { 'data.meethiChatId': id },
+        { 'data.mithiChatId': id },
+        { 'data.meethiId': id },
+        ...(searchNum ? [{ userId: searchNum }, { 'data.userId': searchNum }] : []),
+      ];
+      requestObj = await RequestModel.findOne({ $or: findConditions }).lean();
+    }
+
+    if (!requestObj) {
+      const searchNum = !isNaN(Number(id)) ? Number(id) : null;
+      let deletedCount = 0;
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        const resRec = await RecruitmentApplication.deleteOne({ _id: id });
+        deletedCount += resRec.deletedCount || 0;
+      }
+      if (searchNum) {
+        const resTemp = await TempHostModel.deleteOne({ $or: [{ hostId: searchNum }, { userId: searchNum }] });
+        deletedCount += resTemp.deletedCount || 0;
+      }
+      const resRecApp = await RecruitmentApplication.deleteOne({ applicationId: id });
+      deletedCount += resRecApp.deletedCount || 0;
+
+      if (deletedCount > 0) {
+        return sendResponse(res, 200, true, 'Request and linked application permanently deleted.');
+      }
+
       return sendResponse(res, 404, false, 'Request not found.');
     }
 
@@ -1018,31 +1106,51 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, 'Rejected requests cannot be approved.');
     }
 
-    // Enterprise Request Approval Ownership Matrix
-    const approvalOwnershipMatrix: Record<string, { review: string; approve: string }> = {
-      'super-admin': { review: 'operator', approve: 'owner' },
-      'superAdmin': { review: 'operator', approve: 'owner' },
-      'admin': { review: 'superAdmin', approve: 'operator' },
-      'agency': { review: 'superAdmin', approve: 'operator' },
-      'host': { review: 'agency', approve: 'operator' },
-      'coinSeller': { review: 'operator', approve: 'owner' },
-      'seller': { review: 'operator', approve: 'owner' },
-      'customerSupport': { review: 'superAdmin', approve: 'operator' },
-    };
+    const isAgencyRequest = targetRequestRole.includes('agency');
+    if (isAgencyRequest) {
+      if (!requestObj.workflowSteps || requestObj.workflowSteps.length < 3) {
+        requestObj.workflowSteps = ['Admin Review', 'Super Admin Review', 'Operator / Owner Approval'];
+      }
 
-    const targetReqRole = (requestObj.role || requestObj.requestType || '').toLowerCase();
-    const matchingRoleKey = Object.keys(approvalOwnershipMatrix).find(k => targetReqRole.includes(k.toLowerCase())) || 'admin';
-    const ownership = approvalOwnershipMatrix[matchingRoleKey];
+      const isExecutive = actor.role === 'operator' || actor.role === 'owner';
+      if (!isExecutive) {
+        if (requestObj.currentStepIndex === 0) {
+          if (!['admin', 'superAdmin'].includes(actor.role)) {
+            return sendResponse(res, 403, false, 'Stage 1 (Admin Review) for Agency requests requires Admin, Super Admin, Operator, or Owner role.');
+          }
+        } else if (requestObj.currentStepIndex === 1) {
+          if (actor.role !== 'superAdmin') {
+            return sendResponse(res, 403, false, 'Stage 2 (Super Admin Review) for Agency requests requires Super Admin, Operator, or Owner role.');
+          }
+        } else if (requestObj.currentStepIndex >= 2) {
+          return sendResponse(res, 403, false, 'Final Stage 3 Approval for Agency requests requires Operator or Owner role.');
+        }
+      }
+    } else {
+      // Enterprise Request Approval Ownership Matrix for non-agency requests
+      const approvalOwnershipMatrix: Record<string, { review: string; approve: string }> = {
+        'super-admin': { review: 'operator', approve: 'owner' },
+        'superAdmin': { review: 'operator', approve: 'owner' },
+        'admin': { review: 'superAdmin', approve: 'operator' },
+        'host': { review: 'agency', approve: 'operator' },
+        'coinSeller': { review: 'operator', approve: 'owner' },
+        'seller': { review: 'operator', approve: 'owner' },
+        'customerSupport': { review: 'superAdmin', approve: 'operator' },
+      };
 
-    if (actor.role !== 'owner') {
-      const requiredRole = requestObj.currentStepIndex === 0 ? ownership.review : ownership.approve;
-      if (actor.role !== requiredRole) {
-        return sendResponse(
-          res,
-          403,
-          false,
-          `Verification failure: ${requestObj.currentStepIndex === 0 ? 'Review' : 'Final Approval'} for '${matchingRoleKey}' requests requires '${requiredRole}' role.`
-        );
+      const matchingRoleKey = Object.keys(approvalOwnershipMatrix).find(k => targetRequestRole.includes(k.toLowerCase())) || 'admin';
+      const ownership = approvalOwnershipMatrix[matchingRoleKey];
+
+      if (actor.role !== 'owner') {
+        const requiredRole = requestObj.currentStepIndex === 0 ? ownership.review : ownership.approve;
+        if (actor.role !== requiredRole) {
+          return sendResponse(
+            res,
+            403,
+            false,
+            `Verification failure: ${requestObj.currentStepIndex === 0 ? 'Review' : 'Final Approval'} for '${matchingRoleKey}' requests requires '${requiredRole}' role.`
+          );
+        }
       }
     }
 
@@ -1061,7 +1169,7 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
       actor: (actor as any).name || actor.role,
       actorRole: actor.role,
       date: new Date(),
-      remarks: comments || 'Application approved',
+      remarks: comments || (isAgencyRequest && (actor.role === 'operator' || actor.role === 'owner') ? 'Executive Direct Approval & Agency Activated' : 'Application approved'),
     });
 
     // Audit Log
@@ -1075,13 +1183,34 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
 
     // Advance to next step or finalize
     let generatedCredentials: { email: string; password: string; specialCode: string; roleCode: string } | null = null;
-    if (requestObj.currentStepIndex + 1 >= requestObj.workflowSteps.length || requestObj.workflowSteps.length === 0) {
-      requestObj.status = RequestStatus.APPROVED;
-      requestObj.approvedDate = new Date();
-      generatedCredentials = await finalizeUserApproval(requestObj, actor);
+    if (isAgencyRequest) {
+      const isExecutive = actor.role === 'operator' || actor.role === 'owner';
+      if (isExecutive || requestObj.currentStepIndex + 1 >= requestObj.workflowSteps.length) {
+        requestObj.status = RequestStatus.APPROVED;
+        requestObj.approvedDate = new Date();
+        requestObj.currentStepIndex = requestObj.workflowSteps.length - 1;
+        generatedCredentials = await finalizeUserApproval(requestObj, actor);
+      } else {
+        if (actor.role === 'superAdmin' && requestObj.currentStepIndex === 0) {
+          requestObj.currentStepIndex = 2; // Move to final stage if Super Admin approves
+        } else {
+          requestObj.currentStepIndex += 1;
+        }
+        requestObj.status = RequestStatus.UNDER_REVIEW;
+      }
     } else {
-      requestObj.currentStepIndex += 1;
-      requestObj.status = RequestStatus.UNDER_REVIEW;
+      const isOwnerApproval = actor.role === 'owner';
+      const isLastStage = requestObj.currentStepIndex + 1 >= requestObj.workflowSteps.length || requestObj.workflowSteps.length === 0;
+
+      if (isOwnerApproval || isLastStage) {
+        requestObj.status = RequestStatus.APPROVED;
+        requestObj.approvedDate = new Date();
+        requestObj.currentStepIndex = Math.max(0, requestObj.workflowSteps.length - 1);
+        generatedCredentials = await finalizeUserApproval(requestObj, actor);
+      } else {
+        requestObj.currentStepIndex += 1;
+        requestObj.status = RequestStatus.UNDER_REVIEW;
+      }
     }
 
     await requestObj.save();
@@ -1283,43 +1412,101 @@ export const finalizeUserApproval = async (
     referralLink = `https://apply.mithichat.live${roleConfig.path}?ref=${referralCode}`;
   }
 
-  const newUser = await User.create({
-    userId: newUserId,
-    name: userName,
-    email: userEmail,
-    phoneNumber: userPhone,
-    password: hashedPassword,
-    role: targetRole,
-    gender: data.gender || 'other',
-    emailVerified: true,
-    isActive: true,
-    employeeCode,             // EMP-SA-000001 format
-    specialCode: roleCode,    // SA000001 format
-    meethiId,                 // MC100001 format
-    referralCode: referralCode || undefined,
-    referralLink,
-    referrerId: referrerUser ? referrerUser._id.toString() : '',
-    referrerRole: referrerUser ? referrerUser.role : '',
-    referrerCode: referrerUser ? (referrerUser.referralCode || referrerUser.specialCode || '') : '',
-    loginUrl,
-    mustChangePassword: false, // Direct dashboard access on first login
-    emsRequestId: (requestObj as any)._id,
-    parentId,
-    parentRole,
-    referredBy: parentId ? parentId.toString() : '',
-    ownerId,
-    operatorId,
-    superAdminId,
-    adminId,
-    agencyId,
-    documents: data.documents || [],
-    sourceForm: requestType,
-    device: {
-      createdDeviceId: 'EMS_PORTAL',
-      currentDeviceId: '',
-      loggedInDeviceIds: [],
-    },
-  });
+  const audioRecordingUrl = data.audio || data.voiceAudioUrl || data.audioUrl || data.voiceUrl || data.voice || data.introAudio || '';
+
+  // Check if existing user exists by email, phone, userId, or meethiId
+  let existingUser = null;
+  const findConditions: any[] = [];
+  if (userEmail) findConditions.push({ email: userEmail });
+  if (userPhone) findConditions.push({ phoneNumber: userPhone });
+  if (data.userId && !isNaN(Number(data.userId))) findConditions.push({ userId: Number(data.userId) });
+  if (data.meethiChatId || data.meethiId) findConditions.push({ meethiId: String(data.meethiChatId || data.meethiId) });
+
+  if (findConditions.length > 0) {
+    existingUser = await User.findOne({ $or: findConditions });
+  }
+
+  let newUser: any = null;
+
+  if (existingUser) {
+    existingUser.role = targetRole as any;
+    existingUser.isActive = true;
+    existingUser.status = 'Active';
+    existingUser.emailVerified = true;
+    existingUser.phoneVerified = true;
+    if (audioRecordingUrl) existingUser.audio = audioRecordingUrl;
+    if (targetRole === 'host') {
+      if (!existingUser.faceVerificationStatus) existingUser.faceVerificationStatus = 'NOT_SUBMITTED';
+      if (!existingUser.kycVerificationStatus) existingUser.kycVerificationStatus = 'NOT_SUBMITTED';
+      if (!existingUser.gender || existingUser.gender === 'other') existingUser.gender = (data.gender || 'female') as any;
+    }
+    if (agencyId) existingUser.agencyId = agencyId;
+    if (ownerId) existingUser.ownerId = ownerId;
+    if (operatorId) existingUser.operatorId = operatorId;
+    if (adminId) existingUser.adminId = adminId;
+    if (superAdminId) existingUser.superAdminId = superAdminId;
+    existingUser.emsRequestId = (requestObj as any)._id;
+    await existingUser.save();
+    newUser = existingUser;
+  } else {
+    newUser = await User.create({
+      userId: newUserId,
+      name: userName,
+      email: userEmail,
+      phoneNumber: userPhone,
+      password: hashedPassword,
+      role: targetRole,
+      gender: data.gender || (targetRole === 'host' ? 'female' : 'other'),
+      emailVerified: true,
+      phoneVerified: true,
+      isActive: true,
+      audio: audioRecordingUrl,
+      faceVerificationStatus: 'NOT_SUBMITTED',
+      kycVerificationStatus: 'NOT_SUBMITTED',
+      faceVerifiedAt: undefined,
+      kycVerifiedAt: undefined,
+      employeeCode,             // EMP-SA-000001 format
+      specialCode: roleCode,    // SA000001 format
+      meethiId,                 // MC100001 format
+      referralCode: referralCode || undefined,
+      referralLink,
+      referrerId: referrerUser ? referrerUser._id.toString() : '',
+      referrerRole: referrerUser ? referrerUser.role : '',
+      referrerCode: referrerUser ? (referrerUser.referralCode || referrerUser.specialCode || '') : '',
+      loginUrl,
+      mustChangePassword: false, // Direct dashboard access on first login
+      emsRequestId: (requestObj as any)._id,
+      parentId,
+      parentRole,
+      referredBy: parentId ? parentId.toString() : '',
+      ownerId,
+      operatorId,
+      superAdminId,
+      adminId,
+      agencyId,
+      documents: data.documents || [],
+      sourceForm: requestType,
+      device: {
+        createdDeviceId: 'EMS_PORTAL',
+        currentDeviceId: '',
+        loggedInDeviceIds: [],
+      },
+    });
+  }
+
+  if (targetRole === 'host' && newUser) {
+    await TempHostModel.findOneAndUpdate(
+      { userId: newUser.userId },
+      {
+        hostId: newUser.userId,
+        userId: newUser.userId,
+        isVerified: true,
+        audioURL: audioRecordingUrl || newUser.audio || '',
+        query: userName || '',
+      },
+      { upsert: true, new: true }
+    ).catch(() => null);
+  }
 
   // Update referrer statistics counters
   if (referrerUser) {
@@ -1332,18 +1519,26 @@ export const finalizeUserApproval = async (
   // Assign default permission sets based on role template or fallback map
   let defaultTemplate = await Permission.findOne({ targetType: 'role', targetId: targetRole });
   const fallback = defaultRolePermissions[targetRole] || defaultRolePermissions['admin'];
-  
-  await Permission.create({
-    targetType: 'user',
-    targetId: (newUser as any)._id.toString(),
-    menus: defaultTemplate?.menus || fallback.menus,
-    pages: defaultTemplate?.pages || fallback.pages,
-    modules: defaultTemplate?.modules || fallback.modules,
-    actions: defaultTemplate?.actions || fallback.actions,
-    fields: defaultTemplate?.fields || {},
-    buttons: defaultTemplate?.buttons || fallback.buttons,
-    columns: defaultTemplate?.columns || fallback.columns,
-    dashboardWidgets: defaultTemplate?.dashboardWidgets || fallback.dashboardWidgets,
+
+  await Permission.findOneAndUpdate(
+    { targetType: 'user', targetId: (newUser as any)._id.toString() },
+    {
+      $set: {
+        targetType: 'user',
+        targetId: (newUser as any)._id.toString(),
+        menus: defaultTemplate?.menus || fallback.menus,
+        pages: defaultTemplate?.pages || fallback.pages,
+        modules: defaultTemplate?.modules || fallback.modules,
+        actions: defaultTemplate?.actions || fallback.actions,
+        fields: defaultTemplate?.fields || {},
+        buttons: defaultTemplate?.buttons || fallback.buttons,
+        columns: defaultTemplate?.columns || fallback.columns,
+        dashboardWidgets: defaultTemplate?.dashboardWidgets || fallback.dashboardWidgets,
+      }
+    },
+    { upsert: true, new: true }
+  ).catch((err) => {
+    console.warn('Notice updating user permissions during approval:', err.message);
   });
 
   // Update request with generated user data

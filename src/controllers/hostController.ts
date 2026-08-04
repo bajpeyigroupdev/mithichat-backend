@@ -11,30 +11,98 @@ import Host from "../models/host.model";
 import { config } from "../configs/envConfig";
 import { Logger } from "../utils/logger";
 import { createNotification } from "./notificationController";
-import { VerificationSettings } from "../models/verification.model";
 import { Agency } from "../models/agency.model";
+import { Request as RequestModel, RequestStatus } from "../models/request.model";
 
 export const applyHost = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const userId = req.user?.userId || req.body.userId || req.body.meethiChatId || await generateUniqueId();
-        const audioUrl = req.body.audio || req.body.voiceAudioUrl;
+        const rawUserId = req.user?.userId || req.body.userId || req.body.meethiChatId;
+        const audioUrl = req.body.audio || req.body.voiceAudioUrl || req.body.audioUrl || req.body.voiceUrl || req.body.voice || req.body.introAudio;
 
         if (!audioUrl) {
             return sendResponse(res, 400, false, "Voice recording audio URL is required.");
         }
 
+        const isNum = rawUserId !== undefined && rawUserId !== null && !isNaN(Number(rawUserId));
+        const findConditions: any[] = [];
+        if (isNum) findConditions.push({ userId: Number(rawUserId) });
+        if (rawUserId) findConditions.push({ meethiId: String(rawUserId) });
+
+        let userObj = req.user?.id ? await User.findById(req.user.id) : null;
+        if (!userObj && findConditions.length > 0) {
+            userObj = await User.findOne({ $or: findConditions });
+        }
+
+        const numericUserId = userObj?.userId || (isNum ? Number(rawUserId) : await generateUniqueId());
         const hostId = await generateUniqueId();
 
-        const host = new TempHostModel({
-            query: req.body.query || null,
-            hostId,
-            userId,
-            audioURL: audioUrl,
-            isVerified: false,
-        });
+        let host = await TempHostModel.findOne({ userId: numericUserId });
+        if (host) {
+            host.audioURL = audioUrl;
+            await host.save();
+        } else {
+            host = new TempHostModel({
+                query: req.body.query || null,
+                hostId,
+                userId: numericUserId,
+                audioURL: audioUrl,
+                isVerified: false,
+            });
+            await host.save();
+        }
 
-        await host.save();
-        return sendResponse(res, 201, true, "Host applied successfully");
+        // Sync to EMS Request Center for Operator & Owner Host Requests panel
+        try {
+            const applicantName = req.body.name || req.body.fullName || userObj?.name || 'Host Applicant';
+            const applicantEmail = req.body.email || userObj?.email || '';
+            const applicantPhone = req.body.phone || req.body.mobile || userObj?.phoneNumber || '';
+            const adharFrontUrl = req.body.adharFront || req.body.aadhaarFront || '';
+            const adharBackUrl = req.body.adharBack || req.body.aadhaarBack || '';
+            const panUrl = req.body.pan || req.body.panCard || '';
+
+            await RequestModel.create({
+                requestType: 'Host Request',
+                role: 'host',
+                workflowSteps: ['Stage 1: Operator Review', 'Stage 2: Owner Approval'],
+                currentStepIndex: 0,
+                data: {
+                    name: applicantName,
+                    email: applicantEmail,
+                    phoneNumber: applicantPhone,
+                    mobile: applicantPhone,
+                    audio: audioUrl,
+                    voiceAudioUrl: audioUrl,
+                    voice: audioUrl,
+                    adharFront: adharFrontUrl,
+                    aadhaarFront: adharFrontUrl,
+                    adharBack: adharBackUrl,
+                    aadhaarBack: adharBackUrl,
+                    pan: panUrl,
+                    panCard: panUrl,
+                    documents: req.body.documents || [
+                        { name: 'Aadhaar Front', documentType: 'GovtID', url: adharFrontUrl },
+                        { name: 'Aadhaar Back', documentType: 'GovtID', url: adharBackUrl },
+                        { name: 'PAN Card', documentType: 'Certificate', url: panUrl },
+                        { name: 'Host Voice Audition', documentType: 'Voice', url: audioUrl }
+                    ].filter(d => Boolean(d.url)),
+                    gender: req.body.gender || userObj?.gender || 'female',
+                    country: req.body.country || userObj?.country?.name || 'India',
+                    city: req.body.city || '',
+                    address: req.body.address || '',
+                    meethiChatId: userObj?.meethiId || userObj?.userId || numericUserId,
+                    userId: numericUserId,
+                    invitedBy: req.body.referralCode ? `Referral: ${req.body.referralCode}` : 'Direct Mobile App Application',
+                    ...req.body
+                },
+                status: RequestStatus.UNDER_REVIEW,
+                createdBy: userObj ? (userObj as any)._id : 'app_host_apply',
+                createdByRole: req.body.referralCode ? 'user' : 'public'
+            });
+        } catch (reqErr) {
+            Logger("applyHostRequestModelSyncError", reqErr);
+        }
+
+        return sendResponse(res, 201, true, "Host application submitted successfully. Pending operator/owner approval.");
 
     } catch (error: any) {
         Logger("applyHost", error);
@@ -274,17 +342,14 @@ export const approveHost = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, "User with this Meethi ID not found");
         }
 
-        const verificationSettings = await VerificationSettings.findOne({ singletonKey: "default" }).lean();
-        const faceRequired = verificationSettings?.faceVerificationEnabled &&
-            verificationSettings.rolesRequiringFaceVerification?.includes("host");
-        const kycRequired = verificationSettings?.kycVerificationEnabled &&
-            verificationSettings.rolesRequiringKycVerification?.includes("host");
-        if ((faceRequired && user.faceVerificationStatus !== "APPROVED") ||
-            (kycRequired && user.kycVerificationStatus !== "APPROVED")) {
-            return sendResponse(res, 403, false, "Face and KYC verification are required before host approval.");
-        }
-
         user.role = "host" as any;
+        user.isActive = true;
+        user.status = 'Active';
+        user.emailVerified = true;
+        user.phoneVerified = true;
+        if (!user.faceVerificationStatus) user.faceVerificationStatus = "NOT_SUBMITTED";
+        if (!user.kycVerificationStatus) user.kycVerificationStatus = "NOT_SUBMITTED";
+        if ((host as any).audioURL || host.introAudio) user.audio = (host as any).audioURL || host.introAudio;
         await user.save();
 
         // Approve the host only after verification requirements pass.
@@ -435,55 +500,93 @@ export const blockHost = async (req: AuthRequest, res: Response) => {
     }
 };
 
+const resolveAgencyDetails = async (user: any) => {
+    let agencyUser: any = null;
+    let agencyModel: any = null;
+
+    // 1. Check user.agencyId or parentId or referrerId or ownerId
+    const agencyUserIds = [user.agencyId, user.parentId, user.referrerId, user.ownerId].filter(Boolean);
+    if (agencyUserIds.length) {
+        agencyUser = await User.findOne({
+            _id: { $in: agencyUserIds },
+            role: { $in: ['agency', 'admin', 'owner', 'operator'] }
+        }).select('name phoneNumber email image meethiId role agencyName agencyLogo referralCode specialCode').lean();
+    }
+
+    // 2. Check if user has referrerCode
+    const refCode = user.referrerCode || user.referralCode;
+    if (!agencyUser && refCode) {
+        agencyUser = await User.findOne({
+            $or: [{ referralCode: refCode }, { specialCode: refCode }, { meethiId: refCode }],
+            role: { $in: ['agency', 'admin', 'owner', 'operator'] }
+        }).select('name phoneNumber email image meethiId role agencyName agencyLogo referralCode specialCode').lean();
+    }
+
+    // 3. Search RequestModel for custom agencyName / referralCode / invitedBy
+    if (!agencyUser) {
+        const findConditions: any[] = [{ createdBy: user._id }];
+        if (user.userId) findConditions.push({ userId: user.userId }, { 'data.userId': user.userId });
+        if (user.meethiId) findConditions.push({ meethiId: user.meethiId }, { 'data.meethiChatId': user.meethiId });
+        if (user.email) findConditions.push({ 'data.email': user.email });
+        if (user.phoneNumber) findConditions.push({ 'data.phoneNumber': user.phoneNumber }, { 'data.mobile': user.phoneNumber });
+
+        const reqObj = await RequestModel.findOne({
+            requestType: { $in: ['Host Request', 'host'] },
+            $or: findConditions
+        }).sort({ createdAt: -1 }).lean();
+
+        if (reqObj?.data) {
+            const data = reqObj.data;
+            const codeToSearch = data.referralCode || data.parentOperator || data.agencyCode || data.parentOwner;
+            if (codeToSearch) {
+                agencyUser = await User.findOne({
+                    $or: [{ referralCode: codeToSearch }, { specialCode: codeToSearch }, { meethiId: codeToSearch }],
+                    role: { $in: ['agency', 'admin', 'owner', 'operator'] }
+                }).select('name phoneNumber email image meethiId role agencyName agencyLogo referralCode specialCode').lean();
+            }
+
+            if (!agencyUser && data.agencyName) {
+                agencyModel = await Agency.findOne({
+                    name: new RegExp(`^${data.agencyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+                }).lean();
+            }
+        }
+    }
+
+    if (agencyUser && !agencyModel) {
+        agencyModel = await Agency.findOne({
+            $or: [
+                { ownerId: agencyUser._id },
+                ...(agencyUser.referralCode ? [{ code: agencyUser.referralCode }] : []),
+                ...(agencyUser.specialCode ? [{ code: agencyUser.specialCode }] : [])
+            ]
+        }).lean();
+    }
+
+    const agencyName = agencyModel?.name || agencyUser?.agencyName || agencyUser?.name || "Mithi Official Agency";
+    const agencyNumber = agencyUser?.phoneNumber || agencyUser?.email || "Support Available";
+    const agencyLogo = agencyModel?.logo || agencyUser?.agencyLogo || agencyUser?.image || "";
+    const agencyCode = agencyModel?.code || agencyUser?.referralCode || agencyUser?.specialCode || "MITHI-OFFICIAL";
+
+    return { agencyName, agencyNumber, agencyLogo, agencyCode };
+};
+
 export const getMyHostStatus = async (req: AuthRequest, res: Response) => {
     try {
-        const userId = req.user?.id || req.user?.userId;
-        if (!userId) {
-            return sendResponse(res, 401, false, "User not authenticated");
-        }
-
+        const userId = req.user!.id;
         const user = await User.findById(userId);
         if (!user) {
             return sendResponse(res, 404, false, "User record not found");
         }
 
+        const agencyDetails = await resolveAgencyDetails(user);
+
         // 1. Check if user is already an APPROVED Host
-        if (user.role === "host") {
+        if ((user.role as string) === "host" || (user as any).isHost === true) {
             const hostRecord = await Host.findOne({
                 $or: [{ meethiId: user.meethiId }, { mobileNumber: user.phoneNumber }, { emailId: user.email }],
                 isDeleted: false,
             }).sort({ createdAt: -1 });
-
-            // Find agency details linked via meethiId or createdBy
-            let agencyInfo: any = null;
-            if (user.meethiId) {
-                const agencyUser = await User.findOne({
-                    $or: [{ meethiId: user.meethiId }, { userId: !isNaN(Number(user.meethiId)) ? Number(user.meethiId) : undefined }],
-                    role: { $in: ["agency", "admin", "owner"] },
-                }).select("name phoneNumber email image meethiId role agencyName agencyLogo");
-
-                const agencyModel = await Agency.findOne({
-                    $or: [{ code: user.meethiId }, { ownerId: agencyUser?._id }],
-                });
-
-                if (agencyUser || agencyModel) {
-                    agencyInfo = {
-                        agencyName: agencyModel?.name || (agencyUser as any)?.agencyName || agencyUser?.name || "Mithi Official Agency",
-                        agencyNumber: agencyUser?.phoneNumber || agencyUser?.email || "Support Available",
-                        agencyLogo: (agencyUser as any)?.agencyLogo || agencyUser?.image || "",
-                        agencyCode: agencyModel?.code || user.meethiId || "AGENCY-101",
-                    };
-                }
-            }
-
-            if (!agencyInfo) {
-                agencyInfo = {
-                    agencyName: "Mithi Official Agency",
-                    agencyNumber: "+91 9876543210",
-                    agencyLogo: "",
-                    agencyCode: user.meethiId || "AGENCY-MAIN",
-                };
-            }
 
             return sendResponse(res, 200, true, "Host status fetched successfully", {
                 status: "APPROVED",
@@ -491,65 +594,87 @@ export const getMyHostStatus = async (req: AuthRequest, res: Response) => {
                 hostId: hostRecord?.hostId || user.userId,
                 meethiId: user.meethiId || hostRecord?.meethiId || user.userId,
                 hostingCreatedAt: hostRecord?.createdAt || user.createdAt,
-                agencyDetails: agencyInfo,
+                agencyDetails,
             });
         }
 
-        // 2. Check for PENDING application in TempHostModel or Host (isApproved: false)
-        const tempHost = await TempHostModel.findOne({ userId: user.userId });
+        // Check if user has an APPROVED host request in RequestModel
+        const findConditions: any[] = [{ createdBy: user._id }];
+        if (user.userId) findConditions.push({ userId: user.userId }, { 'data.userId': user.userId });
+        if (user.meethiId) findConditions.push({ meethiId: user.meethiId }, { 'data.meethiChatId': user.meethiId });
+        if (user.email) findConditions.push({ 'data.email': user.email });
+        if (user.phoneNumber) findConditions.push({ 'data.phoneNumber': user.phoneNumber }, { 'data.mobile': user.phoneNumber });
+
+        const approvedRequest = await RequestModel.findOne({
+            requestType: { $in: ['Host Request', 'host'] },
+            status: RequestStatus.APPROVED,
+            $or: findConditions,
+        });
+
+        if (approvedRequest) {
+            if ((user.role as string) !== 'host') {
+                user.role = 'host' as any;
+                user.isActive = true;
+                user.status = 'Active';
+                await user.save();
+            }
+
+            return sendResponse(res, 200, true, "Host status fetched successfully", {
+                status: "APPROVED",
+                role: "host",
+                hostId: user.userId,
+                meethiId: user.meethiId || user.userId,
+                hostingCreatedAt: approvedRequest.createdAt || user.createdAt,
+                agencyDetails,
+            });
+        }
+
+        // 2. Check for PENDING or UNDER_REVIEW application in RequestModel, TempHostModel, or Host
+        const pendingRequest = await RequestModel.findOne({
+            requestType: { $in: ['Host Request', 'host'] },
+            status: { $in: [RequestStatus.PENDING, RequestStatus.UNDER_REVIEW, RequestStatus.READY_FOR_INTERVIEW, 'pending', 'under_review'] },
+            $or: findConditions,
+        }).sort({ createdAt: -1 });
+
+        const tempHost = await TempHostModel.findOne({
+            isVerified: false,
+            $or: [
+                ...(user.userId ? [{ userId: user.userId }] : []),
+                ...(user.meethiId ? [{ query: user.meethiId }] : [])
+            ]
+        });
+
         const pendingHost = await Host.findOne({
-            $or: [{ meethiId: user.meethiId }, { mobileNumber: user.phoneNumber }, { emailId: user.email }],
+            $or: [
+                ...(user.meethiId ? [{ meethiId: user.meethiId }] : []),
+                ...(user.phoneNumber ? [{ mobileNumber: user.phoneNumber }] : []),
+                ...(user.email ? [{ emailId: user.email }] : [])
+            ],
             isApproved: false,
             isDeleted: false,
         });
 
-        if (tempHost || pendingHost) {
-            // Find linked agency / creator info to build approval stage chain
-            let creatorRole = "superAdmin";
-            if (user.createdBy) {
-                const creator = await User.findById(user.createdBy).select("role");
-                if (creator?.role) creatorRole = creator.role;
-            }
-
-            const hasAgency = Boolean(user.meethiId);
-            const stages = [];
-
-            if (hasAgency) {
-                stages.push({
-                    title: "Agency Verification",
-                    description: "Agency is reviewing your hosting details & documents.",
-                    status: "in_progress",
-                    icon: "business",
-                });
-            }
-
-            stages.push({
-                title: "Operator Review",
-                description: "Operator team is inspecting host voice intro and credentials.",
-                status: hasAgency ? "pending" : "in_progress",
-                icon: "support-agent",
-            });
-
-            stages.push({
-                title: "Admin Approval",
-                description: "Administrative staff verifying compliance and payout tier.",
-                status: "pending",
-                icon: "admin-panel-settings",
-            });
-
-            if (creatorRole === "superAdmin") {
-                stages.push({
-                    title: "Super Admin Final Audit",
-                    description: "Super Admin final security seal & host role activation.",
-                    status: "pending",
+        if (tempHost || pendingHost || pendingRequest) {
+            const stepIndex = pendingRequest?.currentStepIndex || 0;
+            const stages = [
+                {
+                    title: "Stage 1: Operator Review",
+                    description: "Operator team is inspecting host voice intro and credentials.",
+                    status: stepIndex >= 1 ? "completed" : "in_progress",
+                    icon: "support-agent",
+                },
+                {
+                    title: "Stage 2: Owner Approval",
+                    description: "Owner final security seal & host role activation.",
+                    status: stepIndex >= 1 ? "in_progress" : "pending",
                     icon: "verified-user",
-                });
-            }
+                }
+            ];
 
             return sendResponse(res, 200, true, "Host application under review", {
-                status: "PENDING",
+                status: "UNDER_REVIEW",
                 role: user.role,
-                appliedAt: tempHost?.createdAt || pendingHost?.createdAt || user.createdAt,
+                appliedAt: pendingRequest?.createdAt || tempHost?.createdAt || pendingHost?.createdAt || user.createdAt,
                 stages,
             });
         }

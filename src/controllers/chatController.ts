@@ -89,7 +89,8 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
       const settings = await getCachedSettings();
       const MESSAGE_COST = settings.chatMessageCost || 10; // Dynamic config cost
 
-      if (!dbUser || (dbUser.diamonds || 0) < MESSAGE_COST) {
+      const totalBalance = Number(dbUser?.coins || 0) + Number(dbUser?.diamonds || 0);
+      if (!dbUser || totalBalance < MESSAGE_COST) {
         return sendResponse(res, 400, false, "Insufficient balance to send message");
       }
 
