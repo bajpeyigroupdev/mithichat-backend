@@ -165,7 +165,10 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         });
 
         return sendResponse(res, 200, true, "Gift sent successfully", {
-            newBalance: sender.coins,
+            newBalance: Number(sender.diamonds || 0),
+            diamonds: Number(sender.diamonds || 0),
+            coins: Number(sender.coins || 0),
+            totalBalance: Number(sender.coins || 0) + Number(sender.diamonds || 0),
             giftName: giftDoc.name,
             ...giftPayload,
         });
