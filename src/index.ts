@@ -11,7 +11,7 @@ import { connectDB } from "./utils/db";
 import { config } from "./configs/envConfig";
 import { checkPortAvailable } from "./utils/getAvailablePort";
 import { AuthRoutes, avatarRoute, callRoutes, chatRoutes, coinsPriceRoutes, frameRoute, hostRoutes, UserRoutes, adminRoutes, paymentRoutes, kycRoutes, withdrawalRoutes, giftRoutes, helpRoutes, UploadRoutes, notificationRoutes, upiRoutes, publicRoutes, emsRoutes, recruitmentRoutes, sellerRoutes } from "./routes";
-import { approveStockRequest, rejectStockRequest, getAllStockRequestsAdmin, updateSellerPricingConfig } from "./controllers/sellerAdminController";
+import { approveStockRequest, rejectStockRequest, getAllStockRequestsAdmin, updateSellerPricingConfig, verifySellerForAdmin, adminCreditSellerDiamonds } from "./controllers/sellerAdminController";
 import chatSocket from "./sockets";
 import path from "path";
 // Initialize Firebase Admin before routes are loaded
@@ -142,6 +142,9 @@ app.get("/api/admin/sellers/stock-requests", verifyToken, getAllStockRequestsAdm
 app.post("/api/admin/sellers/stock-requests/:id/approve", verifyToken, approveStockRequest);
 app.post("/api/admin/sellers/stock-requests/:id/reject", verifyToken, rejectStockRequest);
 app.put("/api/admin/sellers/config", verifyToken, updateSellerPricingConfig);
+app.get("/api/admin/sellers/verify/:sellerId", verifyToken, verifySellerForAdmin);
+app.post("/api/admin/sellers/add-diamonds", verifyToken, adminCreditSellerDiamonds);
+app.post("/api/admin/sellers/recharge", verifyToken, adminCreditSellerDiamonds);
 import avatarRequestRoutes from "./routes/avatarRequestRoutes";
 import defaultBioRoutes from "./routes/defaultBioRoutes";
 app.use("/api/avatar-request", avatarRequestRoutes);
