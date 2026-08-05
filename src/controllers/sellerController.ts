@@ -8,6 +8,7 @@ import { SellerStockRequest } from '../models/sellerStockRequest.model';
 import { SellerPricingConfig } from '../models/sellerPricingConfig.model';
 import { RechargeHistory } from '../models/RechargeHistory';
 import { AuditLog } from '../models/auditLog.model';
+import { Request as RequestModel, RequestStatus } from '../models/request.model';
 import sendResponse from '../utils/reponse';
 
 /**
@@ -588,6 +589,37 @@ export const requestStockBySeller = async (req: AuthRequest, res: Response) => {
             notes: notes || '',
             status: 'PENDING'
         });
+
+        // Sync EMS RequestModel so submission appears in Admin EMS Request table
+        try {
+            await RequestModel.create({
+                requestType: 'Seller Request',
+                role: 'coinSeller',
+                data: {
+                    name: sellerDoc.name || 'Seller',
+                    merchantName: sellerDoc.name || 'Seller',
+                    email: sellerDoc.email || '',
+                    mobile: sellerDoc.phoneNumber || '',
+                    phoneNumber: sellerDoc.phoneNumber || '',
+                    sellerCode: sellerDoc.employeeCode || `SEL${sellerDoc.userId}`,
+                    userId: sellerDoc.userId,
+                    meethiChatId: sellerDoc.meethiId || `MC${sellerDoc.userId}`,
+                    diamonds: numDiamonds,
+                    payableAmount: numPayable,
+                    utrNumber: String(utrNumber).trim().toUpperCase(),
+                    packageId: packageId || '',
+                    paymentMethod: paymentMethod || 'UPI',
+                    notes: notes || '',
+                    sellerStockRequestId: stockReq._id,
+                    requestId: reqId
+                },
+                status: RequestStatus.PENDING,
+                createdBy: String(sellerDoc._id),
+                createdByRole: 'coinSeller'
+            });
+        } catch (reqErr) {
+            console.error('RequestModel sync error for stock request:', reqErr);
+        }
 
         await AuditLog.create({
             adminId: sellerDoc._id,
