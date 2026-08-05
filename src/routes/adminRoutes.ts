@@ -10,6 +10,14 @@ import {
     addCoinsToUser,
     addDiamondsToUser,
     getAdminRechargeHistory,
+    verifyUserForRecharge,
+    createAgencyAdmin,
+    getAllAdmins,
+    toggleBlockAdmin,
+    createEmployee,
+    listEmployees,
+    toggleBlockEmployee,
+    overrideEmployeeLinkage,
 } from '../controllers/adminAuthController';
 import {
     getDashboardStats,
@@ -35,6 +43,7 @@ router.post('/logout', verifyToken, adminLogout);
 router.post('/change-password', verifyToken, changePassword);
 router.get('/profile', verifyToken, getAdminProfile);
 router.patch('/profile', verifyToken, updateAdminProfile);
+router.get('/users/verify/:identifier', verifyToken, verifyUserForRecharge);
 router.post('/users/add-coins', verifyToken, addCoinsToUser);
 router.post('/users/add-diamonds', verifyToken, addDiamondsToUser);
 router.get('/recharges/history', verifyToken, getAdminRechargeHistory);
@@ -56,9 +65,6 @@ router.post('/promote-owner', verifyToken, async (req: any, res: any) => {
     }
 });
 
-
-
-import { createAgencyAdmin, getAllAdmins, toggleBlockAdmin, createEmployee, listEmployees, toggleBlockEmployee, overrideEmployeeLinkage } from '../controllers/adminAuthController';
 // Role Hierarchy: Create/List/Block employees
 router.post('/employees/create', verifyToken, createEmployee);
 router.get('/employees/list', verifyToken, listEmployees);
@@ -68,7 +74,6 @@ router.patch('/employees/override/:id', verifyToken, overrideEmployeeLinkage);
 router.post('/create-admin', verifyToken, createAgencyAdmin);
 router.get('/list-admins', verifyToken, getAllAdmins);
 router.patch('/block-admin/:id', verifyToken, toggleBlockAdmin);
-
 
 // ============ Dashboard Analytics Routes ============
 router.get('/dashboard/stats', verifyToken, getDashboardStats);
@@ -97,7 +102,6 @@ router.get('/hosts/list', verifyToken, getHosts);
 router.get('/hosts/applications', verifyToken, getAppliedHosts);
 router.post('/hosts/approve/:id', verifyToken, approveHost);
 router.patch('/hosts/block/:id', verifyToken, blockHost);
-
 
 // ============ Call Management Routes ============
 import { getAllCallHistory } from '../controllers/callController';
@@ -429,4 +433,3 @@ router.get('/users/:id/transfer-history', verifyToken, async (req: any, res: any
 });
 
 export default router;
-

@@ -396,6 +396,59 @@ export const addDiamondsToUser = async (req: AuthRequest, res: Response) => {
     }
 };
 
+// Verify user by ID/Username for Recharge
+export const verifyUserForRecharge = async (req: AuthRequest, res: Response) => {
+    try {
+        const { identifier } = req.params;
+        if (!identifier) {
+            return sendResponse(res, 400, false, "User ID or Username is required");
+        }
+
+        const trimmed = String(identifier).trim();
+        const numId = Number(trimmed);
+
+        const query: any = { isDeleted: false };
+        if (!isNaN(numId) && numId > 0) {
+            query.$or = [
+                { userId: numId },
+                { meethiId: trimmed },
+                { userName: trimmed },
+                { userName: trimmed.replace(/^@/, '') }
+            ];
+        } else {
+            query.$or = [
+                { meethiId: trimmed },
+                { userName: trimmed },
+                { userName: trimmed.replace(/^@/, '') }
+            ];
+        }
+
+        const user = await User.findOne(query).select("userId name userName meethiId image coins diamonds role isBlocked");
+
+        if (!user) {
+            return sendResponse(res, 404, false, "User not found with this ID or Username");
+        }
+
+        return sendResponse(res, 200, true, "User verified successfully", {
+            user: {
+                userId: user.userId,
+                name: user.name || "N/A",
+                userName: user.userName ? (user.userName.startsWith('@') ? user.userName : `@${user.userName}`) : `@user${user.userId}`,
+                meethiId: user.meethiId || String(user.userId),
+                image: user.image || "",
+                coins: user.coins || 0,
+                diamonds: user.diamonds || 0,
+                role: user.role,
+                isBlocked: user.isBlocked
+            }
+        });
+    } catch (error: any) {
+        await Logger("verifyUserForRecharge", error);
+        return sendResponse(res, 500, false, error.message || "Failed to verify user");
+    }
+};
+
+
 // ============ Role Hierarchy: Employee Code Generator ============
 
 const generateEmployeeCode = (prefix: string, userId: number): string => {

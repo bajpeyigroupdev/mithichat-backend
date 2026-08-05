@@ -18,5 +18,6 @@ import upiRoutes from "./upiRoutes";
 import publicRoutes from "./publicRoutes";
 import emsRoutes from "./emsRoutes";
 import recruitmentRoutes from "./recruitmentRoutes";
+import sellerRoutes from "./sellerRoutes";
 
-export { AuthRoutes, UserRoutes, hostRoutes, coinsPriceRoutes, callRoutes, chatRoutes, avatarRoute, frameRoute, adminRoutes, paymentRoutes, kycRoutes, withdrawalRoutes, giftRoutes, helpRoutes, UploadRoutes, notificationRoutes, upiRoutes, publicRoutes, emsRoutes, recruitmentRoutes };
+export { AuthRoutes, UserRoutes, hostRoutes, coinsPriceRoutes, callRoutes, chatRoutes, avatarRoute, frameRoute, adminRoutes, paymentRoutes, kycRoutes, withdrawalRoutes, giftRoutes, helpRoutes, UploadRoutes, notificationRoutes, upiRoutes, publicRoutes, emsRoutes, recruitmentRoutes, sellerRoutes };
