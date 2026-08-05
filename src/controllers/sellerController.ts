@@ -82,6 +82,11 @@ export const verifyUserForSeller = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 403, false, "This user account is currently blocked", undefined, undefined, "USER_BLOCKED");
         }
 
+        const isSellerRole = ['coinSeller', 'seller', 'agency'].includes(user.role as string);
+        if (isSellerRole) {
+            return sendResponse(res, 400, false, "Seller & Agency accounts cannot be recharged via User Recharge Console.", undefined, undefined, "CANNOT_RECHARGE_SELLER");
+        }
+
         // Return safe user profile required by Seller UI
         return sendResponse(res, 200, true, "User verified successfully", {
             user: {
@@ -182,6 +187,15 @@ export const rechargeUserBySeller = async (req: AuthRequest, res: Response) => {
 
         if (targetUser.isBlocked || targetUser.status === 'Blocked') {
             return sendResponse(res, 403, false, "Target user account is blocked", undefined, undefined, "USER_BLOCKED");
+        }
+
+        const isTargetSellerRole = ['coinSeller', 'seller', 'agency'].includes(targetUser.role as string);
+        if (isTargetSellerRole) {
+            return sendResponse(res, 400, false, "Seller & Agency accounts cannot be recharged via User Recharge Console. Sellers must request stock from Admin.", undefined, undefined, "CANNOT_RECHARGE_SELLER");
+        }
+
+        if (String((targetUser as any)._id) === String((sellerDoc as any)._id)) {
+            return sendResponse(res, 400, false, "You cannot recharge your own seller account.", undefined, undefined, "CANNOT_RECHARGE_SELF");
         }
 
         // Pricing Configuration Calculation (Server Authoritative)
