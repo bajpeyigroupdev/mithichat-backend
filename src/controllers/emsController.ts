@@ -1484,7 +1484,9 @@ export const finalizeUserApproval = async (
       superAdminId,
       adminId,
       agencyId,
-      documents: data.documents || [],
+      documents: Array.isArray(data.documents)
+        ? data.documents.map((d: any) => (typeof d === 'string' ? d : (d?.url || d?.uri || JSON.stringify(d)))).filter(Boolean)
+        : (data.documents ? [typeof data.documents === 'string' ? data.documents : (data.documents.url || JSON.stringify(data.documents))] : []),
       sourceForm: requestType,
       device: {
         createdDeviceId: 'EMS_PORTAL',

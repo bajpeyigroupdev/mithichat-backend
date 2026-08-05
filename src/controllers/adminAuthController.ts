@@ -505,7 +505,8 @@ export const createEmployee = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 400, false, 'Name, Email, and Password are required.');
         }
 
-        const docList = Array.isArray(documents) ? documents.filter(Boolean) : (documents ? [documents] : []);
+        const rawDocs = Array.isArray(documents) ? documents.filter(Boolean) : (documents ? [documents] : []);
+        const docList = rawDocs.map((d: any) => (typeof d === 'string' ? d : (d?.url || d?.uri || JSON.stringify(d)))).filter(Boolean);
 
         const existingEmail = await User.findOne({
             email: normalizedEmail,
