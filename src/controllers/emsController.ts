@@ -1106,7 +1106,22 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, 'Rejected requests cannot be approved.');
     }
 
-    const isAgencyRequest = targetRequestRole.includes('agency');
+    const isAgencyRequest = targetRequestRole === 'agency';
+    const isHostRequest = targetRequestRole.includes('host');
+
+    // Check if host application is bound to an Agency (Agency Host Application)
+    const hasAgencyBinding = Boolean(
+      requestObj.data?.agencyId ||
+      requestObj.data?.agencyCode ||
+      requestObj.data?.agency ||
+      requestObj.data?.agencyName ||
+      requestObj.data?.agencyObjectId ||
+      (requestObj.referralCode && requestObj.referralRole === 'agency') ||
+      requestObj.createdByRole === 'agency'
+    );
+    const isAgencyHost = isHostRequest && hasAgencyBinding;
+    const isDirectHost = isHostRequest && !hasAgencyBinding;
+
     if (isAgencyRequest) {
       if (!requestObj.workflowSteps || requestObj.workflowSteps.length < 3) {
         requestObj.workflowSteps = ['Admin Review', 'Super Admin Review', 'Operator / Owner Approval'];
@@ -1126,13 +1141,33 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
           return sendResponse(res, 403, false, 'Final Stage 3 Approval for Agency requests requires Operator or Owner role.');
         }
       }
+    } else if (isHostRequest) {
+      if (!requestObj.workflowSteps || requestObj.workflowSteps.length < 2) {
+        requestObj.workflowSteps = isDirectHost
+          ? ['Stage 1: Operator Review', 'Stage 2: Owner Approval']
+          : ['Stage 1: Agency / Operator Review', 'Stage 2: Owner Approval'];
+      }
+
+      if (isDirectHost) {
+        // Direct Host Apply (from App / Public Form): NO Agency role involved!
+        if (actor.role === 'agency') {
+          return sendResponse(res, 403, false, 'Direct Host applications cannot be reviewed or approved by Agency accounts.');
+        }
+        if (!['operator', 'owner', 'superAdmin', 'admin'].includes(actor.role)) {
+          return sendResponse(res, 403, false, 'Approval for Direct Host requests requires Operator, Super Admin, Admin, or Owner role.');
+        }
+      } else {
+        // Agency Host Apply (Applied via Agency Form / Agency Code):
+        if (!['agency', 'operator', 'owner', 'superAdmin', 'admin'].includes(actor.role)) {
+          return sendResponse(res, 403, false, 'Approval for Agency Host requests requires Agency, Operator, Super Admin, Admin, or Owner role.');
+        }
+      }
     } else {
-      // Enterprise Request Approval Ownership Matrix for non-agency requests
+      // Enterprise Request Approval Ownership Matrix for non-agency & non-host requests
       const approvalOwnershipMatrix: Record<string, { review: string; approve: string }> = {
         'super-admin': { review: 'operator', approve: 'owner' },
         'superAdmin': { review: 'operator', approve: 'owner' },
         'admin': { review: 'superAdmin', approve: 'operator' },
-        'host': { review: 'agency', approve: 'operator' },
         'coinSeller': { review: 'operator', approve: 'owner' },
         'seller': { review: 'operator', approve: 'owner' },
         'customerSupport': { review: 'superAdmin', approve: 'operator' },
@@ -1141,7 +1176,7 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
       const matchingRoleKey = Object.keys(approvalOwnershipMatrix).find(k => targetRequestRole.includes(k.toLowerCase())) || 'admin';
       const ownership = approvalOwnershipMatrix[matchingRoleKey];
 
-      if (actor.role !== 'owner') {
+      if (actor.role !== 'owner' && actor.role !== 'operator' && actor.role !== 'superAdmin') {
         const requiredRole = requestObj.currentStepIndex === 0 ? ownership.review : ownership.approve;
         if (actor.role !== requiredRole) {
           return sendResponse(
@@ -1196,6 +1231,23 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
         } else {
           requestObj.currentStepIndex += 1;
         }
+        requestObj.status = RequestStatus.UNDER_REVIEW;
+      }
+    } else if (isHostRequest) {
+      // Host Request Approval Progression:
+      // 1) Owner Approval at ANY stage (direct or after Operator) -> DONE (APPROVED)
+      // 2) Operator Approval at Stage 1 (when 2 stages exist) -> Move to Stage 2 (UNDER_REVIEW)
+      // 3) Final Stage Approval -> DONE (APPROVED)
+      const isOwnerApproval = actor.role === 'owner';
+      const isLastStage = requestObj.currentStepIndex + 1 >= requestObj.workflowSteps.length || requestObj.workflowSteps.length === 0;
+
+      if (isOwnerApproval || isLastStage || (actor.role === 'operator' && requestObj.currentStepIndex >= 1)) {
+        requestObj.status = RequestStatus.APPROVED;
+        requestObj.approvedDate = new Date();
+        requestObj.currentStepIndex = Math.max(0, requestObj.workflowSteps.length - 1);
+        generatedCredentials = await finalizeUserApproval(requestObj, actor);
+      } else {
+        requestObj.currentStepIndex += 1;
         requestObj.status = RequestStatus.UNDER_REVIEW;
       }
     } else {
