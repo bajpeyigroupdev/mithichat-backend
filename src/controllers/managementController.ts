@@ -674,6 +674,28 @@ export const getAllAgencies = async (req: Request, res: Response, next: NextFunc
         const adminRole = adminUser?.role;
         const adminMongoId = adminUser?.id;
 
+        // Auto-sync active User entries with role='agency' into Agency collection if missing
+        try {
+            const agencyUsers = await User.find({ role: { $in: ['agency', 'agency-admin'] }, isDeleted: false });
+            for (const u of agencyUsers) {
+                const exists = await Agency.findOne({ ownerId: u._id });
+                if (!exists) {
+                    const code = u.referralCode || u.specialCode || `AGY-${Math.floor(10000 + Math.random() * 90000)}`;
+                    await Agency.create({
+                        name: (u as any).agencyName || u.name || 'Agency',
+                        code,
+                        ownerId: u._id,
+                        logo: (u as any).agencyLogo || u.image || '',
+                        commissionRate: 10,
+                        status: u.isBlocked ? 'blocked' : 'active',
+                        balance: 0
+                    });
+                }
+            }
+        } catch (syncErr) {
+            console.error('Agency auto-sync error:', syncErr);
+        }
+
         const query: any = {};
         // Data isolation: admin/agency only see their own sub-agencies
         if (adminRole === 'agency') {
@@ -684,7 +706,7 @@ export const getAllAgencies = async (req: Request, res: Response, next: NextFunc
         }
 
         const agencies = await Agency.find(query)
-            .populate('ownerId', 'name email userId image')
+            .populate('ownerId', 'name email userId phoneNumber image agencyLogo referralCode specialCode')
             .sort({ createdAt: -1 });
 
         return sendResponse(res, 200, true, 'Agencies fetched successfully', agencies);

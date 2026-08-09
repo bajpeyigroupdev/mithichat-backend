@@ -1683,6 +1683,26 @@ export const finalizeUserApproval = async (
     ).catch(() => null);
   }
 
+  if ((targetRole === 'agency' || targetRole === 'agency-admin') && newUser) {
+    try {
+      const AgencyModel = mongoose.model('Agency');
+      const existingAgency = await AgencyModel.findOne({ ownerId: newUser._id });
+      if (!existingAgency) {
+        await AgencyModel.create({
+          name: (newUser as any).agencyName || newUser.name || 'Agency',
+          code: newUser.referralCode || newUser.specialCode || `AGY-${Math.floor(10000 + Math.random() * 90000)}`,
+          ownerId: newUser._id,
+          logo: (newUser as any).agencyLogo || newUser.image || '',
+          commissionRate: 10,
+          status: 'active',
+          balance: 0
+        });
+      }
+    } catch (agencyErr) {
+      console.error('Error creating Agency document on approval:', agencyErr);
+    }
+  }
+
   // Update referrer statistics counters
   if (referrerUser) {
     await User.findByIdAndUpdate(referrerUser._id, {
