@@ -432,4 +432,10 @@ router.get('/users/:id/transfer-history', verifyToken, async (req: any, res: any
     }
 });
 
+// Security & Logs Management Routes
+router.get('/security/system-logs', verifyToken, getSystemLogs);
+router.get('/security/audit-logs', verifyToken, getAuditLogs);
+router.get('/logs', verifyToken, getSystemLogs);
+
 export default router;
+
