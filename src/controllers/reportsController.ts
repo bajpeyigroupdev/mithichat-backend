@@ -43,7 +43,7 @@ export const getAllReports = async (
                 // No MeethiId, no reports
                 return sendResponse(res, 200, true, 'Reports fetched successfully', { reports: [], pagination: { totalCount: 0 } });
             }
-        } else if (role !== 'superAdmin') {
+        } else if (!['superAdmin', 'owner', 'operator', 'admin', 'customerSupport'].includes(role)) {
             return sendResponse(res, 403, false, 'Access Denied');
         }
 

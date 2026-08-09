@@ -437,5 +437,21 @@ router.get('/security/system-logs', verifyToken, getSystemLogs);
 router.get('/security/audit-logs', verifyToken, getAuditLogs);
 router.get('/logs', verifyToken, getSystemLogs);
 
+// Reports Management Routes
+router.get('/reports', verifyToken, getAllReports);
+router.get('/reports/:id', verifyToken, getReportById);
+router.post('/reports/:id/resolve', verifyToken, resolveReport);
+router.post('/reports/:id/dismiss', verifyToken, dismissReport);
+router.patch('/reports/:id/resolve', verifyToken, resolveReport);
+router.patch('/reports/:id/dismiss', verifyToken, dismissReport);
+
+// Help & Support Tickets Routes
+router.get('/help', verifyToken, getHelpTickets);
+router.get('/help-tickets', verifyToken, getHelpTickets);
+router.post('/help/resolve', verifyToken, replyHelpTicket);
+router.post('/help/:id/reply', verifyToken, replyHelpTicket);
+router.patch('/help/:id/reply', verifyToken, replyHelpTicket);
+
 export default router;
+
 
