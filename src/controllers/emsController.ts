@@ -747,7 +747,7 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
       console.error('User Request auto-sync error:', userSyncErr);
     }
 
-    const andConditions: any[] = [];
+    const andConditions: any[] = [{ role: { $ne: 'owner' } }];
 
     // Strict referral/creator scoping: non-owner and non-operator users can ONLY see requests from their referral link/tree. Direct/Public recruitment applications are visible ONLY to owner and operator.
     const currentUser = req.user;

@@ -28,7 +28,10 @@ export const initializeSuperAdmin = async (): Promise<void> => {
     }
 
     const existingSuperAdmin = await User.findOne({
-      role: UserRole.SUPER_ADMIN,
+      $or: [
+        { role: { $in: ['owner', UserRole.SUPER_ADMIN] } },
+        { email: SUPER_ADMIN_EMAIL.toLowerCase().trim() }
+      ],
       isDeleted: false,
     });
 

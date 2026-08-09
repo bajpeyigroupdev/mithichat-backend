@@ -692,7 +692,7 @@ export const listEmployees = async (req: AuthRequest, res: Response) => {
         const query: any = {
             $and: [
                 hierarchyScope,
-                { role: { $in: roleFilter }, isDeleted: false },
+                { role: { $in: roleFilter, $ne: 'owner' }, isDeleted: false },
             ],
         };
 
