@@ -1500,20 +1500,39 @@ export const finalizeUserApproval = async (
 
   // Check if existing user exists by email, phone, userId, or meethiId
   let existingUser = null;
-  const findConditions: any[] = [];
-  if (userEmail) findConditions.push({ email: userEmail });
-  if (userPhone) findConditions.push({ phoneNumber: userPhone });
-  if (data.userId && !isNaN(Number(data.userId))) findConditions.push({ userId: Number(data.userId) });
-  if (data.meethiChatId || data.meethiId) findConditions.push({ meethiId: String(data.meethiChatId || data.meethiId) });
+  if (userEmail) {
+    existingUser = await User.findOne({ email: userEmail });
+  }
 
-  if (findConditions.length > 0) {
-    existingUser = await User.findOne({ $or: findConditions });
+  if (!existingUser && (data.meethiChatId || data.meethiId)) {
+    const idToSearch = String(data.meethiChatId || data.meethiId);
+    const candidate = await User.findOne({ meethiId: idToSearch });
+    if (candidate && (!candidate.email || candidate.email.toLowerCase() === userEmail)) {
+      existingUser = candidate;
+    }
+  }
+
+  if (!existingUser && data.userId && !isNaN(Number(data.userId))) {
+    const candidate = await User.findOne({ userId: Number(data.userId) });
+    if (candidate && (!candidate.email || candidate.email.toLowerCase() === userEmail)) {
+      existingUser = candidate;
+    }
+  }
+
+  if (!existingUser && userPhone) {
+    const candidate = await User.findOne({ phoneNumber: userPhone });
+    if (candidate && (!candidate.email || candidate.email.toLowerCase() === userEmail)) {
+      existingUser = candidate;
+    }
   }
 
   let newUser: any = null;
 
   if (existingUser) {
-    existingUser.role = targetRole as any;
+    const protectedRoles = ['superAdmin', 'owner', 'admin'];
+    if (!protectedRoles.includes((existingUser.role as string) || '') || existingUser.role === targetRole) {
+      existingUser.role = targetRole as any;
+    }
     existingUser.password = hashedPassword;
     existingUser.isActive = true;
     existingUser.status = 'Active';
