@@ -689,6 +689,14 @@ export const listEmployees = async (req: AuthRequest, res: Response) => {
             ],
         };
 
+        if (role === 'operator') {
+            const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+            const exclusionFilter = HierarchyScopeService.buildOwnerReferralExclusionFilter('operator', 'user', ownerInfo);
+            if (Object.keys(exclusionFilter).length > 0) {
+                query.$and.push(exclusionFilter);
+            }
+        }
+
         const employees = await User.find(query)
             .select('-password -refreshToken')
             .sort({ createdAt: -1 });

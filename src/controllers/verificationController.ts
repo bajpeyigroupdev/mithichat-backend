@@ -61,9 +61,17 @@ const requirePermission = async (req: AuthRequest, res: Response, permission: st
   return false;
 };
 const scopedUserIds = async (req: AuthRequest) => {
-  if (["owner", "superAdmin", "operator"].includes(req.user!.role)) return null;
+  if (["owner", "superAdmin"].includes(req.user!.role)) return null;
   const scope = HierarchyScopeService.buildUserScope({ id: String(req.user!.id), role: req.user!.role });
-  return (await User.find(scope).select("_id").lean()).map((user) => user._id);
+  const query: any = { ...scope };
+  if (req.user!.role === 'operator') {
+    const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+    const exclusionFilter = HierarchyScopeService.buildOwnerReferralExclusionFilter('operator', 'user', ownerInfo);
+    if (Object.keys(exclusionFilter).length > 0) {
+      query.$and = [exclusionFilter];
+    }
+  }
+  return (await User.find(query).select("_id").lean()).map((user) => user._id);
 };
 const userView = (record: any) => {
   const value = record.toObject ? record.toObject() : { ...record };

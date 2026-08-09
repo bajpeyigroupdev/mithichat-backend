@@ -410,8 +410,8 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       });
     }
 
-    // 2ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢Ãƒâ€ Ã¢â‚¬â„¢Ãƒâ€šÃ‚Â£ New user ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ require gender & language
-    if (!gender || !Array.isArray(language) || language.length < 2 || !country?.name) {
+    const userCountry = (typeof country === 'string' ? { name: country } : country) || { name: 'India', code: '+91', flag: '🇮🇳' };
+    if (!gender || !Array.isArray(language) || language.length < 2 || !userCountry?.name) {
       return sendResponse(res, 428, false, "Complete gender, country and 2 languages to create your account");
     }
 

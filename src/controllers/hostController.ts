@@ -13,6 +13,7 @@ import { Logger } from "../utils/logger";
 import { createNotification } from "./notificationController";
 import { Agency } from "../models/agency.model";
 import { Request as RequestModel, RequestStatus } from "../models/request.model";
+import { HierarchyScopeService } from "../utils/hierarchyScope";
 
 export const applyHost = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -415,6 +416,14 @@ export const getHosts = async (req: AuthRequest, res: Response) => {
             }
         } else if (!["owner", "operator", "superAdmin"].includes(role || "")) {
             return sendResponse(res, 403, false, "Unauthorized access");
+        }
+
+        if (role === "operator") {
+            const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+            const exclusionFilter = HierarchyScopeService.buildOwnerReferralExclusionFilter('operator', 'user', ownerInfo);
+            if (Object.keys(exclusionFilter).length > 0) {
+                filters.$and = filters.$and ? [...filters.$and, exclusionFilter] : [exclusionFilter];
+            }
         }
 
         const pageNumber = parseInt(page as string, 10);

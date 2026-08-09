@@ -690,6 +690,14 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
 
     // Strict referral/creator scoping: non-owner and non-operator users can ONLY see requests from their referral link/tree. Direct/Public recruitment applications are visible ONLY to owner and operator.
     const currentUser = req.user;
+    if (currentUser?.role === 'operator') {
+      const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+      const exclusionFilter = HierarchyScopeService.buildOwnerReferralExclusionFilter('operator', 'request', ownerInfo);
+      if (Object.keys(exclusionFilter).length > 0) {
+        andConditions.push(exclusionFilter);
+      }
+    }
+
     if (currentUser && !['owner', 'operator'].includes(currentUser.role || '')) {
       const currentUserId = (currentUser as any)._id || (currentUser as any).id;
       const currentUserIdStr = currentUserId ? currentUserId.toString() : null;
@@ -863,6 +871,14 @@ export const getRequestById = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const request = await RequestModel.findById(id);
     if (!request) return sendResponse(res, 404, false, 'Request not found.');
+
+    if (req.user?.role === 'operator') {
+      const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+      if (HierarchyScopeService.isOwnerReferral(request, 'request', ownerInfo)) {
+        return sendResponse(res, 403, false, 'Access Denied: Owner referral requests are restricted to Owner.');
+      }
+    }
+
     return sendResponse(res, 200, true, 'Request retrieved successfully', request);
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message);
@@ -1090,6 +1106,13 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, 'Request not found.');
     }
 
+    if (actor.role === 'operator') {
+      const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+      if (HierarchyScopeService.isOwnerReferral(requestObj, 'request', ownerInfo)) {
+        return sendResponse(res, 403, false, 'Access Denied: Owner referral requests are restricted to Owner.');
+      }
+    }
+
     if (password && password.trim() !== '') {
       requestObj.passwordBeforeApproval = password.trim();
     }
@@ -1295,6 +1318,13 @@ export const rejectRequest = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, 'Request not found.');
     }
 
+    if (actor.role === 'operator') {
+      const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+      if (HierarchyScopeService.isOwnerReferral(requestObj, 'request', ownerInfo)) {
+        return sendResponse(res, 403, false, 'Access Denied: Owner referral requests are restricted to Owner.');
+      }
+    }
+
     if (requestObj.status === RequestStatus.APPROVED) {
       return sendResponse(res, 400, false, 'Approved requests cannot be rejected.');
     }
@@ -1352,8 +1382,10 @@ export const finalizeUserApproval = async (
   const userName = data.name || data.fullName || data.ownerName || data.agencyName || 'Unknown';
   const userPhone = data.mobile || data.phoneNumber || data.phone || data.mobileNo || '';
 
-  // ALWAYS use Name+Phone password formula so table display and MongoDB user password match 100%
-  const plainPassword = generateApplicantPassword(userName, userPhone, userEmail);
+  // Use explicit passwordBeforeApproval if provided; otherwise fallback to formula
+  const plainPassword = (passwordBeforeApproval && passwordBeforeApproval.trim() !== '')
+    ? passwordBeforeApproval.trim()
+    : generateApplicantPassword(userName, userPhone, userEmail);
   const hashedPassword = await generateSecureHash(plainPassword);
   const newUserId = await generateUniqueId();
 
@@ -1482,8 +1514,11 @@ export const finalizeUserApproval = async (
 
   if (existingUser) {
     existingUser.role = targetRole as any;
+    existingUser.password = hashedPassword;
     existingUser.isActive = true;
     existingUser.status = 'Active';
+    existingUser.isBlocked = false;
+    existingUser.isDeleted = false;
     existingUser.emailVerified = true;
     existingUser.phoneVerified = true;
     if (audioRecordingUrl) existingUser.audio = audioRecordingUrl;
@@ -1492,6 +1527,12 @@ export const finalizeUserApproval = async (
       if (!existingUser.kycVerificationStatus) existingUser.kycVerificationStatus = 'NOT_SUBMITTED';
       if (!existingUser.gender || existingUser.gender === 'other') existingUser.gender = (data.gender || 'female') as any;
     }
+    if (employeeCode && !existingUser.employeeCode) existingUser.employeeCode = employeeCode;
+    if (roleCode && !existingUser.specialCode) existingUser.specialCode = roleCode;
+    if (meethiId && !existingUser.meethiId) existingUser.meethiId = meethiId;
+    if (referralCode && !existingUser.referralCode) existingUser.referralCode = referralCode;
+    if (referralLink && !existingUser.referralLink) existingUser.referralLink = referralLink;
+    if (loginUrl) existingUser.loginUrl = loginUrl;
     if (agencyId) existingUser.agencyId = agencyId;
     if (ownerId) existingUser.ownerId = ownerId;
     if (operatorId) existingUser.operatorId = operatorId;

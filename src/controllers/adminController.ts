@@ -340,6 +340,14 @@ export const getRecruitedMembers = async (req: Request, res: Response) => {
       baseConditions.push({ $or: searchOrs });
     }
 
+    if ((req as any).user?.role === 'operator') {
+      const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+      const exclusionFilter = HierarchyScopeService.buildOwnerReferralExclusionFilter('operator', 'user', ownerInfo);
+      if (Object.keys(exclusionFilter).length > 0) {
+        baseConditions.push(exclusionFilter);
+      }
+    }
+
     const matchStage: any = { isDeleted: false };
     if (baseConditions.length > 0) {
       matchStage.$and = baseConditions;

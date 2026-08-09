@@ -7,6 +7,7 @@ import { Logger } from '../utils/logger';
 import { sendRecruitmentWorkflowNotification } from '../services/recruitmentNotification';
 import { automateEmployeeCreationOnApproval } from '../services/employeeLifecycleService';
 import { generateStrongPassword } from './emsController';
+import { HierarchyScopeService } from '../utils/hierarchyScope';
 
 const RECRUITMENT_ROLE_RANK: Record<string, number> = {
     owner: 0,
@@ -371,6 +372,14 @@ export const getAdminApplications = async (req: Request, res: Response) => {
         }
 
         const currentUser = (req as any).user;
+        if (currentUser?.role === 'operator') {
+            const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+            const exclusionFilter = HierarchyScopeService.buildOwnerReferralExclusionFilter('operator', 'recruitment', ownerInfo);
+            if (Object.keys(exclusionFilter).length > 0) {
+                Object.assign(query, exclusionFilter);
+            }
+        }
+
         if (currentUser && !['owner', 'operator'].includes(currentUser.role)) {
             const currentUserId = currentUser._id || currentUser.id;
             const currentUserIdStr = currentUserId ? currentUserId.toString() : null;
@@ -458,6 +467,14 @@ export const getApplicationById = async (req: Request, res: Response) => {
             return sendResponse(res, 404, false, 'Application not found');
         }
 
+        const currentUser = (req as any).user;
+        if (currentUser?.role === 'operator') {
+            const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+            if (HierarchyScopeService.isOwnerReferral(application, 'recruitment', ownerInfo)) {
+                return sendResponse(res, 403, false, 'Access Denied: Owner referral applications are restricted to Owner.');
+            }
+        }
+
         return sendResponse(res, 200, true, 'Application details retrieved', application);
     } catch (error: any) {
         await Logger('getApplicationById', error);
@@ -477,6 +494,14 @@ export const updateApplicationStatus = async (req: Request, res: Response) => {
 
         if (!application) {
             return sendResponse(res, 404, false, 'Application not found');
+        }
+
+        const currentUser = (req as any).user;
+        if (currentUser?.role === 'operator') {
+            const ownerInfo = await HierarchyScopeService.getOwnerReferralInfo();
+            if (HierarchyScopeService.isOwnerReferral(application, 'recruitment', ownerInfo)) {
+                return sendResponse(res, 403, false, 'Access Denied: Owner referral applications are restricted to Owner.');
+            }
         }
 
         const prevStatus = application.status;
