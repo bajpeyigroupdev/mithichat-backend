@@ -11,7 +11,6 @@ const SUPER_ADMIN_DENIED_ROUTES = [
   '/avatar-requests',
   '/bios',
   '/host-management',
-  '/recharges',
   '/withdrawals',
   '/sellers',
 ];
@@ -23,7 +22,6 @@ const ADMIN_DENIED_ROUTES = [
   '/avatar-requests',
   '/bios',
   '/host-management',
-  '/recharges',
   '/withdrawals',
   '/sellers',
 ];
@@ -69,6 +67,7 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
       '/recharges',
       '/recharges/user',
       '/recharges/seller',
+      '/recharges/history',
       '/admins',
       '/admins/add',
       '/admins/create',
