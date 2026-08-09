@@ -622,7 +622,7 @@ export const getAdminRechargeHistory = async (req: AuthRequest, res: Response) =
             return sendResponse(res, 403, false, "Access Denied");
         }
 
-        const { page = 1, limit = 50, type, userId } = req.query;
+        const { page = 1, limit = 50, type, userId, status, search, startDate, endDate } = req.query;
         const pageNumber = Math.max(1, parseInt(page as string, 10) || 1);
         const limitNumber = Math.max(1, parseInt(limit as string, 10) || 50);
         const skip = (pageNumber - 1) * limitNumber;
@@ -631,8 +631,41 @@ export const getAdminRechargeHistory = async (req: AuthRequest, res: Response) =
         if (userId) {
             query.userId = Number(userId);
         }
-        if (type) {
-            query.type = type;
+        if (type && type !== 'all') {
+            query.type = String(type).toLowerCase();
+        }
+        if (status && status !== 'all') {
+            query.status = String(status).toUpperCase();
+        }
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = new Date(startDate as string);
+            if (endDate) query.date.$lte = new Date(endDate as string);
+        }
+
+        if (search) {
+            const s = String(search).trim();
+            const numSearch = !isNaN(Number(s)) ? Number(s) : null;
+            const searchRegex = new RegExp(s, 'i');
+
+            const matchingUsers = await User.find({
+                $or: [
+                    ...(numSearch ? [{ userId: numSearch }] : []),
+                    { name: searchRegex },
+                    { email: searchRegex },
+                    { phoneNumber: searchRegex },
+                    { meethiId: searchRegex }
+                ]
+            }).select('userId').lean();
+            const matchingUserIds = matchingUsers.map(u => u.userId);
+
+            query.$or = [
+                ...(matchingUserIds.length > 0 ? [{ userId: { $in: matchingUserIds } }] : []),
+                ...(numSearch ? [{ sellerId: numSearch }] : []),
+                { transactionId: searchRegex },
+                { orderId: searchRegex },
+                { productId: searchRegex }
+            ];
         }
 
         const totalRecords = await RechargeHistory.countDocuments(query);
@@ -642,20 +675,46 @@ export const getAdminRechargeHistory = async (req: AuthRequest, res: Response) =
             .limit(limitNumber)
             .lean();
 
-        const userIds = [...new Set(records.map(r => r.userId))];
-        const users = await User.find({ userId: { $in: userIds } }).select('userId name email image').lean();
+        const userIds = [...new Set(records.map(r => r.userId).filter(Boolean))];
+        const sellerIds = [...new Set(records.map(r => r.sellerId).filter(Boolean))];
+        const allIds = [...new Set([...userIds, ...sellerIds])];
+
+        const users = await User.find({ userId: { $in: allIds } })
+            .select('userId name email phoneNumber meethiId role image specialCode employeeCode')
+            .lean();
         const userMap = new Map(users.map(u => [u.userId, u]));
 
-        const formattedHistory = records.map(rec => ({
-            ...rec,
-            user: userMap.get(rec.userId) || { name: `User #${rec.userId}`, email: '' }
-        }));
+        const formattedHistory = records.map(rec => {
+            const targetUser = userMap.get(rec.userId) || { name: `User #${rec.userId}`, email: '', meethiId: '', userId: rec.userId };
+            const performerUser = rec.sellerId ? userMap.get(rec.sellerId) : null;
+
+            return {
+                ...rec,
+                user: targetUser,
+                rechargedBy: performerUser || (rec.sellerId ? { name: `Staff #${rec.sellerId}`, role: 'admin' } : (rec.type === 'offline' ? { name: 'Admin / Staff', role: 'admin' } : { name: 'Automated Gateway', role: 'system' }))
+            };
+        });
+
+        const [offlineStats, onlineStats] = await Promise.all([
+            RechargeHistory.aggregate([
+                { $match: { type: 'offline' } },
+                { $group: { _id: null, totalAmount: { $sum: '$amount' }, totalDiamonds: { $sum: '$diamonds' }, count: { $sum: 1 } } }
+            ]),
+            RechargeHistory.aggregate([
+                { $match: { type: 'online' } },
+                { $group: { _id: null, totalAmount: { $sum: '$amount' }, totalDiamonds: { $sum: '$diamonds' }, count: { $sum: 1 } } }
+            ])
+        ]);
 
         return sendResponse(res, 200, true, "Recharge history fetched successfully", {
             history: formattedHistory,
             totalRecords,
             currentPage: pageNumber,
-            totalPages: Math.ceil(totalRecords / limitNumber)
+            totalPages: Math.ceil(totalRecords / limitNumber),
+            stats: {
+                offline: offlineStats[0] || { totalAmount: 0, totalDiamonds: 0, count: 0 },
+                online: onlineStats[0] || { totalAmount: 0, totalDiamonds: 0, count: 0 }
+            }
         });
     } catch (error: any) {
         await Logger("getAdminRechargeHistory", error);
