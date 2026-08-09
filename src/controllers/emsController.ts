@@ -685,6 +685,67 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
     } catch (syncErr) {
       console.error('RecruitmentApplication sync error:', syncErr);
     }
+    // Auto-sync any panel User entries into RequestModel so all users appear in Requests pages
+    try {
+      const panelUsers = await User.find({ role: { $in: ['superAdmin', 'admin', 'agency', 'operator', 'coinSeller', 'customerSupport'] }, isDeleted: false });
+      for (const u of panelUsers) {
+        if (!u.email) continue;
+        const exists = await RequestModel.findOne({
+          $or: [
+            { 'data.email': u.email.toLowerCase() },
+            { 'data.officialEmail': u.email.toLowerCase() },
+            { 'data.emailId': u.email.toLowerCase() }
+          ]
+        });
+        if (!exists) {
+          const roleToReqType: Record<string, string> = {
+            admin: 'Admin Request',
+            operator: 'Operator Request',
+            superAdmin: 'Super Admin Request',
+            'super-admin': 'Super Admin Request',
+            agency: 'Agency Request',
+            customerSupport: 'Customer Support Request',
+            'customer-service': 'Customer Support Request',
+            coinSeller: 'Seller Request',
+            seller: 'Seller Request'
+          };
+          const userRoleKey = (u.role as string) || '';
+          const reqType = roleToReqType[userRoleKey] || `${userRoleKey} Request`;
+          const newReq = await RequestModel.create({
+            requestType: reqType,
+            role: u.role,
+            workflowSteps: ['Stage 1: Review', 'Stage 2: Approval'],
+            currentStepIndex: 1,
+            status: RequestStatus.APPROVED,
+            approvedDate: u.createdAt || new Date(),
+            generatedUserId: u.userId,
+            userId: u.userId,
+            roleCode: u.specialCode || u.employeeCode || '',
+            referralCode: u.referralCode || '',
+            referralOwner: 'System/Owner',
+            referralRole: 'owner',
+            createdBy: (u as any).createdBy || 'system_sync',
+            createdByRole: u.parentRole || 'owner',
+            data: {
+              name: u.name || 'User',
+              email: u.email,
+              phoneNumber: u.phoneNumber || '',
+              mobile: u.phoneNumber || '',
+              gender: u.gender || 'other',
+              country: typeof u.country === 'object' ? u.country?.name || 'India' : String(u.country || 'India'),
+              invitedBy: u.referrerRole || 'Owner',
+              username: `@${(u.name || 'user').toLowerCase().replace(/\s+/g, '')}`,
+              specialCode: u.specialCode
+            },
+            approvedBy: [{ role: 'owner', date: u.createdAt || new Date(), comments: 'Approved Account' }],
+            timeline: [{ action: 'Approved', actor: 'Owner', actorRole: 'owner', date: u.createdAt || new Date(), remarks: 'Account approved' }]
+          });
+          await User.updateOne({ _id: u._id }, { $set: { emsRequestId: newReq._id } });
+        }
+      }
+    } catch (userSyncErr) {
+      console.error('User Request auto-sync error:', userSyncErr);
+    }
 
     const andConditions: any[] = [];
 
