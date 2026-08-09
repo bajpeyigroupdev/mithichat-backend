@@ -52,8 +52,8 @@ export const validationUserCreate = [
 export const validationUserLogin = [
   body("phoneNumber")
     .optional()
-    .isMobilePhone("any")
-    .withMessage("Invalid phone number format"),
+    .isString()
+    .withMessage("Invalid phone number or user identifier format"),
 
   body("userId")
     .optional()

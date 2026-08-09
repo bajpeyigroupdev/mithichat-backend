@@ -1,4 +1,3 @@
-
 import { Request, Response, NextFunction } from "express";
 import admin from 'firebase-admin';
 import sendResponse from "../utils/reponse";
@@ -13,8 +12,8 @@ import { generateSecureHash, verifySecureHash } from "../utils/passwordHelper";
 import { verifyFirebasePhoneToken } from "../utils/firebasePhoneVerification";
 import { APP_ACCOUNT_ROLES } from "../utils/accountScope";
 
+// ==================== RESET PASSWORD ====================
 export const resetPassword = async (req: Request, res: Response) => {
-
   try {
     const { phoneNumber, newPassword, firebaseIdToken } = req.body;
 
@@ -41,8 +40,7 @@ export const resetPassword = async (req: Request, res: Response) => {
     await user.save();
 
     return sendResponse(res, 200, true, "Password reset successfully");
- } catch (error: any) {
-    // BUG-08 FIX: Removed copy-paste "GOOGLE AUTH ERROR" label (this is resetPassword, not Google auth)
+  } catch (error: any) {
     console.error("resetPassword error:", error?.message);
     return sendResponse(
       res,
@@ -50,7 +48,7 @@ export const resetPassword = async (req: Request, res: Response) => {
       false,
       error?.message || "Internal Server Error"
     );
-}
+  }
 };
 
 // ==================== FORGOT PASSWORD ====================
@@ -62,17 +60,13 @@ export const forgotPassword = async (req: Request, res: Response) => {
       return sendResponse(res, 400, false, "Phone number is required");
     }
 
-    // Trim + normalize: remove all spaces
     const phoneNumber = String(rawPhone).trim().replace(/\s+/g, "");
-
-    // Extract last 10 digits for flexible matching (+91 / no +91)
     const digitsOnly = phoneNumber.replace(/\D/g, "");
     const tenDigits = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
     const phoneRegex = new RegExp(`${tenDigits}$`);
 
     console.log(`[forgotPassword] Looking up phone: "${phoneNumber}" (last 10: "${tenDigits}")`);
 
-    // Query: match phoneNumber by exact string or 10-digit regex
     const user = await User.findOne({
       $or: [
         { phoneNumber },
@@ -101,6 +95,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
   }
 };
 
+// ==================== CHECK PHONE AVAILABILITY ====================
 export const checkPhoneAvailability = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const phone = req.body?.phoneNumber?.trim();
@@ -109,21 +104,6 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
     if (!phone) return sendResponse(res, 400, false, "Phone number is required.");
     if (!deviceId) return sendResponse(res, 400, false, "Device ID is required.");
 
-    // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€šÃ‚Â¹ Step 1: Check if this device already has an account
-    // const userByDevice = await User.findOne({
-    //   $or: [
-    //     { "device.createdDeviceId": deviceId },
-    //     { "device.currentDeviceId": deviceId },
-    //     { "device.loggedInDeviceIds": deviceId }
-    //   ],
-    //   isDeleted: false
-    // }).lean();
-
-    // if (userByDevice) {
-    //   return sendResponse(res, 403, false, "This device already has an account.");
-    // }
-
-    // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€šÃ‚Â¹ Step 2: Check if phone number already exists
     const existingUser = await User.findOne({ phoneNumber: phone, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false }).lean();
 
     if (existingUser) {
@@ -134,14 +114,12 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
       return sendResponse(res, 400, false, "Phone number already registered.");
     }
 
-    // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒâ€šÃ‚Â¹ Step 3: New device + new phone ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ send OTP for registration
     return sendResponse(res, 200, true, "New device & phone. Send OTP for registration.");
   } catch (err) {
     await Logger("checkPhoneAvailability", err);
     return sendResponse(res, 500, false, "Something went wrong while verifying the phone number.");
   }
 };
-
 
 // ==================== REGISTER ====================
 export const userRegister = async (req: AuthRequest, res: Response) => {
@@ -166,18 +144,8 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       if (!deviceId) {
         return sendResponse(res, 400, false, "deviceId is required for app users");
       }
-
-      // ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚Â Ãƒâ€¦Ã¢â‚¬â„¢ Temporarily disabled per user request: one device can create multiple accounts
-      // const existingUser = await User.findOne({
-      //   "device.createdDeviceId": deviceId,
-      //   isDeleted: false,
-      // });
-      // if (existingUser) {
-      //   return sendResponse(res, 409, false, "This device already created an account");
-      // }
     }
 
-    // ✅ Custom ID support: User/Admin can specify their own custom ID
     const requestedUserId = req.body?.customUserId || req.body?.userId;
     const userId = requestedUserId ? Number(requestedUserId) : await generateUniqueId();
     const customMeethiId = req.body?.meethiId || req.body?.customId || String(userId);
@@ -198,6 +166,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
         image = "";
       }
     }
+
     const countryObj = (typeof country === 'object' && country !== null)
       ? country
       : { name: typeof country === 'string' ? country : '', code: '', flag: '' };
@@ -216,7 +185,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       authType: "phone",
       age: Number(age) || 18,
       device: {
-        createdDeviceId: deviceId || "",   // fixed at signup
+        createdDeviceId: deviceId || "",
         currentDeviceId: deviceId || "",
         loggedInDeviceIds: deviceId ? [deviceId] : [],
       },
@@ -224,34 +193,59 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
 
     await newUser.save();
 
-    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Generate tokens
     const accessToken = await generateToken(newUser.userId.toString(), "access");
     const refreshToken = await generateToken(newUser.userId.toString(), "refresh");
 
     newUser.refreshToken = refreshToken;
     await newUser.save();
 
-    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Response with tokens
-    return sendResponse(res, 201, true, "User created successfully", {
+    return sendResponse(res, 201, true, "Registration successful", {
       accessToken,
       refreshToken,
       role: newUser.role,
+      gender: newUser.gender
     });
-
   } catch (error: any) {
-    await Logger("signUp", error);
+    await Logger("userRegister", error);
     return sendResponse(res, 500, false, error.message);
   }
 };
-
 
 // ==================== LOGIN ====================
 export const userLogin = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { phoneNumber, userId, password, deviceId, userFrom } = req.body;
 
-    const query = phoneNumber ? { phoneNumber } : { userId };
-    const user = await User.findOne({ ...query, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false }).select("+password");
+    const rawInput = (phoneNumber || userId || "").toString().trim();
+    const cleanDigits = rawInput.replace(/\D/g, "");
+    const last10Digits = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+
+    const findConditions: any[] = [];
+    if (rawInput) {
+      findConditions.push({ phoneNumber: rawInput });
+      findConditions.push({ email: rawInput.toLowerCase() });
+      findConditions.push({ meethiId: rawInput });
+      findConditions.push({ userName: rawInput });
+      if (!isNaN(Number(rawInput))) {
+        findConditions.push({ userId: Number(rawInput) });
+      }
+    }
+    if (last10Digits && last10Digits.length >= 7) {
+      findConditions.push({ phoneNumber: new RegExp(`${last10Digits}$`) });
+      if (!isNaN(Number(last10Digits))) {
+        findConditions.push({ userId: Number(last10Digits) });
+      }
+    }
+
+    if (findConditions.length === 0) {
+      return sendResponse(res, 400, false, "Phone number or User ID is required.");
+    }
+
+    const user = await User.findOne({
+      $or: findConditions,
+      role: { $ne: 'owner' },
+      isDeleted: false
+    }).select("+password");
 
     if (!user) {
       return sendResponse(res, 400, false, "Account not found, please sign up.");
@@ -261,29 +255,23 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
       return sendResponse(res, 403, false, "You are blocked due to some reason.");
     }
 
-    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ For app users: handle device logic
     if (userFrom === "app") {
-      if (!deviceId) {
-        return sendResponse(res, 400, false, "deviceId is required for app users.");
-      }
+      const activeDeviceId = deviceId || "APP_DEFAULT_DEVICE";
 
       user.device = user.device || {
-        createdDeviceId: "",
-        currentDeviceId: "",
-        loggedInDeviceIds: [],
+        createdDeviceId: activeDeviceId,
+        currentDeviceId: activeDeviceId,
+        loggedInDeviceIds: [activeDeviceId],
       };
 
-      // ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ createdDeviceId never changes after signup
-      // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Update current + loggedIn devices
-      user.device.currentDeviceId = deviceId;
-      if (!user.device.loggedInDeviceIds.includes(deviceId)) {
-        user.device.loggedInDeviceIds.push(deviceId);
+      user.device.currentDeviceId = activeDeviceId;
+      if (!user.device.loggedInDeviceIds.includes(activeDeviceId)) {
+        user.device.loggedInDeviceIds.push(activeDeviceId);
       }
 
       await user.save();
     }
 
-    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Password match
     const isMatch = await verifySecureHash(password, user.password as string);
     if (!isMatch) {
       return sendResponse(res, 400, false, "Invalid credentials.");
@@ -335,7 +323,6 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
         return sendResponse(res, 400, false, "This device is not currently logged in.");
       }
 
-      // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Remove only that device
       user.device.loggedInDeviceIds = user.device.loggedInDeviceIds.filter(
         (id) => id !== deviceId
       );
@@ -347,7 +334,6 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
       await user.save();
     }
 
-    // Invalidate refresh token & active token globally
     user.refreshToken = "";
     user.activeToken = "";
     await user.save();
@@ -359,7 +345,7 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
   }
 };
 
-
+// ==================== GOOGLE AUTH ====================
 export const userGoogleAuth = async (req: Request, res: Response) => {
   const client = new OAuth2Client(config.GOOGLE_CLIENT_ID);
 
@@ -382,16 +368,14 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       googleId: payload.sub,
     };
 
-    // 1ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢Ãƒâ€ Ã¢â‚¬â„¢Ãƒâ€šÃ‚Â£ Check if user exists
     let user = await User.findOne({ googleId: googleUserInfo.googleId, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
 
     if (user) {
-      // Existing user ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ login
       if (userFrom === "app") {
         user.device = user.device || { createdDeviceId: "", currentDeviceId: "", loggedInDeviceIds: [] };
-        if (!user.device.createdDeviceId) user.device.createdDeviceId = deviceId;
-        if (!user.device.loggedInDeviceIds.includes(deviceId)) user.device.loggedInDeviceIds.push(deviceId);
-        user.device.currentDeviceId = deviceId;
+        if (!user.device.createdDeviceId) user.device.createdDeviceId = deviceId || '';
+        if (deviceId && !user.device.loggedInDeviceIds.includes(deviceId)) user.device.loggedInDeviceIds.push(deviceId);
+        user.device.currentDeviceId = deviceId || user.device.currentDeviceId;
         await user.save();
       }
 
@@ -415,7 +399,6 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       return sendResponse(res, 428, false, "Complete gender, country and 2 languages to create your account");
     }
 
-    // Check duplicate email
     const existingEmailUser = await User.findOne({ email: googleUserInfo.email, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
     if (existingEmailUser) {
       if (!payload.email_verified) {
@@ -440,6 +423,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
         isAccount: true,
       });
     }
+
     let image;
     switch (gender) {
       case "male": {
@@ -451,9 +435,10 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
         break;
       }
       default: {
-        image = ""
+        image = "";
       }
     }
+
     const userId = await generateUniqueId();
     const newUser = new User({
       userId,
@@ -465,9 +450,9 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       authType: "google",
       emailVerified: payload.email_verified || false,
       language,
-      country,
+      country: userCountry,
       age: Number(age) || 18,
-      device: userFrom === "app" ? { createdDeviceId: deviceId, currentDeviceId: deviceId, loggedInDeviceIds: [deviceId] } : {},
+      device: userFrom === "app" ? { createdDeviceId: deviceId || "", currentDeviceId: deviceId || "", loggedInDeviceIds: deviceId ? [deviceId] : [] } : {},
     });
 
     const accessToken = await generateToken(newUser.userId.toString(), "access");
@@ -481,49 +466,41 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
   } catch (error: any) {
     if (error.message && error.message.includes("Wrong recipient")) {
       console.error(`[GOOGLE AUTH DEBUG] Audience mismatch. Backend expected: ${config.GOOGLE_CLIENT_ID}`);
-      // The error object might contain the actual audience if we're lucky, 
-      // otherwise the user needs to check their app's client ID.
     }
     await Logger("googleAuth", error);
     return sendResponse(res, 500, false, error.message || "Internal Server Error");
   }
-
 };
 
-
-
+// ==================== REFRESH TOKEN ====================
 export const userRefreshToken = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { token } = req.body;
     if (!token) {
-      // return next(new AppError("Refresh token is required", 400));
-      return sendResponse(res as any, 400, true, "Refresh token is required")
+      return sendResponse(res as any, 400, false, "Refresh token is required");
     }
 
     jwt.verify(token, config.JWT_REFRESH_SECRET as string, async (err: any, decoded: any) => {
       if (err) {
-        return sendResponse(res as any, 401, true, "Invalid refresh token")
-        // return next(new AppError("Invalid refresh token", 401));
+        return sendResponse(res as any, 401, false, "Invalid refresh token");
       }
 
       const user = await User.findOne({ userId: decoded.userId });
       if (!user) {
-        return sendResponse(res as any, 404, true, "User not found")
-        // return next(new AppError("User not found", 404));
+        return sendResponse(res as any, 404, false, "User not found");
       }
-
-      // await checkUserBlockStatus(user, next); // (DISABLED)
 
       const accessToken = generateToken(decoded.userId, "access");
 
       return sendResponse(res, 200, true, "New access token generated", { accessToken });
     });
   } catch (error) {
-    await Logger("refreshToken", error)
-    return sendResponse(res, 500, false, "Internal Server Error")
+    await Logger("refreshToken", error);
+    return sendResponse(res, 500, false, "Internal Server Error");
   }
 };
 
+// ==================== LINK ACCOUNT ====================
 export const linkAccount = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
@@ -534,7 +511,6 @@ export const linkAccount = async (req: AuthRequest, res: Response) => {
     const user = await User.findOne({ userId: Number(userId), isDeleted: false });
     if (!user) return sendResponse(res, 404, false, "User not found");
 
-    // 1. Link Google Account
     if (googleIdToken) {
       const client = new OAuth2Client(config.GOOGLE_CLIENT_ID);
       const ticket = await client.verifyIdToken({
@@ -545,7 +521,6 @@ export const linkAccount = async (req: AuthRequest, res: Response) => {
 
       if (!payload) return sendResponse(res, 400, false, "Invalid Google credentials");
 
-      // Check if another user is using this google account
       const existingGoogle = await User.findOne({ googleId: payload.sub, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
       if (existingGoogle && existingGoogle.userId !== user.userId) {
         return sendResponse(res, 409, false, "This Google account is already linked to another user");
@@ -559,14 +534,12 @@ export const linkAccount = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 200, true, "Google account linked successfully", user);
     }
 
-    // 2. Link Phone Number
     if (phoneToken && phoneNumber) {
       const decodedToken = await admin.auth().verifyIdToken(phoneToken);
       if (!decodedToken?.phone_number) {
         return sendResponse(res, 400, false, "Invalid Firebase token");
       }
 
-      // Check if another user is using this phone number
       const existingPhone = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
       if (existingPhone && existingPhone.userId !== user.userId) {
         return sendResponse(res, 409, false, "This Phone number is already linked to another user");

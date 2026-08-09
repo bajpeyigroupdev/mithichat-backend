@@ -12,6 +12,7 @@ const router = express.Router();
 router.post("/user-phone-check", validationCheckUser, requestValidator, checkPhoneAvailability);
 router.post("/user-signup", validationUserCreate, requestValidator, userRegister);
 router.post("/userphone-login", validationUserLogin, requestValidator, userLogin);
+router.post("/user-login", validationUserLogin, requestValidator, userLogin);
 router.post("/user-logout", verifyToken, userLogout);
 router.post("/user-google-auth", validationGoogleAuth, requestValidator, userGoogleAuth)
 router.post("/refresh-token", userRefreshToken);
