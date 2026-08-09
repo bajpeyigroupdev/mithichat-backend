@@ -13,7 +13,7 @@ import mongoose, { ClientSession } from "mongoose";
 import { getProductConfig, GOOGLE_PLAY_PRODUCTS } from "../constants/googlePlayProducts";
 
 // Package Name Configuration & RTDN Security Secret
-const GOOGLE_PLAY_PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || "com.umang.app";
+const GOOGLE_PLAY_PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || "com.umangchatlive";
 const GOOGLE_PLAY_RTDN_SECRET = process.env.GOOGLE_PLAY_RTDN_SECRET || "";
 
 /**
@@ -32,12 +32,23 @@ const getGoogleAuth = () => {
     }
   }
 
-  const keyFilePath = path.resolve(__dirname, "../../configs/google-services.json");
-  if (fs.existsSync(keyFilePath)) {
-    return new google.auth.GoogleAuth({
-      keyFile: keyFilePath,
-      scopes: ["https://www.googleapis.com/auth/androidpublisher"],
-    });
+  const candidateKeyPaths = [
+    path.resolve(process.cwd(), "src/configs/serviceAccountKey.json"),
+    path.resolve(process.cwd(), "dist/configs/serviceAccountKey.json"),
+    path.resolve(__dirname, "../configs/serviceAccountKey.json"),
+    path.resolve(__dirname, "../../src/configs/serviceAccountKey.json"),
+    path.resolve(__dirname, "../../configs/serviceAccountKey.json"),
+    path.resolve(__dirname, "../../configs/google-services.json"),
+  ];
+
+  for (const keyFilePath of candidateKeyPaths) {
+    if (fs.existsSync(keyFilePath)) {
+      console.log(`[GooglePlay] Found service account key at: ${keyFilePath}`);
+      return new google.auth.GoogleAuth({
+        keyFile: keyFilePath,
+        scopes: ["https://www.googleapis.com/auth/androidpublisher"],
+      });
+    }
   }
 
   console.warn("[GooglePlay] Warning: No service account credentials found. Verification calls will fail.");
