@@ -151,7 +151,8 @@ export const adminLogin = async (
         const accessToken = generateToken(admin.userId.toString(), 'access');
         const refreshToken = generateToken(admin.userId.toString(), 'refresh');
 
-        // Update refresh token + last login timestamp
+        // Update active token, refresh token + last login timestamp
+        (admin as any).activeToken = accessToken;
         admin.refreshToken = refreshToken;
         (admin as any).lastLogin = new Date();
         await admin.save();
