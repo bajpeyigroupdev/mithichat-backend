@@ -95,10 +95,13 @@ const verifyGooglePurchaseState = async (
   productId: string,
   packageName: string
 ): Promise<NormalizedGooglePurchaseDetails | null> => {
+  const maskedToken = purchaseToken ? purchaseToken.substring(0, 8) + "..." + purchaseToken.slice(-6) : "N/A";
+  console.log(`[GOOGLE-VERIFY] GOOGLE API REQUEST START for productId: ${productId}, masked purchaseToken: ${maskedToken}, packageName: ${packageName}`);
+
   // 1. Primary Attempt: Modern `purchases.productsv2.getproductpurchasev2`
   try {
     if (androidPublisher.purchases.productsv2 && typeof androidPublisher.purchases.productsv2.getproductpurchasev2 === 'function') {
-      console.log(`[GooglePlay API] Attempting productsv2 verification for token: ${purchaseToken.substring(0, 10)}...`);
+      console.log(`[GOOGLE-VERIFY] Attempting productsv2 verification for token: ${maskedToken}`);
       const v2Res = await androidPublisher.purchases.productsv2.getproductpurchasev2({
         packageName,
         token: purchaseToken,
@@ -106,7 +109,7 @@ const verifyGooglePurchaseState = async (
 
       if (v2Res.data) {
         const data = v2Res.data;
-        console.log('[GooglePlay API] Productsv2 response received:', JSON.stringify(data));
+        console.log('[GOOGLE-VERIFY] GOOGLE API RESPONSE (productsv2):', JSON.stringify(data));
 
         const itemProductId = data.productLineItem?.[0]?.productId || productId;
         const consumptionState = data.productLineItem?.[0]?.productOfferDetails?.consumptionState || undefined;
@@ -115,13 +118,19 @@ const verifyGooglePurchaseState = async (
         let purchaseState: 'PURCHASED' | 'PENDING' | 'CANCELED' | 'UNKNOWN' = 'UNKNOWN';
         let rawState: string = 'UNKNOWN';
 
-        if (data.purchaseCompletionTime) {
+        const stateStr = String((data as any).productPurchaseState || (data as any).purchaseState || '').toUpperCase();
+        if (stateStr.includes('PURCHASED') || data.purchaseCompletionTime) {
           purchaseState = 'PURCHASED';
           rawState = 'PURCHASED';
-        } else if (data.purchaseStateContext) {
+        } else if (stateStr.includes('PENDING') || data.purchaseStateContext) {
           purchaseState = 'PENDING';
           rawState = 'PENDING';
+        } else if (stateStr.includes('CANCELED')) {
+          purchaseState = 'CANCELED';
+          rawState = 'CANCELED';
         }
+
+        console.log(`[GOOGLE-VERIFY] purchaseState: ${purchaseState}, acknowledgementState: ${acknowledgementState || 'N/A'}, consumptionState: ${consumptionState || 'N/A'}, orderId: ${data.orderId || 'N/A'}`);
 
         return {
           apiVersion: 'productsv2',
@@ -140,12 +149,12 @@ const verifyGooglePurchaseState = async (
       }
     }
   } catch (v2Error: any) {
-    console.warn('[GooglePlay API] productsv2 verification failed or unavailable, falling back to products.get:', v2Error.response?.data || v2Error.message);
+    console.warn('[GOOGLE-VERIFY] productsv2 verification notice, falling back to products.get:', v2Error.response?.data || v2Error.message);
   }
 
   // 2. Compatibility Fallback: `purchases.products.get`
   try {
-    console.log(`[GooglePlay API] Attempting products.get verification for SKU ${productId}...`);
+    console.log(`[GOOGLE-VERIFY] Attempting products.get verification for SKU ${productId}, token ${maskedToken}...`);
     const v1Res = await androidPublisher.purchases.products.get({
       packageName,
       productId,
@@ -154,7 +163,7 @@ const verifyGooglePurchaseState = async (
 
     if (v1Res.data) {
       const data = v1Res.data;
-      console.log('[GooglePlay API] products.get response received:', data);
+      console.log('[GOOGLE-VERIFY] GOOGLE API RESPONSE (products.get):', JSON.stringify(data));
 
       let purchaseState: 'PURCHASED' | 'PENDING' | 'CANCELED' | 'UNKNOWN' = 'UNKNOWN';
       // purchaseState: 0 = Purchased, 1 = Canceled, 2 = Pending
@@ -165,6 +174,8 @@ const verifyGooglePurchaseState = async (
       } else if (data.purchaseState === 1) {
         purchaseState = 'CANCELED';
       }
+
+      console.log(`[GOOGLE-VERIFY] purchaseState: ${purchaseState}, acknowledgementState: ${data.acknowledgementState !== undefined ? data.acknowledgementState : 'N/A'}, consumptionState: ${data.consumptionState !== undefined ? data.consumptionState : 'N/A'}, orderId: ${data.orderId || 'N/A'}`);
 
       return {
         apiVersion: 'products_v1',
@@ -181,7 +192,7 @@ const verifyGooglePurchaseState = async (
       };
     }
   } catch (v1Error: any) {
-    console.error('[GooglePlay API] products.get verification failed:', v1Error.response?.data || v1Error.message);
+    console.error('[GOOGLE-VERIFY][ERROR] products.get verification failed:', v1Error.response?.data || v1Error.message);
   }
 
   return null;
@@ -197,10 +208,10 @@ const consumeGooglePurchaseServer = async (purchaseToken: string, productId: str
       productId,
       token: purchaseToken,
     });
-    console.log(`[GooglePlay] Server-side purchase consumed for SKU ${productId}`);
+    console.log(`[GOOGLE-CONSUME] Server-side purchase consumed for SKU ${productId}`);
     return true;
   } catch (error: any) {
-    console.warn(`[GooglePlay] Server-side consume failed or already consumed for SKU ${productId}:`, error.message);
+    console.warn(`[GOOGLE-CONSUME] Server-side consume failed or already consumed for SKU ${productId}:`, error.message);
     return false;
   }
 };
@@ -214,41 +225,75 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
     const { userId } = req.user || {};
     const { purchaseToken, productId, packageName } = req.body;
     const effectivePackageName = packageName || GOOGLE_PLAY_PACKAGE_NAME;
+    const maskedToken = purchaseToken ? purchaseToken.substring(0, 8) + "..." + purchaseToken.slice(-6) : "N/A";
+
+    console.log(`[GOOGLE-VERIFY] REQUEST RECEIVED`);
+    console.log(`[GOOGLE-VERIFY] productId: ${productId}`);
+    console.log(`[GOOGLE-VERIFY] masked purchaseToken: ${maskedToken}`);
+    console.log(`[GOOGLE-VERIFY] userId: ${userId}`);
 
     // 1. Input Validation
     if (!userId) {
+      console.error(`[GOOGLE-VERIFY][ERROR] Unauthorized: Missing userId`);
       return sendResponse(res, 401, false, "Unauthorized: Authenticated user required");
     }
 
     if (!purchaseToken || !productId) {
+      console.error(`[GOOGLE-VERIFY][ERROR] Missing required fields: purchaseToken=${Boolean(purchaseToken)}, productId=${Boolean(productId)}`);
       return sendResponse(res, 400, false, "Missing required fields: purchaseToken and productId are required");
     }
 
     // 2. Validate product against Server-Side Catalog (NEVER trust client price or diamond count)
     const productConfig = getProductConfig(productId);
+    console.log(`[GOOGLE-VERIFY] PRODUCT CONFIG:`, productConfig);
     if (!productConfig) {
+      console.error(`[GOOGLE-VERIFY][ERROR] Invalid product ID: '${productId}'`);
       return sendResponse(res, 400, false, `Invalid product ID: '${productId}' is not recognized in server product catalog`);
     }
 
-    // 3. Query Google Play Developer API using modern productsv2 / fallback products.get
+    // 3. IDEMPOTENCY CHECK FIRST: Check if purchase token has already been completed in DB
+    const existingTx = await RechargeHistory.findOne({
+      $or: [{ purchaseToken }, { transactionId: purchaseToken }],
+    });
+    console.log(`[GOOGLE-VERIFY] EXISTING TRANSACTION:`, existingTx ? { id: existingTx._id, status: existingTx.status, diamonds: existingTx.diamonds } : "NONE");
+
+    if (existingTx && existingTx.status === "COMPLETED") {
+      const userRecord = await User.findOne({ userId });
+      console.log(`[GOOGLE-VERIFY] Purchase token already processed. Returning ALREADY_PROCESSED. Balance: ${userRecord?.diamonds || 0}`);
+      console.log(`[GOOGLE-VERIFY] RESPONSE SENT (ALREADY_PROCESSED)`);
+      return res.status(200).json({
+        success: true,
+        status: "ALREADY_PROCESSED",
+        diamondsAdded: 0,
+        balance: userRecord?.diamonds || 0,
+        message: "Purchase was already processed",
+      });
+    }
+
+    // 4. Query Google Play Developer API using modern productsv2 / fallback products.get
     const verifiedDetails = await verifyGooglePurchaseState(purchaseToken, productId, effectivePackageName);
     if (!verifiedDetails) {
+      console.error(`[GOOGLE-VERIFY][ERROR] Unable to verify purchase token with Google Play Developer API for token ${maskedToken}`);
       return sendResponse(res, 400, false, "Unable to verify purchase token with Google Play Developer API");
     }
 
-    // 4. Validate Package Name & Product ID integrity
+    // 5. Validate Package Name & Product ID integrity
     if (verifiedDetails.packageName && verifiedDetails.packageName !== effectivePackageName) {
-      console.error(`[GooglePlay] Package name mismatch! Expected: ${effectivePackageName}, Received: ${verifiedDetails.packageName}`);
+      console.error(`[GOOGLE-VERIFY][ERROR] Package name mismatch! Expected: ${effectivePackageName}, Received: ${verifiedDetails.packageName}`);
       return sendResponse(res, 400, false, "Security violation: Package name mismatch");
     }
 
     if (verifiedDetails.productId && verifiedDetails.productId !== productId) {
-      console.error(`[GooglePlay] Product ID mismatch! Expected: ${productId}, Received: ${verifiedDetails.productId}`);
+      console.error(`[GOOGLE-VERIFY][ERROR] Product ID mismatch! Expected: ${productId}, Received: ${verifiedDetails.productId}`);
       return sendResponse(res, 400, false, "Security violation: Product ID mismatch");
     }
 
-    // 5. Handle Pending Purchase State
+    console.log(`[GOOGLE-VERIFY] PRODUCT VALIDATED: SKU ${verifiedDetails.productId}, State: ${verifiedDetails.purchaseState}`);
+    console.log(`[GOOGLE-VERIFY] DIAMONDS TO CREDIT: ${productConfig.diamonds}`);
+
+    // 6. Handle Pending Purchase State
     if (verifiedDetails.purchaseState === 'PENDING') {
+      console.log(`[GOOGLE-VERIFY] Purchase is PENDING. Saving PENDING record to RechargeHistory.`);
       await RechargeHistory.findOneAndUpdate(
         { purchaseToken },
         {
@@ -270,6 +315,7 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
         { upsert: true, new: true }
       );
 
+      console.log(`[GOOGLE-VERIFY] RESPONSE SENT (PENDING)`);
       return res.status(200).json({
         success: false,
         status: "PENDING",
@@ -277,8 +323,9 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // 6. Handle Canceled/Invalid Purchase State
+    // 7. Handle Canceled/Invalid Purchase State
     if (verifiedDetails.purchaseState === 'CANCELED') {
+      console.error(`[GOOGLE-VERIFY][ERROR] Purchase state is CANCELED`);
       return res.status(400).json({
         success: false,
         status: "CANCELED",
@@ -286,8 +333,9 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // 7. Require Explicit PURCHASED State
+    // 8. Require Explicit PURCHASED State
     if (verifiedDetails.purchaseState !== 'PURCHASED') {
+      console.error(`[GOOGLE-VERIFY][ERROR] Purchase state is ${verifiedDetails.purchaseState}`);
       return res.status(400).json({
         success: false,
         status: "UNKNOWN",
@@ -295,22 +343,25 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // 8. Atomic Idempotent Wallet Credit using Mongoose Session
+    // 9. Atomic Idempotent Wallet Credit using Mongoose Session
+    console.log(`[GOOGLE-VERIFY] DB TRANSACTION START for userId: ${userId}`);
     let session: ClientSession | null = null;
     try {
       session = await mongoose.startSession();
       session.startTransaction();
 
-      // Check if purchase token has already been processed
-      const existingTx = await RechargeHistory.findOne({
+      // Double-check existing transaction under session
+      const doubleCheckTx = await RechargeHistory.findOne({
         $or: [{ purchaseToken }, { transactionId: purchaseToken }],
       }).session(session);
 
-      if (existingTx && existingTx.status === "COMPLETED") {
+      if (doubleCheckTx && doubleCheckTx.status === "COMPLETED") {
         await session.abortTransaction();
         session.endSession();
 
         const userRecord = await User.findOne({ userId });
+        console.log(`[GOOGLE-VERIFY] Double check: Purchase was already processed.`);
+        console.log(`[GOOGLE-VERIFY] RESPONSE SENT (ALREADY_PROCESSED)`);
         return res.status(200).json({
           success: true,
           status: "ALREADY_PROCESSED",
@@ -330,11 +381,14 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
       if (!updatedUser) {
         await session.abortTransaction();
         session.endSession();
+        console.error(`[GOOGLE-VERIFY][ERROR] User profile not found for userId: ${userId}`);
         return sendResponse(res, 404, false, "User profile not found");
       }
 
+      console.log(`[GOOGLE-VERIFY] DIAMONDS CREDITED: +${productConfig.diamonds}, New Balance: ${updatedUser.diamonds}`);
+
       // Create / Update Ledger Transaction Record
-      await RechargeHistory.findOneAndUpdate(
+      const createdRecord = await RechargeHistory.findOneAndUpdate(
         { purchaseToken },
         {
           userId,
@@ -356,14 +410,18 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
         { upsert: true, new: true, session }
       );
 
+      console.log(`[GOOGLE-VERIFY] RECHARGE HISTORY CREATED: ID ${createdRecord._id}, status: COMPLETED`);
+
       await session.commitTransaction();
       session.endSession();
+      console.log(`[GOOGLE-VERIFY] DB TRANSACTION COMMITTED`);
 
-      // 9. Consume Google Play Purchase server-side
+      // 10. Consume Google Play Purchase server-side
       consumeGooglePurchaseServer(purchaseToken, productId, effectivePackageName).catch((e) =>
         console.warn("[GooglePlay] Async consume attempt error:", e.message)
       );
 
+      console.log(`[GOOGLE-VERIFY] RESPONSE SENT (COMPLETED)`);
       return res.status(200).json({
         success: true,
         status: "COMPLETED",
@@ -378,11 +436,12 @@ export const verifyGooglePurchase = async (req: AuthRequest, res: Response) => {
         await session.abortTransaction();
         session.endSession();
       }
-      console.error("[GooglePlay] Atomic transaction failed:", dbErr);
+      console.error("[GOOGLE-VERIFY][ERROR] Atomic transaction failed:", dbErr);
       return sendResponse(res, 500, false, "Database error during wallet update");
     }
 
   } catch (error: any) {
+    console.error("[GOOGLE-VERIFY][ERROR] Top level verify error:", error);
     await Logger("verifyGooglePurchase", error);
     return sendResponse(res, 500, false, error.message || "Internal server error");
   }
