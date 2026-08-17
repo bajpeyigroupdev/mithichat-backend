@@ -6,17 +6,45 @@ import { CallStatus, TransactionType } from "../constants/user";
 import { ClientSession, Types } from "mongoose";
 
 /**
- * Recalculate and update host level dynamically in DB based on completed calls and minutes.
+ * Helper to calculate Monday-to-Sunday weekly time bounds
+ */
+export const getWeeklyTimeBounds = (date: Date = new Date()) => {
+    const d = new Date(date);
+    const day = d.getDay(); // 0 is Sunday, 1 is Monday
+    const diffToMonday = d.getDate() - day + (day === 0 ? -6 : 1);
+
+    const startOfWeek = new Date(d.setDate(diffToMonday));
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+    endOfWeek.setHours(23, 59, 59, 999);
+
+    return { startOfWeek, endOfWeek };
+};
+
+export const getPreviousWeekBounds = () => {
+    const now = new Date();
+    const lastWeekDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return getWeeklyTimeBounds(lastWeekDate);
+};
+
+/**
+ * Recalculate and update host level dynamically in DB based on weekly completed calls and minutes.
  */
 export const recalculateAndUpdateHostLevel = async (
   hostId: Types.ObjectId | string,
-  session?: ClientSession
+  session?: ClientSession,
+  customBounds?: { startOfWeek: Date; endOfWeek: Date }
 ): Promise<number> => {
   try {
+    const bounds = customBounds || getWeeklyTimeBounds();
+
     const transactions = await CoinsTransaction.find({
       hostId,
       type: TransactionType.VOICE_CALL,
       status: CallStatus.ENDED,
+      createdAt: { $gte: bounds.startOfWeek, $lte: bounds.endOfWeek }
     }).select('duration').session(session || null as any).lean();
 
     const totalCalls = transactions.length;
@@ -54,7 +82,7 @@ export const recalculateAndUpdateHostLevel = async (
 
     // 🌟 7-Day New User Promo Rule:
     // New users start at Level 3 for the first 7 days.
-    // After 7 days expire, level drops to their actual qualified level based on performance (starts at Level 1).
+    // After 7 days expire, level drops/updates to their actual qualified level based on performance (starts at Level 1).
     const targetLevel = isPromoActive ? Math.max(3, qualifiedLevel) : qualifiedLevel;
 
     const currentStoredLevel = (hostUser as any)?.level || 0;
@@ -74,6 +102,35 @@ export const recalculateAndUpdateHostLevel = async (
     const fallbackUser = await User.findById(hostId).select('level').session(session || null as any).lean();
     return (fallbackUser as any)?.level || 1;
   }
+};
+
+/**
+ * Runs batch weekly host level recalculation for all active hosts.
+ * Called automatically every Sunday midnight (Monday 00:00:00) by Cron.
+ */
+export const runWeeklyHostLevelRecalculation = async () => {
+    console.log("⏰ Starting Weekly Host Level Recalculation (Sunday Midnight Job)...");
+    try {
+        const hosts = await User.find({ role: 'host', isDeleted: false }).select('_id level name').lean();
+        const bounds = getPreviousWeekBounds();
+        let upgraded = 0;
+        let downgraded = 0;
+        let unchanged = 0;
+
+        for (const host of hosts) {
+            const oldLevel = host.level || 1;
+            const newLevel = await recalculateAndUpdateHostLevel(host._id as any, undefined, bounds);
+            if (newLevel > oldLevel) upgraded++;
+            else if (newLevel < oldLevel) downgraded++;
+            else unchanged++;
+        }
+
+        console.log(`✅ Weekly Host Level Recalculation Complete! Total: ${hosts.length} | Upgraded: ${upgraded} | Downgraded: ${downgraded} | Unchanged: ${unchanged}`);
+        return { total: hosts.length, upgraded, downgraded, unchanged };
+    } catch (err: any) {
+        console.error("❌ Error in runWeeklyHostLevelRecalculation:", err);
+        throw err;
+    }
 };
 
 interface GetAllHostsOptions {

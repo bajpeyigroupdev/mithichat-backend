@@ -1037,3 +1037,14 @@ export const processDeletionRequest = async (req: Request, res: Response, next: 
         next(new AppError(error.message || 'Error processing deletion request', 500));
     }
 };
+
+export const triggerWeeklyLevelRecalculation = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { runWeeklyHostLevelRecalculation } = await import('../services/user.service');
+        const summary = await runWeeklyHostLevelRecalculation();
+        await logAudit(req, 'TRIGGER_WEEKLY_LEVEL_RECALCULATION', 'SYSTEM', `Recalculated host levels: Upgraded ${summary.upgraded}, Downgraded ${summary.downgraded}, Unchanged ${summary.unchanged}`);
+        return sendResponse(res, 200, true, 'Weekly host level recalculation triggered successfully', summary);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error executing weekly level recalculation', 500));
+    }
+};

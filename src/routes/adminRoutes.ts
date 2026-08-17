@@ -103,6 +103,9 @@ router.get('/hosts/applications', verifyToken, getAppliedHosts);
 router.post('/hosts/approve/:id', verifyToken, approveHost);
 router.patch('/hosts/block/:id', verifyToken, blockHost);
 
+import { triggerWeeklyLevelRecalculation } from '../controllers/managementController';
+router.post('/hosts/recalculate-levels', verifyToken, triggerWeeklyLevelRecalculation);
+
 // ============ Call Management Routes ============
 import { getAllCallHistory } from '../controllers/callController';
 router.get('/calls/history', verifyToken, getAllCallHistory);

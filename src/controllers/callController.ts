@@ -1068,11 +1068,14 @@ export const getHostLevels = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 403, false, "Only hosts can access levels");
     }
 
+    const { getWeeklyTimeBounds } = require('../services/user.service');
+    const bounds = getWeeklyTimeBounds();
     const transactions = await CoinsTransaction.find({
       hostId: userId,
       type: TransactionType.VOICE_CALL,
-      status: CallStatus.ENDED, // BUG-02 FIX: use enum, not hardcoded string
-    }).select('duration').lean(); // BUG-07 FIX: only fetch duration, not full docs with Agora tokens
+      status: CallStatus.ENDED,
+      createdAt: { $gte: bounds.startOfWeek, $lte: bounds.endOfWeek }
+    }).select('duration').lean();
 
     const totalCalls = transactions.length;
     const totalDurationSeconds = transactions.reduce(

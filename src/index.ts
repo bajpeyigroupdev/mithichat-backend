@@ -276,10 +276,11 @@ const startServer = async () => {
   }
 };
 
-import { startCallCleanupJob, startChatWorker } from "./services/cron.service";
+import { startCallCleanupJob, startChatWorker, startWeeklyHostLevelJob } from "./services/cron.service";
 
 startServer().then(() => {
   // Database-backed workers start only after MongoDB is ready.
   startCallCleanupJob();
   startChatWorker();
+  startWeeklyHostLevelJob();
 });
