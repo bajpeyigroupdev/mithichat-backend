@@ -110,51 +110,98 @@ export const recalculateAndUpdateHostLevel = async (
   }
 };
 
-let isLocalRecalculating = false;
-const RECALC_LOCK_KEY = 'lock:weekly_host_level_recalculation';
-const RECALC_LOCK_TTL_SECONDS = 300; // 5-minute safety TTL
+let activeLockToken: string | null = null;
+let lockHeartbeatTimer: NodeJS.Timeout | null = null;
 
-const acquireRecalculationLock = async (): Promise<boolean> => {
-    if (isLocalRecalculating) return false;
-    try {
-        const redis = (await import('../configs/redisConfig')).default;
-        const res = await redis.set(RECALC_LOCK_KEY, 'LOCKED', 'EX', RECALC_LOCK_TTL_SECONDS, 'NX');
-        if (res === 'OK') {
-            isLocalRecalculating = true;
-            return true;
-        }
-        return false;
-    } catch (err: any) {
-        console.warn('⚠️ Redis distributed lock failed, using in-memory lock:', err?.message);
-        if (isLocalRecalculating) return false;
-        isLocalRecalculating = true;
-        return true;
+const RECALC_LOCK_KEY = 'lock:weekly_host_level_recalculation';
+const RECALC_LOCK_TTL_SECONDS = 600; // 10-minute safety TTL
+const HEARTBEAT_INTERVAL_MS = 30000; // 30-second heartbeat renewal interval
+
+const stopLockHeartbeat = () => {
+    if (lockHeartbeatTimer) {
+        clearInterval(lockHeartbeatTimer);
+        lockHeartbeatTimer = null;
     }
 };
 
-const releaseRecalculationLock = async () => {
-    isLocalRecalculating = false;
+const startLockHeartbeat = (token: string) => {
+    stopLockHeartbeat();
+    lockHeartbeatTimer = setInterval(async () => {
+        if (activeLockToken !== token) {
+            stopLockHeartbeat();
+            return;
+        }
+        try {
+            const redis = (await import('../configs/redisConfig')).default;
+            const luaScript = `
+                if redis.call("get", KEYS[1]) == ARGV[1] then
+                    return redis.call("expire", KEYS[1], ARGV[2])
+                else
+                    return 0
+                end
+            `;
+            const renewed = await redis.eval(luaScript, 1, RECALC_LOCK_KEY, token, String(RECALC_LOCK_TTL_SECONDS));
+            if (Number(renewed) === 0) {
+                console.error("🚨 CRITICAL: Lost Redis distributed lock ownership during weekly recalculation! Halting renewal.");
+                activeLockToken = null;
+                stopLockHeartbeat();
+            }
+        } catch (err: any) {
+            console.error("⚠️ Error renewing Redis recalculation lock TTL:", err?.message);
+        }
+    }, HEARTBEAT_INTERVAL_MS);
+};
+
+const acquireRecalculationLock = async (): Promise<string | null> => {
+    const token = `owner_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     try {
         const redis = (await import('../configs/redisConfig')).default;
-        await redis.del(RECALC_LOCK_KEY);
+        const res = await redis.set(RECALC_LOCK_KEY, token, 'EX', RECALC_LOCK_TTL_SECONDS, 'NX');
+        if (res === 'OK') {
+            activeLockToken = token;
+            startLockHeartbeat(token);
+            return token;
+        }
+        console.warn("⚠️ Weekly Host Level Recalculation lock acquired by another process/cluster node.");
+        return null;
     } catch (err: any) {
-        console.error('⚠️ Error releasing Redis recalculation lock:', err?.message);
+        console.error('❌ Redis lock acquisition error:', err?.message);
+        // SAFETY MANDATE: In multi-instance mode, do NOT fallback to independent local locks when Redis is down
+        console.warn('⚠️ Weekly host level recalculation skipped because distributed lock service (Redis) is unavailable.');
+        return null;
+    }
+};
+
+const releaseRecalculationLock = async (token: string) => {
+    stopLockHeartbeat();
+    activeLockToken = null;
+    try {
+        const redis = (await import('../configs/redisConfig')).default;
+        const luaScript = `
+            if redis.call("get", KEYS[1]) == ARGV[1] then
+                return redis.call("del", KEYS[1])
+            else
+                return 0
+            end
+        `;
+        await redis.eval(luaScript, 1, RECALC_LOCK_KEY, token);
+    } catch (err: any) {
+        console.error('⚠️ Error releasing Redis recalculation lock via Lua script:', err?.message);
     }
 };
 
 /**
  * Runs batch weekly host level recalculation for all active hosts.
  * Called automatically every Sunday midnight (Monday 00:00:00 IST) by Cron.
- * Protected by Redis distributed lock (with local fallback) to prevent duplicate runs across PM2 clusters.
+ * Protected by Redis distributed lock with ownership token & heartbeat renewal.
  */
 export const runWeeklyHostLevelRecalculation = async () => {
-    const lockAcquired = await acquireRecalculationLock();
-    if (!lockAcquired) {
-        console.warn("⚠️ Weekly Host Level Recalculation already in progress or acquired by another process. Skipping duplicate execution.");
-        return { success: false, message: "Recalculation already in progress", total: 0, upgraded: 0, downgraded: 0, unchanged: 0, errors: 0 };
+    const lockToken = await acquireRecalculationLock();
+    if (!lockToken) {
+        return { success: false, message: "Weekly host level recalculation skipped: Lock not acquired or Redis unavailable", total: 0, upgraded: 0, downgraded: 0, unchanged: 0, errors: 0 };
     }
 
-    console.log("⏰ Starting Weekly Host Level Recalculation (Sunday Midnight Job in Asia/Kolkata)...");
+    console.log(`⏰ Starting Weekly Host Level Recalculation (Lock Token: ${lockToken} in Asia/Kolkata)...`);
     try {
         const hosts = await User.find({ role: 'host', isDeleted: false }).select('_id level name').lean();
         const bounds = getPreviousWeekBounds();
@@ -164,6 +211,12 @@ export const runWeeklyHostLevelRecalculation = async () => {
         let errors = 0;
 
         for (const host of hosts) {
+            // Fail-safe lock loss check: halt if lock ownership was lost mid-job
+            if (activeLockToken !== lockToken) {
+                console.error(`🚨 CRITICAL: Halting recalculation batch — lock token ${lockToken} was revoked or lost.`);
+                break;
+            }
+
             try {
                 const oldLevel = host.level || 1;
                 const newLevel = await recalculateAndUpdateHostLevel(host._id as any, undefined, bounds);
@@ -182,7 +235,7 @@ export const runWeeklyHostLevelRecalculation = async () => {
         console.error("❌ Error in runWeeklyHostLevelRecalculation:", err);
         throw err;
     } finally {
-        await releaseRecalculationLock();
+        await releaseRecalculationLock(lockToken);
     }
 };
 
