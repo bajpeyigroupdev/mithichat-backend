@@ -41,6 +41,7 @@ const coinsTransactionSchema = new Schema<ICoinsTransaction>(
 // Indexes for performance
 coinsTransactionSchema.index({ userId: 1, status: 1 }); // User transaction history
 coinsTransactionSchema.index({ hostId: 1, status: 1 }); // Host earnings history
+coinsTransactionSchema.index({ hostId: 1, type: 1, status: 1, createdAt: -1 }); // Weekly host level calculation index
 coinsTransactionSchema.index({ callStart: -1 }); // Rankings/leaderboards
 coinsTransactionSchema.index({ userId: 1, type: 1, callStart: -1 }); // Filtered history queries
 coinsTransactionSchema.index({ status: 1, ringExpiresAt: 1 }); // Unanswered-call expiry

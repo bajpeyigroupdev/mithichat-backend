@@ -110,19 +110,50 @@ export const recalculateAndUpdateHostLevel = async (
   }
 };
 
-let isRecalculating = false;
+let isLocalRecalculating = false;
+const RECALC_LOCK_KEY = 'lock:weekly_host_level_recalculation';
+const RECALC_LOCK_TTL_SECONDS = 300; // 5-minute safety TTL
+
+const acquireRecalculationLock = async (): Promise<boolean> => {
+    if (isLocalRecalculating) return false;
+    try {
+        const redis = (await import('../configs/redisConfig')).default;
+        const res = await redis.set(RECALC_LOCK_KEY, 'LOCKED', 'EX', RECALC_LOCK_TTL_SECONDS, 'NX');
+        if (res === 'OK') {
+            isLocalRecalculating = true;
+            return true;
+        }
+        return false;
+    } catch (err: any) {
+        console.warn('⚠️ Redis distributed lock failed, using in-memory lock:', err?.message);
+        if (isLocalRecalculating) return false;
+        isLocalRecalculating = true;
+        return true;
+    }
+};
+
+const releaseRecalculationLock = async () => {
+    isLocalRecalculating = false;
+    try {
+        const redis = (await import('../configs/redisConfig')).default;
+        await redis.del(RECALC_LOCK_KEY);
+    } catch (err: any) {
+        console.error('⚠️ Error releasing Redis recalculation lock:', err?.message);
+    }
+};
 
 /**
  * Runs batch weekly host level recalculation for all active hosts.
  * Called automatically every Sunday midnight (Monday 00:00:00 IST) by Cron.
+ * Protected by Redis distributed lock (with local fallback) to prevent duplicate runs across PM2 clusters.
  */
 export const runWeeklyHostLevelRecalculation = async () => {
-    if (isRecalculating) {
-        console.warn("⚠️ Weekly Host Level Recalculation already in progress. Skipping duplicate execution.");
-        return { success: false, message: "Recalculation already in progress", total: 0, upgraded: 0, downgraded: 0, unchanged: 0 };
+    const lockAcquired = await acquireRecalculationLock();
+    if (!lockAcquired) {
+        console.warn("⚠️ Weekly Host Level Recalculation already in progress or acquired by another process. Skipping duplicate execution.");
+        return { success: false, message: "Recalculation already in progress", total: 0, upgraded: 0, downgraded: 0, unchanged: 0, errors: 0 };
     }
 
-    isRecalculating = true;
     console.log("⏰ Starting Weekly Host Level Recalculation (Sunday Midnight Job in Asia/Kolkata)...");
     try {
         const hosts = await User.find({ role: 'host', isDeleted: false }).select('_id level name').lean();
@@ -151,7 +182,7 @@ export const runWeeklyHostLevelRecalculation = async () => {
         console.error("❌ Error in runWeeklyHostLevelRecalculation:", err);
         throw err;
     } finally {
-        isRecalculating = false;
+        await releaseRecalculationLock();
     }
 };
 
