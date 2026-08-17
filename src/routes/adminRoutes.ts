@@ -129,6 +129,7 @@ import {
     createBanner,
     deleteBanner,
     updateBannerPriority,
+    toggleBannerActive,
     getAllAds,
     createAd,
     deleteAd,
@@ -169,6 +170,7 @@ router.get('/banners', verifyToken, getAllBanners);
 router.post('/banners', verifyToken, createBanner);
 router.delete('/banners/:id', verifyToken, deleteBanner);
 router.patch('/banners/:id', verifyToken, updateBannerPriority);
+router.patch('/banners/:id/toggle', verifyToken, toggleBannerActive);
 
 // Ads Management
 router.get('/ads', verifyToken, getAllAds);

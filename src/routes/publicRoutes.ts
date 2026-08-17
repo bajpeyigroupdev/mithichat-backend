@@ -54,13 +54,22 @@ router.get('/banners', async (_req: Request, res: Response) => {
         const now = new Date();
         const startOfToday = new Date(now);
         startOfToday.setHours(0, 0, 0, 0);
-        const banners = await Banner.find({
+        const endOfToday = new Date(now);
+        endOfToday.setHours(23, 59, 59, 999);
+
+        const rawBanners = await Banner.find({
             $and: [
                 { $or: [{ isActive: true }, { isActive: { $exists: false } }] },
-                { $or: [{ startDate: { $exists: false } }, { startDate: null }, { startDate: { $lte: now } }] },
+                { $or: [{ startDate: { $exists: false } }, { startDate: null }, { startDate: { $lte: endOfToday } }] },
                 { $or: [{ endDate: { $exists: false } }, { endDate: null }, { endDate: { $gte: startOfToday } }] }
             ]
-        }).select('_id title imageUrl linkUrl targetType targetScreen priority').sort({ priority: -1, createdAt: -1 }).lean();
+        }).select('_id title imageUrl linkUrl targetType targetScreen priority startDate endDate isActive').sort({ priority: -1, createdAt: -1 }).lean();
+
+        const banners = rawBanners.map(b => ({
+            ...b,
+            image: b.imageUrl || (b as any).image || ''
+        }));
+
         return sendResponse(res, 200, true, 'Active banners fetched successfully', banners);
     } catch (error) {
         await Logger('getPublicBanners', error);

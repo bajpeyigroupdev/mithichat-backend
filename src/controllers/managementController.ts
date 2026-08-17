@@ -8,6 +8,7 @@ import { PromoCode } from '../models/promoCode.model';
 import { Agency } from '../models/agency.model';
 import { AuditLog } from '../models/auditLog.model';
 import { BlockedWord } from '../models/blockedWord.model';
+import { deleteImageFromCloudinary } from '../utils/cloudinary';
 import { User } from '../models/user.model';
 import { CoinsTransaction } from '../models/spentCoinModel';
 import { getIO } from '../sockets';
@@ -377,7 +378,7 @@ export const getAllBanners = async (req: Request, res: Response, next: NextFunct
 
 export const createBanner = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const { title, imageUrl, linkUrl, targetType = linkUrl ? 'external' : 'none', targetScreen, priority, startDate, endDate } = req.body;
+        const { title, imageUrl, linkUrl, targetType = linkUrl ? 'external' : 'none', targetScreen, priority, startDate, endDate, isActive = true } = req.body;
         if (!title || !imageUrl) {
             return sendResponse(res, 400, false, 'Title and imageUrl are required');
         }
@@ -388,6 +389,14 @@ export const createBanner = async (req: Request, res: Response, next: NextFuncti
         if (targetType === 'external' && linkUrl && !/^https?:\/\//i.test(String(linkUrl))) {
             return sendResponse(res, 400, false, 'External banner URL must start with http:// or https://');
         }
+
+        const parsedStartDate = startDate ? new Date(startDate) : undefined;
+        const parsedEndDate = endDate ? new Date(endDate) : undefined;
+
+        if (parsedStartDate && parsedEndDate && parsedEndDate.getTime() < parsedStartDate.getTime()) {
+            return sendResponse(res, 400, false, 'Expiry date cannot be before start date');
+        }
+
         const banner = await Banner.create({
             title,
             imageUrl,
@@ -395,8 +404,9 @@ export const createBanner = async (req: Request, res: Response, next: NextFuncti
             targetType,
             targetScreen: targetType === 'internal' ? targetScreen : '',
             priority: priority ? parseInt(priority) : 0,
-            startDate: startDate ? new Date(startDate) : undefined,
-            endDate: endDate ? new Date(endDate) : undefined
+            startDate: parsedStartDate,
+            endDate: parsedEndDate,
+            isActive: Boolean(isActive)
         });
 
         await logAudit(req, 'CREATE_BANNER', (banner as any)._id.toString(), `Banner title: ${title}`);
@@ -412,6 +422,12 @@ export const deleteBanner = async (req: Request, res: Response, next: NextFuncti
         const banner = await Banner.findByIdAndDelete(id);
         if (!banner) {
             return sendResponse(res, 404, false, 'Banner not found');
+        }
+
+        if (banner.imageUrl) {
+            deleteImageFromCloudinary(banner.imageUrl).catch(err => {
+                console.warn('Cloudinary image cleanup notice:', err?.message || err);
+            });
         }
 
         await logAudit(req, 'DELETE_BANNER', (banner as any)._id.toString(), `Banner title: ${banner.title}`);
@@ -445,14 +461,38 @@ export const updateBannerPriority = async (req: Request, res: Response, next: Ne
         if (priority !== undefined) banner.priority = parseInt(priority);
         if (startDate !== undefined) banner.startDate = startDate ? new Date(startDate) : undefined;
         if (endDate !== undefined) banner.endDate = endDate ? new Date(endDate) : undefined;
-        if (isActive !== undefined) banner.isActive = isActive;
+        if (isActive !== undefined) banner.isActive = Boolean(isActive);
+
+        if (banner.startDate && banner.endDate && banner.endDate.getTime() < banner.startDate.getTime()) {
+            return sendResponse(res, 400, false, 'Expiry date cannot be before start date');
+        }
 
         await banner.save();
 
-        await logAudit(req, 'UPDATE_BANNER', (banner as any)._id.toString(), `Priority: ${priority}, Active: ${isActive}`);
+        await logAudit(req, 'UPDATE_BANNER', (banner as any)._id.toString(), `Priority: ${banner.priority}, Active: ${banner.isActive}`);
         return sendResponse(res, 200, true, 'Banner updated successfully', banner);
     } catch (error: any) {
         next(new AppError(error.message || 'Error updating banner', 500));
+    }
+};
+
+export const updateBanner = updateBannerPriority;
+
+export const toggleBannerActive = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const banner = await Banner.findById(id);
+        if (!banner) {
+            return sendResponse(res, 404, false, 'Banner not found');
+        }
+
+        banner.isActive = !banner.isActive;
+        await banner.save();
+
+        await logAudit(req, 'TOGGLE_BANNER', (banner as any)._id.toString(), `New active state: ${banner.isActive}`);
+        return sendResponse(res, 200, true, `Banner ${banner.isActive ? 'activated' : 'deactivated'} successfully`, banner);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error toggling banner state', 500));
     }
 };
 

@@ -26,6 +26,6 @@ const BannerSchema = new Schema<IBanner>({
     isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 
-BannerSchema.index({ isActive: 1, priority: -1 });
+BannerSchema.index({ isActive: 1, priority: -1, createdAt: -1 });
 
 export const Banner = mongoose.model<IBanner>('Banner', BannerSchema);
