@@ -1040,6 +1040,11 @@ export const processDeletionRequest = async (req: Request, res: Response, next: 
 
 export const triggerWeeklyLevelRecalculation = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+        const role = (req as any).user?.role;
+        if (!role || !['owner', 'operator', 'admin', 'superAdmin'].includes(role)) {
+            return sendResponse(res, 403, false, 'Access Denied: Only administrators can trigger level recalculation');
+        }
+
         const { runWeeklyHostLevelRecalculation } = await import('../services/user.service');
         const summary = await runWeeklyHostLevelRecalculation();
         await logAudit(req, 'TRIGGER_WEEKLY_LEVEL_RECALCULATION', 'SYSTEM', `Recalculated host levels: Upgraded ${summary.upgraded}, Downgraded ${summary.downgraded}, Unchanged ${summary.unchanged}`);

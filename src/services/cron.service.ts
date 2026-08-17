@@ -161,14 +161,16 @@ export const startCallCleanupJob = () => {
  * Runs every Sunday night at 12:00 AM (Monday 00:00:00)
  */
 export const startWeeklyHostLevelJob = () => {
-    // Cron schedule '0 0 * * 1' runs at 00:00:00 every Monday (Sunday 12:00 AM midnight)
+    // Cron schedule '0 0 * * 1' runs at 00:00:00 every Monday (Sunday 12:00 AM midnight) in Asia/Kolkata timezone
     cron.schedule('0 0 * * 1', async () => {
-        console.log('⚡ Weekly Host Level Cron Fired at Sunday Midnight (Monday 00:00:00)!');
+        console.log('⚡ Weekly Host Level Cron Fired at Sunday Midnight (Monday 00:00:00 IST)!');
         try {
             const { runWeeklyHostLevelRecalculation } = await import('./user.service');
             await runWeeklyHostLevelRecalculation();
         } catch (err) {
             console.error('❌ Weekly Host Level Cron Error:', err);
         }
+    }, {
+        timezone: 'Asia/Kolkata'
     });
 };

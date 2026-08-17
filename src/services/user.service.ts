@@ -5,27 +5,33 @@ import { CoinsTransaction } from "../models/spentCoinModel";
 import { CallStatus, TransactionType } from "../constants/user";
 import { ClientSession, Types } from "mongoose";
 
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
 /**
- * Helper to calculate Monday-to-Sunday weekly time bounds
+ * Helper to calculate Monday-to-Sunday weekly time bounds in Asia/Kolkata (IST) timezone
  */
-export const getWeeklyTimeBounds = (date: Date = new Date()) => {
-    const d = new Date(date);
-    const day = d.getDay(); // 0 is Sunday, 1 is Monday
-    const diffToMonday = d.getDate() - day + (day === 0 ? -6 : 1);
+export const getWeeklyTimeBounds = (refDate: Date = new Date()) => {
+    const istNow = dayjs(refDate).tz('Asia/Kolkata');
+    const dayOfWeek = istNow.day(); // 0 is Sunday, 1 is Monday
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
 
-    const startOfWeek = new Date(d.setDate(diffToMonday));
-    startOfWeek.setHours(0, 0, 0, 0);
+    const startOfWeekIST = istNow.add(diffToMonday, 'day').startOf('day');
+    const endOfWeekIST = startOfWeekIST.add(6, 'day').endOf('day');
 
-    const endOfWeek = new Date(startOfWeek);
-    endOfWeek.setDate(startOfWeek.getDate() + 6);
-    endOfWeek.setHours(23, 59, 59, 999);
-
-    return { startOfWeek, endOfWeek };
+    return {
+        startOfWeek: startOfWeekIST.toDate(),
+        endOfWeek: endOfWeekIST.toDate()
+    };
 };
 
-export const getPreviousWeekBounds = () => {
-    const now = new Date();
-    const lastWeekDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+export const getPreviousWeekBounds = (refDate: Date = new Date()) => {
+    const istNow = dayjs(refDate).tz('Asia/Kolkata');
+    const lastWeekDate = istNow.subtract(7, 'day').toDate();
     return getWeeklyTimeBounds(lastWeekDate);
 };
 
@@ -104,32 +110,48 @@ export const recalculateAndUpdateHostLevel = async (
   }
 };
 
+let isRecalculating = false;
+
 /**
  * Runs batch weekly host level recalculation for all active hosts.
- * Called automatically every Sunday midnight (Monday 00:00:00) by Cron.
+ * Called automatically every Sunday midnight (Monday 00:00:00 IST) by Cron.
  */
 export const runWeeklyHostLevelRecalculation = async () => {
-    console.log("⏰ Starting Weekly Host Level Recalculation (Sunday Midnight Job)...");
+    if (isRecalculating) {
+        console.warn("⚠️ Weekly Host Level Recalculation already in progress. Skipping duplicate execution.");
+        return { success: false, message: "Recalculation already in progress", total: 0, upgraded: 0, downgraded: 0, unchanged: 0 };
+    }
+
+    isRecalculating = true;
+    console.log("⏰ Starting Weekly Host Level Recalculation (Sunday Midnight Job in Asia/Kolkata)...");
     try {
         const hosts = await User.find({ role: 'host', isDeleted: false }).select('_id level name').lean();
         const bounds = getPreviousWeekBounds();
         let upgraded = 0;
         let downgraded = 0;
         let unchanged = 0;
+        let errors = 0;
 
         for (const host of hosts) {
-            const oldLevel = host.level || 1;
-            const newLevel = await recalculateAndUpdateHostLevel(host._id as any, undefined, bounds);
-            if (newLevel > oldLevel) upgraded++;
-            else if (newLevel < oldLevel) downgraded++;
-            else unchanged++;
+            try {
+                const oldLevel = host.level || 1;
+                const newLevel = await recalculateAndUpdateHostLevel(host._id as any, undefined, bounds);
+                if (newLevel > oldLevel) upgraded++;
+                else if (newLevel < oldLevel) downgraded++;
+                else unchanged++;
+            } catch (hostErr) {
+                errors++;
+                console.error(`❌ Error recalculating level for host ${host._id}:`, hostErr);
+            }
         }
 
-        console.log(`✅ Weekly Host Level Recalculation Complete! Total: ${hosts.length} | Upgraded: ${upgraded} | Downgraded: ${downgraded} | Unchanged: ${unchanged}`);
-        return { total: hosts.length, upgraded, downgraded, unchanged };
+        console.log(`✅ Weekly Host Level Recalculation Complete! Total: ${hosts.length} | Upgraded: ${upgraded} | Downgraded: ${downgraded} | Unchanged: ${unchanged} | Errors: ${errors}`);
+        return { success: true, total: hosts.length, upgraded, downgraded, unchanged, errors };
     } catch (err: any) {
         console.error("❌ Error in runWeeklyHostLevelRecalculation:", err);
         throw err;
+    } finally {
+        isRecalculating = false;
     }
 };
 
