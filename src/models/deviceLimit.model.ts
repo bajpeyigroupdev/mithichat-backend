@@ -10,7 +10,7 @@ export interface IDeviceLimit extends Document {
 const deviceLimitSchema = new Schema<IDeviceLimit>(
   {
     deviceId: { type: String, required: true, unique: true, index: true },
-    maxAllowedAccounts: { type: Number, default: 1, min: 1 },
+    maxAllowedAccounts: { type: Number, default: 1, min: 0 },
     note: { type: String, default: '' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },

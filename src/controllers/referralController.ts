@@ -408,12 +408,14 @@ export const updateDeviceLimit = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "Device ID is required");
     }
 
-    const limit = Number(maxAllowedAccounts) || 1;
+    const limit = Number(maxAllowedAccounts);
+    const validLimit = isNaN(limit) ? 1 : Math.max(0, limit);
+
     const deviceLimit = await DeviceLimit.findOneAndUpdate(
       { deviceId: String(deviceId).trim() },
       {
         $set: {
-          maxAllowedAccounts: Math.max(1, limit),
+          maxAllowedAccounts: validLimit,
           note: note || '',
           updatedBy: (req.user as any)?._id,
         },
@@ -427,3 +429,71 @@ export const updateDeviceLimit = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 500, false, error.message);
   }
 };
+
+/**
+ * GET Search User by User ID / Meethi ID / Phone to get Device ID & all linked accounts.
+ */
+export const getUserDeviceDetails = async (req: AuthRequest, res: Response) => {
+  try {
+    const { identifier } = req.params;
+    const cleanId = String(identifier || '').trim();
+
+    if (!cleanId) {
+      return sendResponse(res, 400, false, "User identifier is required");
+    }
+
+    const queryConditions: any[] = [
+      { meethiId: { $regex: cleanId, $options: 'i' } },
+      { phoneNumber: cleanId },
+      { email: { $regex: cleanId, $options: 'i' } },
+      { userName: { $regex: cleanId, $options: 'i' } },
+    ];
+
+    if (!isNaN(Number(cleanId))) {
+      queryConditions.push({ userId: Number(cleanId) });
+    }
+
+    if (cleanId.match(/^[0-9a-fA-F]{24}$/)) {
+      queryConditions.push({ _id: cleanId });
+    }
+
+    const targetUser = await User.findOne({ $or: queryConditions }).select('-password -refreshToken').lean();
+
+    if (!targetUser) {
+      return sendResponse(res, 404, false, "User not found with the provided identifier");
+    }
+
+    const deviceId = (targetUser as any).device?.createdDeviceId || (targetUser as any).device?.currentDeviceId || null;
+    let registeredAccounts: any[] = [];
+    let customLimit: any = null;
+
+    if (deviceId) {
+      registeredAccounts = await User.find({
+        "device.createdDeviceId": deviceId,
+        isDeleted: false,
+      })
+        .select('userId name phoneNumber role image isBlocked createdAt meethiId device')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      customLimit = await DeviceLimit.findOne({ deviceId }).lean();
+    } else {
+      registeredAccounts = [targetUser];
+    }
+
+    const settings = await getCachedSettings();
+
+    return sendResponse(res, 200, true, "User device details fetched successfully", {
+      user: targetUser,
+      deviceId,
+      totalAccountsCount: registeredAccounts.length,
+      maxAllowedAccounts: customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1),
+      customLimit,
+      registeredAccounts,
+    });
+  } catch (error: any) {
+    await Logger("getUserDeviceDetails", error);
+    return sendResponse(res, 500, false, error.message || "Failed to fetch user device details");
+  }
+};
+
