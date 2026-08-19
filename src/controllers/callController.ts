@@ -392,7 +392,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     let hostId = req.body?.hostId as string | undefined;
     const { id: userId, name, image: callerImage } = req.user || {};
 
-    console.log('START CALL REQUEST:', { userId, hostId });
+    console.log('[CALL] START REQUEST:', { userId, hostId, randomMatch });
 
     const [runtimeSettings, agoraCredentials] = await Promise.all([getCachedSettings(), getAgoraCredentials()]);
     const CALL_RATE_PER_MINUTE = Math.max(1, Number(runtimeSettings.callRatePerMinute || CALL_DIAMONDS_PER_MINUTE));
@@ -406,6 +406,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "Required call details are missing");
     }
 
+    // MANDATORY DB BALANCE CHECK (Read freshest value from database)
     const liveCaller = await User.findOne({
       _id: userId,
       isDeleted: { $ne: true },
@@ -413,8 +414,28 @@ export const startCall = async (req: AuthRequest, res: Response) => {
 
     const callerBalance = Number(liveCaller?.coins || 0) + Number(liveCaller?.diamonds || 0);
 
+    console.log(`[CALL] BALANCE CHECK | CallerID: ${userId} | Live DB Balance: ${callerBalance} | Required Rate: ${CALL_RATE_PER_MINUTE}`);
+
     if (!liveCaller || callerBalance < CALL_RATE_PER_MINUTE) {
-      return sendResponse(res, 400, false, "Insufficient balance to start a call");
+      console.log('[CALL] INSUFFICIENT DIAMONDS | CALL REJECTED BY BACKEND DB CHECK');
+      return sendResponse(res, 400, false, "INSUFFICIENT_DIAMONDS: You don't have enough Diamonds to start this call.", {
+        errorCode: 'INSUFFICIENT_DIAMONDS',
+        requiredBalance: CALL_RATE_PER_MINUTE,
+        currentBalance: callerBalance,
+      });
+    }
+
+    console.log('[CALL] BALANCE OK');
+
+    // Double call / Race condition protection
+    const existingActiveCall = await CoinsTransaction.findOne({
+      userId,
+      status: { $in: [CallStatus.INITIATED, CallStatus.RINGING, CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
+      createdAt: { $gte: new Date(Date.now() - 45000) }
+    });
+    if (existingActiveCall) {
+      console.log('[CALL] DOUBLE CALL ATTEMPT BLOCKED | Active TxID:', existingActiveCall._id);
+      return sendResponse(res, 400, false, "You already have an active call in progress");
     }
 
     const availableDiamonds = callerBalance;
@@ -827,22 +848,22 @@ export const getCallHistory = async (req: AuthRequest, res: Response) => {
 
     const query: any = {
       ...filter,
-      type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT] },
-      status: CallStatus.ENDED, // BUG-02 FIX: use enum, not hardcoded string
+      type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT, TransactionType.GIFT_SENT, 'gift', 'gift_sent', 'voice_call'] },
+      status: { $in: [CallStatus.ENDED, 'ended', 'completed', 'success'] },
     };
 
     // 🗓️ Date Filtering
-    const days = parseInt(req.query.days as string) || 3000; // default 3000 days (all)
+    const days = parseInt(req.query.days as string) || 3000;
     if (days) {
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
-      query.callStart = { $gte: startDate };
+      query.createdAt = { $gte: startDate };
     }
 
     const transactions = await CoinsTransaction.find(query)
       .populate("userId", "name image")
       .populate("hostId", "name image")
-      .sort({ callStart: -1 })
+      .sort({ createdAt: -1 })
       .lean();
 
     if (!transactions.length) {
@@ -852,9 +873,25 @@ export const getCallHistory = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    // Aggregate gifts by callId
+    const giftsByCallId = new Map<string, { giftTotal: number; giftEarning: number }>();
+    for (const t of transactions) {
+      const typeStr = String(t.type);
+      const isGiftItem = typeStr === TransactionType.GIFT || typeStr === TransactionType.GIFT_SENT || typeStr === 'gift' || typeStr === 'gift_sent';
+      if (isGiftItem) {
+        const callIdStr = (t.meta as any)?.callId ? String((t.meta as any).callId) : null;
+        if (callIdStr) {
+          const prev = giftsByCallId.get(callIdStr) || { giftTotal: 0, giftEarning: 0 };
+          prev.giftTotal += Number(t.coinsSpent || 0);
+          prev.giftEarning += Number(t.hostEarning || 0);
+          giftsByCallId.set(callIdStr, prev);
+        }
+      }
+    }
+
     // ✅ Safe numeric conversion for duration
     const totalDurationSeconds = transactions
-      .filter((t) => t.type === TransactionType.VOICE_CALL)
+      .filter((t) => String(t.type) === TransactionType.VOICE_CALL || String(t.type) === 'voice_call')
       .reduce((sum, t) => sum + Number(t.duration || 0), 0);
 
     // Format total time
@@ -885,31 +922,47 @@ export const getCallHistory = async (req: AuthRequest, res: Response) => {
       const partnerImage =
         role === "host" ? userObj?.image : hostObj?.image;
 
+      const typeStr = String(t.type);
+      const isCall = typeStr === TransactionType.VOICE_CALL || typeStr === 'voice_call';
+      const isGift = typeStr === TransactionType.GIFT || typeStr === TransactionType.GIFT_SENT || typeStr === 'gift' || typeStr === 'gift_sent';
+
+      let voiceVal = 0;
+      let giftVal = 0;
+      let commissionVal = 0;
+
+      if (isCall) {
+        voiceVal = role === "host" ? Number(t.hostEarning || 0) : Number(t.coinsSpent || 0);
+        const callGifts = giftsByCallId.get(String(t._id));
+        if (callGifts) {
+          giftVal = role === "host" ? callGifts.giftEarning : callGifts.giftTotal;
+        } else {
+          giftVal = Number((t as any).gift || 0);
+        }
+        commissionVal = role === "host" ? (voiceVal + giftVal) : 0;
+      } else if (isGift) {
+        giftVal = role === "host" ? Number(t.hostEarning || 0) : Number(t.coinsSpent || 0);
+        commissionVal = role === "host" ? Number(t.hostEarning || 0) : 0;
+      }
+
       // ✅ Safe duration formatting
       const formattedDuration =
-        t.duration && t.type === TransactionType.VOICE_CALL
+        t.duration && isCall
           ? new Date(Number(t.duration) * 1000).toISOString().substring(11, 19)
           : null;
 
       return {
+        _id: t._id,
         name: partnerName,
         id: partnerId,
         image: partnerImage,
         type: t.type,
-        voice:
-          t.type === TransactionType.VOICE_CALL
-            ? role === "host"
-              ? Number(t.hostEarning) || 0
-              : Number(t.coinsSpent) || 0
-            : 0,
-        gift: t.type === TransactionType.GIFT ? Number(t.coinsSpent) || 0 : 0,
-        commission:
-          role === "host" && t.type === TransactionType.VOICE_CALL
-            ? Number(t.hostEarning) || 0
-            : undefined,
+        voice: voiceVal,
+        gift: giftVal,
+        commission: role === "host" ? commissionVal : undefined,
         duration: formattedDuration,
-        callStart: t.callStart,
-        callEnd: t.callEnd,
+        callStart: t.callStart || t.createdAt,
+        callEnd: t.callEnd || t.createdAt,
+        createdAt: t.createdAt,
         date: t.callStart
           ? new Date(t.callStart).toLocaleDateString("en-GB")
           : new Date(t.createdAt).toLocaleDateString("en-GB"),
@@ -1173,7 +1226,7 @@ export const getAllCallHistory = async (req: AuthRequest, res: Response) => {
     const skip = (page - 1) * limit;
 
     const query: any = {
-      type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT] },
+      type: { $in: [TransactionType.VOICE_CALL, TransactionType.GIFT, TransactionType.GIFT_SENT] },
       status: CallStatus.ENDED,
     };
 
@@ -1225,13 +1278,15 @@ export const getAllCallHistory = async (req: AuthRequest, res: Response) => {
           ? new Date(Number(t.duration) * 1000).toISOString().substring(11, 19)
           : null;
 
+      const isGift = t.type === TransactionType.GIFT || t.type === TransactionType.GIFT_SENT;
+
       return {
         id: t._id,
         callerName: userObj?.name || "Unknown User",
         hostName: hostObj?.name || "Unknown Host",
         type: t.type,
         voice: t.type === TransactionType.VOICE_CALL ? Number(t.coinsSpent) || 0 : 0,
-        gift: t.type === TransactionType.GIFT ? Number(t.coinsSpent) || 0 : 0,
+        gift: isGift ? Number(t.coinsSpent) || 0 : 0,
         hostEarning: Number(t.hostEarning) || 0,
         duration: formattedDuration,
         callStart: t.callStart,

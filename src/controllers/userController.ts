@@ -20,7 +20,7 @@ import { verifyFirebasePhoneToken } from "../utils/firebasePhoneVerification";
 import { UserInterface } from "../interfaces/user.interface";
 import { getAllHostsService, invalidateHostCache } from "../services/user.service";
 import { getIO, getUserRoom } from "../sockets";
-import { Gender } from "../constants/user";
+import { Gender, TransactionType } from "../constants/user";
 import HelpRequest from "../models/help.model";
 import DeletionRequest from "../models/deletionRequest.model";
 import { deleteImageFromCloudinary } from "../utils/cloudinary";
@@ -935,7 +935,13 @@ export const getCoinHistory = async (req: AuthRequest, res: Response) => {
       const isHost = tx.hostId && tx.hostId.toString() === userIdStr;
       const amount = isHost ? (tx.hostEarning || 0) : (tx.coinsSpent || 0);
       const isEarning = isHost || (tx.type as string) === "recharge";
-      const displayType = isHost && (tx.type as string) === "voice_call" ? "call_earning" : tx.type;
+
+      let displayType = tx.type as string;
+      if (tx.type === TransactionType.VOICE_CALL) {
+        displayType = isHost ? "call_earning" : "call";
+      } else if (tx.type === TransactionType.GIFT || tx.type === TransactionType.GIFT_SENT) {
+        displayType = isHost ? "gift_received" : "gift_sent";
+      }
 
       return {
         type: displayType,

@@ -25,7 +25,7 @@ export interface ISettings extends Document {
 
 const SettingsSchema = new Schema<ISettings>({
     commissionRate: { type: Number, default: 20, min: 0, max: 100 },
-    giftCommissionPercent: { type: Number, default: 20, min: 0, max: 100 },
+    giftCommissionPercent: { type: Number, default: 30, min: 0, max: 100 },
     withdrawalPlatformFeePercent: { type: Number, default: 5, min: 0, max: 100 },
     coinPrice: { type: Number, default: 0.10, min: 0 },
     minPayout: { type: Number, default: 50, min: 0 },
