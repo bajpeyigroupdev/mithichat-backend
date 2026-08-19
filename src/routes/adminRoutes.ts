@@ -112,8 +112,12 @@ router.get('/calls/history', verifyToken, getAllCallHistory);
 
 // ============ System Settings Routes ============
 import { getSettings, updateSettings } from '../controllers/settingsController';
+import { getAdminReferrals, getDeviceLimits, updateDeviceLimit } from '../controllers/referralController';
 router.get('/settings', verifyToken, getSettings);
 router.patch('/settings', verifyToken, updateSettings);
+router.get('/referrals', verifyToken, getAdminReferrals);
+router.get('/device-limits', verifyToken, getDeviceLimits);
+router.post('/device-limits', verifyToken, updateDeviceLimit);
 
 // ============ Withdrawal Management Routes ============
 import { getPendingWithdrawals, processWithdrawal } from '../controllers/withdrawalController';

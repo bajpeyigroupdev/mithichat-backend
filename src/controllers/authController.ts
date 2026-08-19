@@ -11,6 +11,8 @@ import { Logger } from "../utils/logger";
 import { generateSecureHash, verifySecureHash } from "../utils/passwordHelper";
 import { verifyFirebasePhoneToken } from "../utils/firebasePhoneVerification";
 import { APP_ACCOUNT_ROLES } from "../utils/accountScope";
+import { DeviceLimit } from "../models/deviceLimit.model";
+import { getCachedSettings } from "./settingsController";
 
 // ==================== RESET PASSWORD ====================
 export const resetPassword = async (req: Request, res: Response) => {
@@ -143,6 +145,26 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
     if (userFrom === "app") {
       if (!deviceId) {
         return sendResponse(res, 400, false, "deviceId is required for app users");
+      }
+
+      // Check max account creation limit for this device (default 1)
+      const customLimit = await DeviceLimit.findOne({ deviceId });
+      const settings = await getCachedSettings();
+      const maxAllowed = customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1);
+
+      const existingDeviceAccounts = await User.countDocuments({
+        "device.createdDeviceId": deviceId,
+        role: { $in: APP_ACCOUNT_ROLES },
+        isDeleted: false,
+      });
+
+      if (existingDeviceAccounts >= maxAllowed) {
+        return sendResponse(
+          res,
+          400,
+          false,
+          `Registration limit reached for this device (Max allowed: ${maxAllowed}). Contact support to allow more accounts.`
+        );
       }
     }
 

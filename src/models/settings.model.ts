@@ -14,6 +14,9 @@ export interface ISettings extends Document {
     hostSharePerMinute: number;
     chatMessageCost: number;
     chatMessageLimit: number;
+    welcomeRewardDiamonds: number;
+    referralRewardDiamonds: number;
+    defaultMaxAccountsPerDevice: number;
     agoraAppId: string;
     agoraCertificateEncrypted: string;
     privacyPolicy: string;
@@ -34,6 +37,9 @@ const SettingsSchema = new Schema<ISettings>({
     hostSharePerMinute: { type: Number, default: 28, min: 0 },
     chatMessageCost: { type: Number, default: 10, min: 0 },
     chatMessageLimit: { type: Number, default: 50, min: 1, max: 5000 },
+    welcomeRewardDiamonds: { type: Number, default: 100, min: 0 },
+    referralRewardDiamonds: { type: Number, default: 50, min: 0 },
+    defaultMaxAccountsPerDevice: { type: Number, default: 1, min: 1 },
     agoraAppId: { type: String, default: '', trim: true },
     agoraCertificateEncrypted: { type: String, default: '', select: false },
     privacyPolicy: {

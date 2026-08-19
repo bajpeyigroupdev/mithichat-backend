@@ -20,6 +20,9 @@ const NUMBER_RULES: Record<string, { min: number; max: number }> = {
     hostSharePerMinute: { min: 0, max: 1000000 },
     chatMessageCost: { min: 0, max: 1000000 },
     chatMessageLimit: { min: 1, max: 5000 },
+    welcomeRewardDiamonds: { min: 0, max: 100000 },
+    referralRewardDiamonds: { min: 0, max: 100000 },
+    defaultMaxAccountsPerDevice: { min: 1, max: 1000 },
 };
 const BOOLEAN_KEYS = ['maintenanceMode', 'emailAlerts', 'userNotifications', 'systemDigest'];
 const CONTENT_KEYS = ['privacyPolicy', 'termsAndConditions'];

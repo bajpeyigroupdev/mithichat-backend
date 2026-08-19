@@ -3,11 +3,13 @@ import { AuthRequest } from '../middlewares/authorize.middleware';
 import { User } from '../models/user.model';
 import { Referral } from '../models/referral.model';
 import { RechargeHistory } from '../models/RechargeHistory';
-import { sendResponse } from '../utils/response';
-import Logger from '../utils/logger';
+import { DeviceLimit } from '../models/deviceLimit.model';
+import { getCachedSettings } from './settingsController';
+import sendResponse from '../utils/reponse';
+import { Logger } from '../utils/logger';
 
 /**
- * Single atomic endpoint for new user mandatory profile completion + welcome reward (+100 💎) + optional referral reward (+50 💎 for referrer).
+ * Single atomic endpoint for new user mandatory profile completion + welcome reward + optional referral reward.
  */
 export const completeProfile = async (req: AuthRequest, res: Response) => {
   try {
@@ -22,6 +24,11 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
     if (!currentUser) {
       return sendResponse(res, 404, false, "User not found");
     }
+
+    // Fetch dynamic reward settings (or fall back to 100 & 50)
+    const settings = await getCachedSettings();
+    const welcomeRewardAmount = settings?.welcomeRewardDiamonds ?? 100;
+    const referralRewardAmount = settings?.referralRewardDiamonds ?? 50;
 
     // Idempotency: If user already completed profile, return success with current profile
     if (currentUser.profileCompleted && currentUser.welcomeRewardClaimed) {
@@ -112,23 +119,23 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
     currentUser.image = selectedAvatar;
     currentUser.profileCompleted = true;
 
-    // Grant New User Welcome Reward (+100 Diamonds) exactly once
+    // Grant New User Welcome Reward exactly once
     if (!currentUser.welcomeRewardClaimed) {
-      currentUser.diamonds = Number(currentUser.diamonds || 0) + 100;
+      currentUser.diamonds = Number(currentUser.diamonds || 0) + welcomeRewardAmount;
       currentUser.welcomeRewardClaimed = true;
 
       // Transaction log for welcome bonus
       await RechargeHistory.create({
         userId: currentUser.userId,
         type: 'online' as any,
-        diamonds: 100,
+        diamonds: welcomeRewardAmount,
         amount: 0,
         currency: 'INR',
         status: 'COMPLETED',
         date: new Date(),
         processedAt: new Date(),
         productId: 'WELCOME_BONUS',
-        rawGoogleData: { note: '100 Diamonds Welcome Bonus on Profile Completion' },
+        rawGoogleData: { note: `${welcomeRewardAmount} Diamonds Welcome Bonus on Profile Completion` },
       });
     }
 
@@ -137,11 +144,11 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
       currentUser.referredBy = referrerUser._id;
       currentUser.referralClaimed = true;
 
-      // Credit Referrer +50 Diamonds
+      // Credit Referrer
       await User.updateOne(
         { _id: referrerUser._id },
         {
-          $inc: { diamonds: 50, totalReferrals: 1 },
+          $inc: { diamonds: referralRewardAmount, totalReferrals: 1 },
         }
       );
 
@@ -149,24 +156,24 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
       await RechargeHistory.create({
         userId: referrerUser.userId,
         type: 'online' as any,
-        diamonds: 50,
+        diamonds: referralRewardAmount,
         amount: 0,
         currency: 'INR',
         status: 'COMPLETED',
         date: new Date(),
         processedAt: new Date(),
         productId: 'REFERRAL_REWARD',
-        rawGoogleData: { note: `50 Diamonds Referral Reward for inviting user ${currentUser.userId}` },
+        rawGoogleData: { note: `${referralRewardAmount} Diamonds Referral Reward for user ${currentUser.userId}` },
       });
 
-      // Create Referral record (unique index on referee prevents duplicates)
+      // Create Referral record
       try {
         await Referral.create({
           referrer: referrerUser._id,
           referee: currentUser._id,
           referralCode: cleanReferralCode,
-          referrerReward: 50,
-          refereeReward: 100,
+          referrerReward: referralRewardAmount,
+          refereeReward: welcomeRewardAmount,
           status: 'CLAIMED',
           claimedAt: new Date(),
         });
@@ -177,7 +184,7 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
 
     await currentUser.save();
 
-    return sendResponse(res, 200, true, "Profile completed successfully! You received 100 Diamonds welcome bonus.", {
+    return sendResponse(res, 200, true, `Profile completed successfully! You received ${welcomeRewardAmount} Diamonds welcome bonus.`, {
       user: currentUser,
     });
   } catch (error: any) {
@@ -187,7 +194,7 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
 };
 
 /**
- * GET Referral details & stats for logged-in user.
+ * GET Referral details & stats for logged-in mobile user.
  */
 export const getReferralDetails = async (req: AuthRequest, res: Response) => {
   try {
@@ -201,7 +208,6 @@ export const getReferralDetails = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, "User not found");
     }
 
-    // Ensure referralCode exists
     if (!user.referralCode) {
       user.referralCode = `MC${user.userId}`;
       await user.save();
@@ -264,7 +270,9 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, "User not found");
     }
 
-    // Check self referral
+    const settings = await getCachedSettings();
+    const referralRewardAmount = settings?.referralRewardDiamonds ?? 50;
+
     if (
       cleanCode === currentUser.referralCode ||
       cleanCode === currentUser.specialCode ||
@@ -274,13 +282,11 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "You cannot use your own referral code");
     }
 
-    // Check already claimed
     const existingClaim = await Referral.findOne({ referee: currentUser._id });
     if (currentUser.referralClaimed || existingClaim) {
       return sendResponse(res, 400, false, "You have already claimed a referral code");
     }
 
-    // Find referrer
     const referrerUser = await User.findOne({
       $or: [
         { referralCode: cleanCode },
@@ -299,37 +305,33 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "You cannot use your own referral code");
     }
 
-    // Update currentUser
     currentUser.referredBy = referrerUser._id;
     currentUser.referralClaimed = true;
     await currentUser.save();
 
-    // Credit Referrer +50 Diamonds
     await User.updateOne(
       { _id: referrerUser._id },
-      { $inc: { diamonds: 50, totalReferrals: 1 } }
+      { $inc: { diamonds: referralRewardAmount, totalReferrals: 1 } }
     );
 
-    // Ledger for referrer
     await RechargeHistory.create({
       userId: referrerUser.userId,
       type: 'online' as any,
-      diamonds: 50,
+      diamonds: referralRewardAmount,
       amount: 0,
       currency: 'INR',
       status: 'COMPLETED',
       date: new Date(),
       processedAt: new Date(),
       productId: 'REFERRAL_REWARD',
-      rawGoogleData: { note: `50 Diamonds Referral Reward for user ${currentUser.userId}` },
+      rawGoogleData: { note: `${referralRewardAmount} Diamonds Referral Reward for user ${currentUser.userId}` },
     });
 
-    // Create Referral record
     await Referral.create({
       referrer: referrerUser._id,
       referee: currentUser._id,
       referralCode: cleanCode,
-      referrerReward: 50,
+      referrerReward: referralRewardAmount,
       refereeReward: 100,
       status: 'CLAIMED',
       claimedAt: new Date(),
@@ -341,5 +343,87 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     await Logger("claimReferralCode", error);
     return sendResponse(res, 500, false, error.message || "Failed to redeem referral code");
+  }
+};
+
+/**
+ * GET Admin Referral Report & Leaderboard (For Admin & Management Panels).
+ */
+export const getAdminReferrals = async (req: AuthRequest, res: Response) => {
+  try {
+    const totalReferrals = await Referral.countDocuments();
+    const aggregateReward = await Referral.aggregate([
+      { $group: { _id: null, totalDiamonds: { $sum: '$referrerReward' } } }
+    ]);
+    const totalDiamondsGranted = aggregateReward[0]?.totalDiamonds || 0;
+
+    // Leaderboard of top referrers
+    const topReferrers = await User.find({ totalReferrals: { $gt: 0 } })
+      .select('userId name email role image referralCode totalReferrals diamonds')
+      .sort({ totalReferrals: -1 })
+      .limit(50)
+      .lean();
+
+    // Recent 50 referral logs
+    const referralLogs = await Referral.find()
+      .populate('referrer', 'userId name email image referralCode')
+      .populate('referee', 'userId name email image createdAt')
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+
+    return sendResponse(res, 200, true, "Admin referral analytics fetched successfully", {
+      totalReferrals,
+      totalDiamondsGranted,
+      topReferrers,
+      referralLogs,
+    });
+  } catch (error: any) {
+    await Logger("getAdminReferrals", error);
+    return sendResponse(res, 500, false, error.message || "Failed to fetch admin referral analytics");
+  }
+};
+
+/**
+ * GET & POST Admin Device Limit Overrides
+ */
+export const getDeviceLimits = async (req: AuthRequest, res: Response) => {
+  try {
+    const limits = await DeviceLimit.find().sort({ updatedAt: -1 }).lean();
+    const settings = await getCachedSettings();
+    return sendResponse(res, 200, true, "Device limits fetched", {
+      defaultMaxAccounts: settings?.defaultMaxAccountsPerDevice || 1,
+      deviceOverrides: limits,
+    });
+  } catch (error: any) {
+    await Logger("getDeviceLimits", error);
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const updateDeviceLimit = async (req: AuthRequest, res: Response) => {
+  try {
+    const { deviceId, maxAllowedAccounts, note } = req.body;
+    if (!deviceId) {
+      return sendResponse(res, 400, false, "Device ID is required");
+    }
+
+    const limit = Number(maxAllowedAccounts) || 1;
+    const deviceLimit = await DeviceLimit.findOneAndUpdate(
+      { deviceId: String(deviceId).trim() },
+      {
+        $set: {
+          maxAllowedAccounts: Math.max(1, limit),
+          note: note || '',
+          updatedBy: (req.user as any)?._id,
+        },
+      },
+      { new: true, upsert: true }
+    );
+
+    return sendResponse(res, 200, true, "Device registration limit updated successfully", deviceLimit);
+  } catch (error: any) {
+    await Logger("updateDeviceLimit", error);
+    return sendResponse(res, 500, false, error.message);
   }
 };
