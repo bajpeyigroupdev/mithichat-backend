@@ -96,17 +96,39 @@ export const getDashboardStats = async (
             User.countDocuments({ createdAt: { $gte: monthStart } }),
         ]);
 
-        // User Status Breakdown
-        const [activeUsersCount, inactiveUsersCount, blockedUsersCount, deletedUsersCount] = await Promise.all([
+        // User Status Breakdown & Unique Active Users (DAU & MAU)
+        const past24h = dayjs().subtract(24, 'hour').toDate();
+        const past30d = dayjs().subtract(30, 'day').toDate();
+
+        const [activeUsersCount, inactiveUsersCount, blockedUsersCount, deletedUsersCount, dauCount, mauCount] = await Promise.all([
             User.countDocuments({ isDeleted: false, isBlocked: false, isActive: true }),
             User.countDocuments({ isDeleted: false, isActive: false }),
             User.countDocuments({ isDeleted: false, isBlocked: true }),
             User.countDocuments({ isDeleted: true }),
+            User.countDocuments({
+                isDeleted: false,
+                role: { $nin: PANEL_ACCOUNT_ROLES },
+                $or: [
+                    { isOnline: true },
+                    { lastOnline: { $gte: past24h } },
+                    { updatedAt: { $gte: past24h } },
+                    { isActive: true }
+                ]
+            }).catch(() => 0),
+            User.countDocuments({
+                isDeleted: false,
+                role: { $nin: PANEL_ACCOUNT_ROLES },
+                $or: [
+                    { isOnline: true },
+                    { lastOnline: { $gte: past30d } },
+                    { updatedAt: { $gte: past30d } },
+                    { isActive: true }
+                ]
+            }).catch(() => 0),
         ]);
 
         // Total users (Global count of app users, excluding panel staff)
         const totalUsers = await User.countDocuments({ isDeleted: false, role: { $nin: PANEL_ACCOUNT_ROLES } });
-        const activeUsers = activeUsersCount;
 
         // Pending Reports Count
         const reportsPending = await Report.countDocuments({ status: 'pending' }).catch(() => 0);
@@ -120,6 +142,21 @@ export const getDashboardStats = async (
 
         // Base match for transactions + host filter
         const txMatch = { ...hostFilter };
+
+        // Unique Callers & Unique Active Hosts Today
+        const [uniqueCallersTodayList, uniqueHostsTodayList] = await Promise.all([
+            CoinsTransaction.distinct('userId', {
+                ...txMatch,
+                createdAt: { $gte: todayStart }
+            }).catch(() => []),
+            CoinsTransaction.distinct('hostId', {
+                ...txMatch,
+                createdAt: { $gte: todayStart }
+            }).catch(() => [])
+        ]);
+
+        const uniqueCallersToday = uniqueCallersTodayList.length;
+        const uniqueHostsActiveToday = uniqueHostsTodayList.length;
 
         // Call stats for today
         const callsToday = await CoinsTransaction.countDocuments({
@@ -156,7 +193,11 @@ export const getDashboardStats = async (
 
         const stats = {
             totalUsers,
-            activeUsers,
+            activeUsers: Math.max(activeUsersCount, dauCount),
+            dau: dauCount,
+            mau: mauCount,
+            uniqueCallersToday,
+            uniqueHostsActiveToday,
             totalHosts: totalHostsCount,
             activeHosts: approvedHostsCount,
             activeCalls,
@@ -191,6 +232,8 @@ export const getDashboardStats = async (
                 callsToday,
                 minutesToday,
                 coinsSpentToday,
+                uniqueCallersToday,
+                uniqueHostsActiveToday,
                 hostEarningsToday: parseFloat(hostEarningsToday.toFixed(2)),
                 revenueToday: parseFloat(revenueToday.toFixed(2)),
             },
