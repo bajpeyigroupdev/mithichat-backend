@@ -121,8 +121,15 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         await sender.save({ session });
 
         // Add to Receiver (Host earns coins)
+        let updatedReceiver: any = null;
         if (hostEarning > 0) {
-            await User.findByIdAndUpdate(receiverId, { $inc: { coins: hostEarning } }, { session });
+            updatedReceiver = await User.findByIdAndUpdate(
+                receiverId,
+                { $inc: { coins: hostEarning } },
+                { session, new: true }
+            );
+        } else {
+            updatedReceiver = await User.findById(receiverId).session(session);
         }
 
         // Record Transaction
@@ -157,6 +164,7 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         io.to(getUserRoom(String(receiverId))).emit('giftReceived', giftPayload);
         io.to(getUserRoom(String(sender._id))).emit('giftReceived', giftPayload);
 
+        // Emit real-time updated balance to Sender
         io.to(getUserRoom(String(sender._id))).emit('balanceUpdated', {
             userId: String(sender._id),
             coins: Number(sender.coins || 0),
@@ -164,10 +172,21 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             totalBalance: Number(sender.coins || 0) + Number(sender.diamonds || 0),
         });
 
+        // Emit real-time updated balance to Receiver (Host gets Coins)
+        if (updatedReceiver) {
+            io.to(getUserRoom(String(receiverId))).emit('balanceUpdated', {
+                userId: String(receiverId),
+                coins: Number(updatedReceiver.coins || 0),
+                diamonds: Number(updatedReceiver.diamonds || 0),
+                totalBalance: Number(updatedReceiver.coins || 0) + Number(updatedReceiver.diamonds || 0),
+            });
+        }
+
         return sendResponse(res, 200, true, "Gift sent successfully", {
-            newBalance: Number(sender.diamonds || 0),
+            newBalance: Number(sender.coins || 0) + Number(sender.diamonds || 0),
             diamonds: Number(sender.diamonds || 0),
             coins: Number(sender.coins || 0),
+            hostEarnedCoins: hostEarning,
             totalBalance: Number(sender.coins || 0) + Number(sender.diamonds || 0),
             giftName: giftDoc.name,
             ...giftPayload,
