@@ -22,7 +22,7 @@ const appReleaseSchema = new Schema<IAppRelease>(
     versionName: { type: String, required: true },
     versionCode: { type: Number, default: 1 },
     fileUrl: { type: String, required: true },
-    filePath: { type: String, required: true },
+    filePath: { type: String, default: "" },
     fileType: { type: String, enum: ["apk", "aab"], required: true, default: "apk" },
     originalFileName: { type: String, required: true },
     fileSizeBytes: { type: Number, required: true, default: 0 },

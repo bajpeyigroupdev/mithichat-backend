@@ -20,21 +20,41 @@ const formatBytes = (bytes: number): string => {
 export const uploadAppRelease = async (req: AuthRequest, res: Response) => {
   try {
     const file = req.file;
-    if (!file) {
-      return sendResponse(res, 400, false, "Please select an .apk or .aab build file to upload.");
-    }
+    const { versionName, versionCode, releaseNotes, setAsActive, directUrl, fileUrl: bodyFileUrl } = req.body;
 
-    const { versionName, versionCode, releaseNotes, setAsActive } = req.body;
+    const targetUrl = directUrl || bodyFileUrl;
+
+    if (!file && !targetUrl) {
+      return sendResponse(res, 400, false, "Please select a build file (.apk/.aab) or enter a direct download URL.");
+    }
 
     if (!versionName) {
-      // Clean up uploaded file if validation fails
-      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-      return sendResponse(res, 400, false, "Version name (e.g. 1.7.6) is required.");
+      if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+      return sendResponse(res, 400, false, "Version name (e.g. 1.8.3) is required.");
     }
 
-    const ext = path.extname(file.originalname).toLowerCase().replace(".", "");
-    const fileType = ext === "aab" ? "aab" : "apk";
-    const fileUrl = `/uploads/releases/${file.filename}`;
+    let fileType: "apk" | "aab" = "apk";
+    let fileUrl = "";
+    let filePath = "";
+    let originalFileName = "";
+    let fileSizeBytes = 0;
+    let fileSizeFormatted = "70.2 MB";
+
+    if (file) {
+      const ext = path.extname(file.originalname).toLowerCase().replace(".", "");
+      fileType = ext === "aab" ? "aab" : "apk";
+      fileUrl = `/uploads/releases/${file.filename}`;
+      filePath = file.path;
+      originalFileName = file.originalname;
+      fileSizeBytes = file.size;
+      fileSizeFormatted = formatBytes(file.size);
+    } else {
+      fileUrl = targetUrl;
+      const lower = targetUrl.toLowerCase();
+      fileType = lower.includes(".aab") ? "aab" : "apk";
+      originalFileName = targetUrl.split("/").pop()?.split("?")[0] || `app-release.${fileType}`;
+    }
+
     const shouldBeActive = setAsActive === "false" ? false : true;
 
     // If setting as active, deactivate previous releases
@@ -46,20 +66,20 @@ export const uploadAppRelease = async (req: AuthRequest, res: Response) => {
       versionName: String(versionName).trim(),
       versionCode: versionCode ? parseInt(versionCode, 10) : 1,
       fileUrl,
-      filePath: file.path,
+      filePath,
       fileType,
-      originalFileName: file.originalname,
-      fileSizeBytes: file.size,
-      fileSizeFormatted: formatBytes(file.size),
+      originalFileName,
+      fileSizeBytes,
+      fileSizeFormatted,
       releaseNotes: releaseNotes ? String(releaseNotes).trim() : "",
       isActive: shouldBeActive,
       downloadCount: 0,
       uploadedBy: req.user?.name || "Management Admin",
     });
 
-    console.log(`[AppRelease] New ${fileType.toUpperCase()} release uploaded: v${versionName} (${release.fileSizeFormatted})`);
+    console.log(`[AppRelease] New ${fileType.toUpperCase()} release registered: v${versionName} (${release.fileSizeFormatted})`);
 
-    return sendResponse(res, 201, true, `App release v${versionName} (${fileType.toUpperCase()}) uploaded successfully.`, release);
+    return sendResponse(res, 201, true, `App release v${versionName} (${fileType.toUpperCase()}) registered successfully.`, release);
   } catch (error: any) {
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
