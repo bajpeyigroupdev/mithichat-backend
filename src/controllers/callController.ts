@@ -412,16 +412,16 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       isDeleted: { $ne: true },
     }).select('coins diamonds').lean();
 
-    const callerBalance = Number(liveCaller?.coins || 0) + Number(liveCaller?.diamonds || 0);
+    const callerDiamonds = Number(liveCaller?.diamonds || 0);
 
-    console.log(`[CALL] BALANCE CHECK | CallerID: ${userId} | Live DB Balance: ${callerBalance} | Required Rate: ${CALL_RATE_PER_MINUTE}`);
+    console.log(`[CALL] DIAMONDS CHECK | CallerID: ${userId} | Live DB Diamonds: ${callerDiamonds} | Required Rate: ${CALL_RATE_PER_MINUTE}`);
 
-    if (!liveCaller || callerBalance < CALL_RATE_PER_MINUTE) {
+    if (!liveCaller || callerDiamonds < CALL_RATE_PER_MINUTE) {
       console.log('[CALL] INSUFFICIENT DIAMONDS | CALL REJECTED BY BACKEND DB CHECK');
       return sendResponse(res, 400, false, "INSUFFICIENT_DIAMONDS: You don't have enough Diamonds to start this call.", {
         errorCode: 'INSUFFICIENT_DIAMONDS',
         requiredBalance: CALL_RATE_PER_MINUTE,
-        currentBalance: callerBalance,
+        currentBalance: callerDiamonds,
       });
     }
 
