@@ -34,7 +34,7 @@ import {
 } from '../controllers/reportsController';
 import { listAdmins, getAdmin, toggleAdminBlock, deleteAdmin, resetAdminPassword, getRecruitedMembers } from '../controllers/adminController';
 import { listSuperAdmins, getSuperAdmin, toggleSuperAdminBlock, deleteSuperAdmin, resetSuperAdminPassword } from '../controllers/superAdminController';
-import { getDeviceLimits, updateDeviceLimit, getUserDeviceDetails, getAdminReferrals } from '../controllers/referralController';
+import { getDeviceLimits, updateDeviceLimit, getUserDeviceDetails, getAdminReferrals, getReferrerReferees } from '../controllers/referralController';
 
 const router = express.Router();
 
@@ -43,6 +43,7 @@ router.get('/users/device-info/:identifier', verifyToken, getUserDeviceDetails);
 router.get('/device-limits', verifyToken, getDeviceLimits);
 router.post('/device-limits', verifyToken, updateDeviceLimit);
 router.get('/referrals/admin-stats', verifyToken, getAdminReferrals);
+router.get('/referrals/user/:referrerId', verifyToken, getReferrerReferees);
 
 
 // ============ Admin Authentication Routes ============

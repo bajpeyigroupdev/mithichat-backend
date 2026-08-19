@@ -357,17 +357,56 @@ export const getAdminReferrals = async (req: AuthRequest, res: Response) => {
     ]);
     const totalDiamondsGranted = aggregateReward[0]?.totalDiamonds || 0;
 
-    // Leaderboard of top referrers
-    const topReferrers = await User.find({ totalReferrals: { $gt: 0 } })
-      .select('userId name email role image referralCode totalReferrals diamonds')
-      .sort({ totalReferrals: -1 })
-      .limit(50)
+    // Aggregated top referrers by joined user count & earnings
+    const referrerStats = await Referral.aggregate([
+      {
+        $group: {
+          _id: '$referrer',
+          joinedCount: { $sum: 1 },
+          totalEarned: { $sum: '$referrerReward' },
+          lastReferralDate: { $max: '$createdAt' }
+        }
+      },
+      { $sort: { joinedCount: -1, totalEarned: -1 } },
+      { $limit: 100 }
+    ]);
+
+    const referrerUserIds = referrerStats.map(s => s._id);
+    const usersList = await User.find({
+      $or: [
+        { _id: { $in: referrerUserIds } },
+        { totalReferrals: { $gt: 0 } }
+      ]
+    })
+      .select('userId name email role image referralCode meethiId phoneNumber totalReferrals diamonds')
       .lean();
 
-    // Recent 50 referral logs
+    const usersMap = new Map();
+    usersList.forEach(u => usersMap.set(String(u._id), u));
+
+    const topReferrers = referrerStats.map(stat => {
+      const userObj = usersMap.get(String(stat._id)) || {};
+      return {
+        _id: stat._id,
+        userId: userObj.userId,
+        name: userObj.name || 'User',
+        email: userObj.email,
+        phoneNumber: userObj.phoneNumber,
+        meethiId: userObj.meethiId || userObj.userId,
+        referralCode: userObj.referralCode || `REF${userObj.userId}`,
+        role: userObj.role || 'user',
+        image: userObj.image,
+        totalJoinedCount: stat.joinedCount,
+        totalEarnings: stat.totalEarned,
+        totalReferrals: userObj.totalReferrals || stat.joinedCount,
+        lastReferralDate: stat.lastReferralDate,
+      };
+    });
+
+    // Recent 100 referral logs with referee info
     const referralLogs = await Referral.find()
-      .populate('referrer', 'userId name email image referralCode')
-      .populate('referee', 'userId name email image createdAt')
+      .populate('referrer', 'userId name email image referralCode meethiId')
+      .populate('referee', 'userId name email image createdAt meethiId phoneNumber')
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
@@ -381,6 +420,62 @@ export const getAdminReferrals = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     await Logger("getAdminReferrals", error);
     return sendResponse(res, 500, false, error.message || "Failed to fetch admin referral analytics");
+  }
+};
+
+/**
+ * GET Joined Users (Referees) under a specific Referrer User ID
+ */
+export const getReferrerReferees = async (req: AuthRequest, res: Response) => {
+  try {
+    const { referrerId } = req.params;
+    if (!referrerId) {
+      return sendResponse(res, 400, false, "Referrer ID is required");
+    }
+
+    let referrerUser: any = null;
+    if (referrerId.match(/^[0-9a-fA-F]{24}$/)) {
+      referrerUser = await User.findById(referrerId).lean();
+    } else if (!isNaN(Number(referrerId))) {
+      referrerUser = await User.findOne({ userId: Number(referrerId) }).lean();
+    }
+
+    if (!referrerUser) {
+      return sendResponse(res, 404, false, "Referrer user not found");
+    }
+
+    const referrals = await Referral.find({ referrer: referrerUser._id })
+      .populate('referee', 'userId name email phoneNumber meethiId role image createdAt isBlocked')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const refereesList = referrals.map(r => ({
+      referralId: r._id,
+      referee: r.referee,
+      referralCode: r.referralCode,
+      referrerReward: r.referrerReward,
+      refereeReward: r.refereeReward,
+      status: r.status,
+      joinedAt: r.createdAt || r.claimedAt,
+    }));
+
+    const totalEarned = referrals.reduce((sum, r) => sum + (r.referrerReward || 0), 0);
+
+    return sendResponse(res, 200, true, "Joined referees fetched successfully", {
+      referrer: {
+        _id: referrerUser._id,
+        userId: referrerUser.userId,
+        name: referrerUser.name,
+        meethiId: referrerUser.meethiId,
+        referralCode: referrerUser.referralCode,
+      },
+      totalJoined: refereesList.length,
+      totalEarned,
+      referees: refereesList,
+    });
+  } catch (error: any) {
+    await Logger("getReferrerReferees", error);
+    return sendResponse(res, 500, false, error.message || "Failed to fetch referee list");
   }
 };
 
