@@ -47,8 +47,11 @@ export interface UserInterface extends Document {
   level?: number;
   employeeCode?: string;
   parentId?: Types.ObjectId;
-  referredBy?: string;
+  referredBy?: any;
   referralCode?: string;
+  profileCompleted?: boolean;
+  welcomeRewardClaimed?: boolean;
+  referralClaimed?: boolean;
   referralLink?: string;
   referrerId?: string;
   referrerRole?: string;

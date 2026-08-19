@@ -32,7 +32,14 @@ import { createReport } from "../controllers/reportsController";
 const router = express.Router();
 
 import { getActiveDefaultBios } from '../controllers/defaultBioController';
+import { completeProfile, getReferralDetails, claimReferralCode } from '../controllers/referralController';
+
 router.get('/default-bios', verifyToken, getActiveDefaultBios);
+
+// Onboarding & Referral routes
+router.post("/complete-profile", verifyToken, completeProfile);
+router.get("/referral/details", verifyToken, getReferralDetails);
+router.post("/referral/claim", verifyToken, claimReferralCode);
 
 // set user name for Authorized User
 router.post("/set-username", verifyToken, setUserName)

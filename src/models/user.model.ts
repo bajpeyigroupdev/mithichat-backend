@@ -123,7 +123,10 @@ const userSchema = new Schema<UserInterface>(
       default: 'NOT_SUBMITTED', index: true,
     },
     faceVerifiedAt: { type: Date },
-    kycVerifiedAt: { type: Date }
+    kycVerifiedAt: { type: Date },
+    profileCompleted: { type: Boolean, default: false, index: true },
+    welcomeRewardClaimed: { type: Boolean, default: false },
+    referralClaimed: { type: Boolean, default: false },
   },
   {
     timestamps: true,

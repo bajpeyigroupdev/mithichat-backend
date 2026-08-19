@@ -215,7 +215,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
       case "host": {
         const host = await User.findOne({ userId })
-          .select("userId name email phoneNumber gender role bio image audio coins diamonds isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level faceVerificationStatus kycVerificationStatus")
+          .select("userId name email phoneNumber gender role bio image audio coins diamonds isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level faceVerificationStatus kycVerificationStatus profileCompleted welcomeRewardClaimed referralClaimed referralCode")
           .lean();
         if (host && host.level === undefined) host.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user: host });
@@ -223,7 +223,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
       case "user": {
         const user = await User.findOne({ userId })
-          .select("userId name email gender phoneNumber role bio image coins diamonds isBlocked emailVerified phoneVerified language isUserName userName isActive level faceVerificationStatus kycVerificationStatus")
+          .select("userId name email gender phoneNumber role bio image coins diamonds isBlocked emailVerified phoneVerified language isUserName userName isActive level faceVerificationStatus kycVerificationStatus profileCompleted welcomeRewardClaimed referralClaimed referralCode")
           .lean();
         if (user && user.level === undefined) user.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user });
