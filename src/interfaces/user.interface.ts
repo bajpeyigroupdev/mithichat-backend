@@ -29,7 +29,10 @@ export interface UserInterface extends Document {
     createdDeviceId?: string;
     currentDeviceId?: string;
     loggedInDeviceIds: string[];
+    ipAddress?: string;
   };
+  ipAddress?: string;
+  lastIp?: string;
   googleId?: string;
   language?: string[];
   country?: { name?: string; code?: string; flag?: string };

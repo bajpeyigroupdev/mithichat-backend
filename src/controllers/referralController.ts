@@ -464,28 +464,39 @@ export const getUserDeviceDetails = async (req: AuthRequest, res: Response) => {
     }
 
     const deviceId = (targetUser as any).device?.createdDeviceId || (targetUser as any).device?.currentDeviceId || null;
+    const ipAddress = (targetUser as any).ipAddress || (targetUser as any).lastIp || (targetUser as any).device?.ipAddress || null;
     let registeredAccounts: any[] = [];
     let customLimit: any = null;
 
-    if (deviceId) {
+    if (deviceId || ipAddress) {
+      const matchConditions: any[] = [];
+      if (deviceId) matchConditions.push({ "device.createdDeviceId": deviceId });
+      if (ipAddress) matchConditions.push({ ipAddress });
+
       registeredAccounts = await User.find({
-        "device.createdDeviceId": deviceId,
+        $or: matchConditions,
         isDeleted: false,
       })
-        .select('userId name phoneNumber role image isBlocked createdAt meethiId device')
+        .select('userId name phoneNumber role image isBlocked createdAt meethiId device ipAddress lastIp')
         .sort({ createdAt: -1 })
         .lean();
 
-      customLimit = await DeviceLimit.findOne({ deviceId }).lean();
+      customLimit = await DeviceLimit.findOne({
+        $or: [
+          ...(deviceId ? [{ deviceId }] : []),
+          ...(ipAddress ? [{ ipAddress }] : [])
+        ]
+      }).lean();
     } else {
       registeredAccounts = [targetUser];
     }
 
     const settings = await getCachedSettings();
 
-    return sendResponse(res, 200, true, "User device details fetched successfully", {
+    return sendResponse(res, 200, true, "User device & IP details fetched successfully", {
       user: targetUser,
       deviceId,
+      ipAddress,
       totalAccountsCount: registeredAccounts.length,
       maxAllowedAccounts: customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1),
       customLimit,

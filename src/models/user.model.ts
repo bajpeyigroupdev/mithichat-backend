@@ -8,6 +8,7 @@ const DeviceSchema = new Schema(
     createdDeviceId: { type: String, required: true },
     currentDeviceId: { type: String, default: "" },
     loggedInDeviceIds: { type: [String], default: [] },
+    ipAddress: { type: String, default: "" },
   },
   { _id: false }
 );
@@ -18,6 +19,8 @@ const userSchema = new Schema<UserInterface>(
     name: { type: String, trim: true },
     email: { type: String, trim: true, lowercase: true },
     phoneNumber: { type: String, trim: true },
+    ipAddress: { type: String, default: "" },
+    lastIp: { type: String, default: "" },
     gender: {
       type: String,
       enum: Object.values(Gender),
