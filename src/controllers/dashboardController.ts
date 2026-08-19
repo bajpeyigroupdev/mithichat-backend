@@ -4,12 +4,16 @@ import Host from '../models/host.model';
 import { CoinsTransaction } from '../models/spentCoinModel';
 import { RechargeHistory } from '../models/RechargeHistory';
 import { Report } from '../models/report.model';
+import { Referral } from '../models/referral.model';
+import { DeviceLimit } from '../models/deviceLimit.model';
+import { getCachedSettings } from './settingsController';
 import sendResponse from '../utils/reponse';
 import AppError from '../utils/errorHandler';
 import { Logger } from '../utils/logger';
 import dayjs from 'dayjs';
 import { CallStatus, TransactionType } from '../constants/user';
 import { PANEL_ACCOUNT_ROLES } from '../utils/accountScope';
+
 
 
 // Helper to get host filter based on role
@@ -188,6 +192,17 @@ export const getDashboardStats = async (
         const coinsSpentToday = callAggregation[0]?.totalCoins || 0;
         const hostCoinsToday = callAggregation[0]?.totalHostEarnings || 0;
         const coinPrice = 0.10;
+        // Referral & Device Limit Stats
+        const settings = await getCachedSettings();
+        const [totalReferralsCount, aggregateReward, totalDeviceOverrides] = await Promise.all([
+            Referral.countDocuments().catch(() => 0),
+            Referral.aggregate([
+                { $group: { _id: null, totalDiamonds: { $sum: '$referrerReward' } } }
+            ]).catch(() => []),
+            DeviceLimit.countDocuments().catch(() => 0),
+        ]);
+
+        const totalDiamondsGranted = (aggregateReward && aggregateReward[0]?.totalDiamonds) || 0;
         const revenueToday = coinsSpentToday * coinPrice;
         const hostEarningsToday = hostCoinsToday * coinPrice;
 
@@ -202,6 +217,14 @@ export const getDashboardStats = async (
             activeHosts: approvedHostsCount,
             activeCalls,
             reportsPending,
+            referrals: {
+                totalReferrals: totalReferralsCount,
+                totalDiamondsGranted,
+            },
+            devices: {
+                totalOverrides: totalDeviceOverrides,
+                defaultMaxAccounts: settings?.defaultMaxAccountsPerDevice || 1,
+            },
             requests: {
                 pending: pendingRequests,
                 approved: approvedRequests,
