@@ -16,20 +16,33 @@ import { PANEL_ACCOUNT_ROLES } from '../utils/accountScope';
 const getHostFilter = async (req: Request): Promise<any> => {
     const { role, userId } = (req as any).user || {};
 
-    if (role === 'superAdmin') return {};
-
-    if (role === 'admin') {
-        const adminUser = await User.findById(userId);
-        if (!adminUser?.meethiId) return { hostId: null }; // No ID, no data
-
-        // Find all hosts with this meethiId
-        const myHosts = await User.find({ meethiId: adminUser.meethiId, role: 'host' }).select('_id');
-        const hostIds = myHosts.map(h => h._id);
-
-        return { hostId: { $in: hostIds } };
+    if (!role || ['superAdmin', 'owner', 'operator', 'customerSupport'].includes(role)) {
+        return {};
     }
 
-    return { hostId: null }; // Default block
+    if (['admin', 'agency'].includes(role)) {
+        const adminUser = await User.findById(userId);
+        if (adminUser?.meethiId) {
+            const myHosts = await User.find({ meethiId: adminUser.meethiId, role: 'host' }).select('_id');
+            const hostIds = myHosts.map(h => h._id);
+            if (hostIds.length > 0) {
+                return { hostId: { $in: hostIds } };
+            }
+        }
+        return {};
+    }
+
+    return {};
+};
+
+// Helper to build default 7-day date series map
+const build7DayMap = (daysCount: number) => {
+    const map: { [date: string]: number } = {};
+    for (let i = daysCount - 1; i >= 0; i--) {
+        const dateStr = dayjs().subtract(i, 'day').format('YYYY-MM-DD');
+        map[dateStr] = 0;
+    }
+    return map;
 };
 
 // Get dashboard statistics
@@ -46,9 +59,9 @@ export const getDashboardStats = async (
 
         // Request Statistics (EMS)
         const [pendingRequests, approvedRequests, rejectedRequests] = await Promise.all([
-            RequestModel.countDocuments({ status: 'pending' }),
-            RequestModel.countDocuments({ status: 'approved' }),
-            RequestModel.countDocuments({ status: 'rejected' }),
+            RequestModel.countDocuments({ status: 'pending' }).catch(() => 0),
+            RequestModel.countDocuments({ status: 'approved' }).catch(() => 0),
+            RequestModel.countDocuments({ status: 'rejected' }).catch(() => 0),
         ]);
 
         // Role Counts (MongoDB Users)
@@ -57,7 +70,8 @@ export const getDashboardStats = async (
             totalAdmins,
             totalAgencies,
             totalOperators,
-            totalHosts,
+            totalHostsCount,
+            approvedHostsCount,
             totalSellers,
             totalCustomerSupport
         ] = await Promise.all([
@@ -66,6 +80,7 @@ export const getDashboardStats = async (
             User.countDocuments({ role: 'agency', isDeleted: false }),
             User.countDocuments({ role: 'operator', isDeleted: false }),
             User.countDocuments({ role: 'host', isDeleted: false }),
+            User.countDocuments({ role: 'host', isDeleted: false, isApproved: true }),
             User.countDocuments({ role: 'coinSeller', isDeleted: false }),
             User.countDocuments({ role: 'customerSupport', isDeleted: false }),
         ]);
@@ -93,6 +108,16 @@ export const getDashboardStats = async (
         const totalUsers = await User.countDocuments({ isDeleted: false, role: { $nin: PANEL_ACCOUNT_ROLES } });
         const activeUsers = activeUsersCount;
 
+        // Pending Reports Count
+        const reportsPending = await Report.countDocuments({ status: 'pending' }).catch(() => 0);
+
+        // Active Calls Count
+        const activeCalls = await CoinsTransaction.countDocuments({
+            ...hostFilter,
+            status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTED, CallStatus.CONNECTING] },
+            type: TransactionType.VOICE_CALL,
+        }).catch(() => 0);
+
         // Base match for transactions + host filter
         const txMatch = { ...hostFilter };
 
@@ -117,18 +142,25 @@ export const getDashboardStats = async (
                     _id: null,
                     totalSeconds: { $sum: '$duration' },
                     totalCoins: { $sum: '$coinsSpent' },
+                    totalHostEarnings: { $sum: '$hostEarning' },
                 },
             },
         ]);
 
         const minutesToday = Math.round((callAggregation[0]?.totalSeconds || 0) / 60);
         const coinsSpentToday = callAggregation[0]?.totalCoins || 0;
+        const hostCoinsToday = callAggregation[0]?.totalHostEarnings || 0;
         const coinPrice = 0.10;
         const revenueToday = coinsSpentToday * coinPrice;
+        const hostEarningsToday = hostCoinsToday * coinPrice;
 
         const stats = {
             totalUsers,
             activeUsers,
+            totalHosts: totalHostsCount,
+            activeHosts: approvedHostsCount,
+            activeCalls,
+            reportsPending,
             requests: {
                 pending: pendingRequests,
                 approved: approvedRequests,
@@ -140,7 +172,7 @@ export const getDashboardStats = async (
                 admin: totalAdmins,
                 agency: totalAgencies,
                 operator: totalOperators,
-                host: totalHosts,
+                host: totalHostsCount,
                 seller: totalSellers,
                 customerSupport: totalCustomerSupport,
             },
@@ -159,6 +191,7 @@ export const getDashboardStats = async (
                 callsToday,
                 minutesToday,
                 coinsSpentToday,
+                hostEarningsToday: parseFloat(hostEarningsToday.toFixed(2)),
                 revenueToday: parseFloat(revenueToday.toFixed(2)),
             },
         };
@@ -179,30 +212,39 @@ export const getRevenueChart = async (
     try {
         const hostFilter = await getHostFilter(req);
         const { days = 7 } = req.query;
-        const daysCount = parseInt(days as string);
-        const startDate = dayjs().subtract(daysCount, 'day').startOf('day').toDate();
+        const daysCount = parseInt(days as string) || 7;
+        const startDate = dayjs().subtract(daysCount - 1, 'day').startOf('day').toDate();
 
-        let revenueData;
+        const dateMap = build7DayMap(daysCount);
 
-        // SuperAdmin sees global Recharge History
-        if ((req as any).user?.role === 'superAdmin') {
-            revenueData = await RechargeHistory.aggregate([
-                { $match: { date: { $gte: startDate } } },
-                { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } }, revenue: { $sum: '$coins' } } },
-                { $sort: { _id: 1 } },
-            ]);
-        } else {
-            // Admin sees Spending on their Hosts
+        let revenueData = await RechargeHistory.aggregate([
+            { $match: { date: { $gte: startDate } } },
+            { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } }, revenue: { $sum: '$amount' } } },
+            { $sort: { _id: 1 } },
+        ]);
+
+        if (!revenueData || revenueData.length === 0) {
             revenueData = await CoinsTransaction.aggregate([
                 { $match: { ...hostFilter, createdAt: { $gte: startDate }, type: TransactionType.VOICE_CALL } },
                 { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, revenue: { $sum: '$coinsSpent' } } },
                 { $sort: { _id: 1 } },
             ]);
+            revenueData.forEach(item => {
+                if (item._id && dateMap[item._id] !== undefined) {
+                    dateMap[item._id] = (item.revenue || 0) * 0.10;
+                }
+            });
+        } else {
+            revenueData.forEach(item => {
+                if (item._id && dateMap[item._id] !== undefined) {
+                    dateMap[item._id] = item.revenue || 0;
+                }
+            });
         }
 
-        const formattedData = revenueData.map((item) => ({
-            date: item._id,
-            revenue: item.revenue * 0.10, // Assuming 1 coin = $0.10
+        const formattedData = Object.keys(dateMap).map(date => ({
+            date,
+            revenue: parseFloat(Number(dateMap[date]).toFixed(2)),
         }));
 
         return sendResponse(res, 200, true, 'Revenue chart data fetched successfully', formattedData);
@@ -221,8 +263,10 @@ export const getEarningsChart = async (
     try {
         const hostFilter = await getHostFilter(req);
         const { days = 7 } = req.query;
-        const daysCount = parseInt(days as string);
-        const startDate = dayjs().subtract(daysCount, 'day').startOf('day').toDate();
+        const daysCount = parseInt(days as string) || 7;
+        const startDate = dayjs().subtract(daysCount - 1, 'day').startOf('day').toDate();
+
+        const dateMap = build7DayMap(daysCount);
 
         const earningsData = await CoinsTransaction.aggregate([
             {
@@ -242,9 +286,15 @@ export const getEarningsChart = async (
             { $sort: { _id: 1 } },
         ]);
 
-        const formattedData = earningsData.map((item) => ({
-            date: item._id,
-            earnings: item.earnings * 0.10, // Assuming 1 coin = $0.10
+        earningsData.forEach(item => {
+            if (item._id && dateMap[item._id] !== undefined) {
+                dateMap[item._id] = (item.earnings || 0) * 0.10;
+            }
+        });
+
+        const formattedData = Object.keys(dateMap).map(date => ({
+            date,
+            earnings: parseFloat(Number(dateMap[date]).toFixed(2)),
         }));
 
         return sendResponse(res, 200, true, 'Earnings chart data fetched successfully', formattedData);
@@ -263,8 +313,17 @@ export const getCallTrends = async (
     try {
         const hostFilter = await getHostFilter(req);
         const { days = 7 } = req.query;
-        const daysCount = parseInt(days as string);
-        const startDate = dayjs().subtract(daysCount, 'day').startOf('day').toDate();
+        const daysCount = parseInt(days as string) || 7;
+        const startDate = dayjs().subtract(daysCount - 1, 'day').startOf('day').toDate();
+
+        const callsMap: { [date: string]: number } = {};
+        const durationMap: { [date: string]: number } = {};
+
+        for (let i = daysCount - 1; i >= 0; i--) {
+            const d = dayjs().subtract(i, 'day').format('YYYY-MM-DD');
+            callsMap[d] = 0;
+            durationMap[d] = 0;
+        }
 
         const callTrends = await CoinsTransaction.aggregate([
             {
@@ -284,10 +343,17 @@ export const getCallTrends = async (
             { $sort: { _id: 1 } },
         ]);
 
-        const formattedData = callTrends.map((item) => ({
-            date: item._id,
-            calls: item.calls,
-            duration: Math.round(item.duration / 60), // Convert to minutes
+        callTrends.forEach(item => {
+            if (item._id && callsMap[item._id] !== undefined) {
+                callsMap[item._id] = item.calls || 0;
+                durationMap[item._id] = Math.round((item.duration || 0) / 60);
+            }
+        });
+
+        const formattedData = Object.keys(callsMap).map(date => ({
+            date,
+            calls: callsMap[date],
+            duration: durationMap[date],
         }));
 
         return sendResponse(res, 200, true, 'Call trends fetched successfully', formattedData);
@@ -321,11 +387,18 @@ export const getCoinDistribution = async (
             },
         ]);
 
-        const formattedData = distribution.map((item) => ({
-            type: item._id,
-            total: item.total,
-            count: item.count,
+        let formattedData = distribution.map((item) => ({
+            type: item._id || 'VOICE_CALL',
+            total: item.total || 0,
+            count: item.count || 0,
         }));
+
+        if (formattedData.length === 0) {
+            formattedData = [
+                { type: 'VOICE_CALL', total: 0, count: 0 },
+                { type: 'VIDEO_CALL', total: 0, count: 0 },
+            ];
+        }
 
         return sendResponse(res, 200, true, 'Coin distribution fetched successfully', formattedData);
     } catch (error) {
