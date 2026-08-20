@@ -157,23 +157,49 @@ export const downloadLatestRelease = async (_req: Request, res: Response) => {
       release = await AppRelease.findOne({ fileType: "apk" }).sort({ createdAt: -1 });
     }
 
-    if (release && fs.existsSync(release.filePath)) {
-      // Increment download counter
-      await AppRelease.updateOne({ _id: release._id }, { $inc: { downloadCount: 1 } });
+    if (release) {
+      // Direct URL link support (e.g. S3, Cloudinary, CDN)
+      if (release.fileUrl && (release.fileUrl.startsWith("http://") || release.fileUrl.startsWith("https://"))) {
+        await AppRelease.updateOne({ _id: release._id }, { $inc: { downloadCount: 1 } });
+        return res.redirect(release.fileUrl);
+      }
 
-      const downloadFileName = `MeethiChat-v${release.versionName}.${release.fileType}`;
-      res.setHeader("Content-Disposition", `attachment; filename="${downloadFileName}"`);
-      res.setHeader("Content-Type", release.fileType === "apk" ? "application/vnd.android.package-archive" : "application/octet-stream");
+      if (release.filePath && fs.existsSync(release.filePath)) {
+        await AppRelease.updateOne({ _id: release._id }, { $inc: { downloadCount: 1 } });
+        const downloadFileName = `MeethiChat-v${release.versionName}.${release.fileType}`;
+        res.setHeader("Content-Disposition", `attachment; filename="${downloadFileName}"`);
+        res.setHeader("Content-Type", release.fileType === "apk" ? "application/vnd.android.package-archive" : "application/octet-stream");
+        return res.sendFile(path.resolve(release.filePath));
+      }
 
-      return res.sendFile(path.resolve(release.filePath));
+      if (release.fileUrl && release.fileUrl.startsWith("/uploads/")) {
+        const localRelPath = path.resolve(process.cwd(), `.${release.fileUrl}`);
+        if (fs.existsSync(localRelPath)) {
+          await AppRelease.updateOne({ _id: release._id }, { $inc: { downloadCount: 1 } });
+          const downloadFileName = `MeethiChat-v${release.versionName}.${release.fileType}`;
+          res.setHeader("Content-Disposition", `attachment; filename="${downloadFileName}"`);
+          res.setHeader("Content-Type", release.fileType === "apk" ? "application/vnd.android.package-archive" : "application/octet-stream");
+          return res.sendFile(localRelPath);
+        }
+      }
     }
 
-    // Fallback: Check root project for fallback APK
+    // Fallback: Check root and uploads directory for fallback APK
     const candidatePaths = [
       path.resolve(process.cwd(), "uploads/releases/app-release.apk"),
       path.resolve(process.cwd(), "../MithiChat-v1.5-call-banner-fix.apk"),
       path.resolve(process.cwd(), "./MithiChat-v1.5-call-banner-fix.apk"),
     ];
+
+    // Dynamically search uploads/releases for any apk
+    const releasesDir = path.resolve(process.cwd(), "uploads/releases");
+    if (fs.existsSync(releasesDir)) {
+      const files = fs.readdirSync(releasesDir);
+      const apkFile = files.find(f => f.endsWith(".apk") || f.endsWith(".aab"));
+      if (apkFile) {
+        candidatePaths.unshift(path.join(releasesDir, apkFile));
+      }
+    }
 
     for (const fallbackPath of candidatePaths) {
       if (fs.existsSync(fallbackPath)) {
