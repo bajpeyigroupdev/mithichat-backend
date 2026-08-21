@@ -14,6 +14,7 @@ export interface ICoinsTransaction extends Document {
   duration: Number;
   status: CallStatus;        // 👈 new
   lastHeartbeat?: Date;
+  ringExpiresAt?: Date;
   channelName: string;       // 👈 new
   // Auto timestamp
 

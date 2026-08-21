@@ -20,6 +20,10 @@ export const validationResetPassword = [
     .withMessage("New Password is required")
     .isLength({ min: 6 })
     .withMessage("Password must be at least 6 characters long"),
+
+    body("firebaseIdToken")
+      .notEmpty()
+      .withMessage("Firebase phone verification is required"),
 ];
 
 export const validationUserCreate = [
@@ -34,6 +38,15 @@ export const validationUserCreate = [
     .withMessage("Password is required")
     .isLength({ min: 6 })
     .withMessage("Password must be at least 6 characters long"),
+
+    body("firebaseIdToken")
+      .notEmpty()
+      .withMessage("Firebase phone verification is required"),
+
+  body("age")
+    .optional()
+    .isInt({ min: 1, max: 120 })
+    .withMessage("Age must be a valid integer between 1 and 120"),
 ];
 
 export const validationUserLogin = [

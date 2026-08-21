@@ -1,7 +1,7 @@
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
 import redis from "../configs/redisConfig";
-import { sendMessage, markMessagesSeen, deleteSeenMessages } from "../services/chat.service";
+import { sendMessage, markMessagesSeen } from "../services/chat.service";
 import { CoinsTransaction } from "../models/spentCoinModel";
 import { AuthenticatedSocket, socketAuth } from "../middlewares/auth.socket";
 import { User } from "../models/user.model";
@@ -115,9 +115,8 @@ const chatSocket = (io: Server) => {
             io.to(conversationId).emit("messagesSeen", { conversationId, id: userIdStr });
         });
 
-        socket.on("exitChat", async ({ conversationId }: { conversationId: string }) => {
-            await deleteSeenMessages(conversationId, socket.user!.id);
-            io.to(conversationId).emit("messagesDeleted", { conversationId, id: userIdStr });
+        socket.on("exitChat", ({ conversationId }: { conversationId: string }) => {
+            socket.leave(conversationId);
         });
 
         // ------------------ Call Handlers ------------------

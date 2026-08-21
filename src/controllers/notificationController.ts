@@ -8,7 +8,8 @@ export const createNotification = async (
     userId: string,
     title: string,
     message: string,
-    type: 'system' | 'promo' | 'transaction' | 'call' = 'system'
+    type: 'system' | 'promo' | 'transaction' | 'call' = 'system',
+    data: Record<string, unknown> = {}
 ) => {
     try {
         await Notification.create({
@@ -16,6 +17,7 @@ export const createNotification = async (
             title,
             message,
             type,
+            data,
         });
     } catch (error) {
         console.error("Failed to create notification:", error);

@@ -1,14 +1,22 @@
 import admin from "firebase-admin";
 import path from "path";
+import fs from "fs";
 
 // ✅ initialize once
 if (!admin.apps.length) {
   try {
+    const credentialCandidates = [
+      path.resolve(process.cwd(), "src/configs/serviceAccountKey.json"),
+      path.resolve(process.cwd(), "configs/serviceAccountKey.json"),
+      path.resolve(__dirname, "../configs/serviceAccountKey.json"),
+    ];
+    const credentialPath = credentialCandidates.find(candidate => fs.existsSync(candidate));
+    if (!credentialPath) throw new Error('Firebase service account file not found');
     admin.initializeApp({
       credential: admin.credential.cert(
         // 🧠 Changed to serviceAccountKey.json (Server Key) instead of google-services.json (Android Key)
         // Also fixed path: __dirname (utils) -> .. (src) -> configs -> serviceAccountKey.json
-        path.resolve(__dirname, "../configs/serviceAccountKey.json")
+        credentialPath
       ),
     });
   } catch (error) {
@@ -42,11 +50,16 @@ export const sendPushNotification = async (
         title: payload.title,
         body: payload.body,
       },
-      // Keep notification block so it shows in system tray
-      notification: {
-        title: payload.title,
-        body: payload.body,
-      },
+      // Chat notifications are rendered locally by Notifee so messages from
+      // the same conversation can be grouped and expose Reply/Mark read.
+      // Other notification types can still use Firebase's system rendering.
+      ...(payload.data?.type === 'message' ? {} : {
+        notification: {
+          title: payload.title,
+          body: payload.body,
+        },
+      }),
+      android: { priority: "high" },
     };
 
     const response = await admin.messaging().sendEachForMulticast(message);
@@ -146,14 +159,10 @@ export const sendCallNotification = async (
   extraData?: Record<string, string>
 ) => {
   try {
-    if (!token) return;
+    if (!token) return { success: false, error: "missing-token" };
 
     const message = {
       token: token,
-      notification: {
-        title: "Incoming Call",
-        body: `${callerName} is calling you...`,
-      },
       data: {
         type: "call",
         callId: callId,
@@ -165,15 +174,7 @@ export const sendCallNotification = async (
       },
       android: {
         priority: "high" as const,
-        ttl: 0, // Immediate delivery
-        notification: {
-          channelId: "call_channel", // MUST match frontend channel
-          sound: "calltune", // valid for resources/raw/calltune.mpeg
-          priority: "high" as const,
-          visibility: "public" as const,
-          icon: "ic_launcher", // ensure this icon exists
-          defaultVibrateTimings: true,
-        }
+        ttl: 30000, // Deliver immediately, discard stale calls after 30 seconds.
       },
       apns: {
         headers: {
@@ -188,8 +189,9 @@ export const sendCallNotification = async (
       },
     };
 
-    await admin.messaging().send(message as any);
-    console.log(`Call notification sent to ${token}`);
+    const messageId = await admin.messaging().send(message as any);
+    console.log(`Call notification sent successfully: ${messageId}`);
+    return { success: true, messageId };
   } catch (error: any) {
     console.error("sendCallNotification error:", error);
     if (error.code === 'messaging/registration-token-not-registered' ||
@@ -200,5 +202,23 @@ export const sendCallNotification = async (
       const { User } = require("../models/user.model");
       await User.updateOne({ fcmToken: token }, { $set: { fcmToken: "" } });
     }
+    return { success: false, error: error.code || error.message || "push-send-failed" };
   }
 };
+
+export const sendMissedCallNotification = async (
+  token: string,
+  callerName: string,
+  callerImage: string,
+  targetUserId: string = ''
+) => sendPushNotification([token], {
+  title: 'Missed call',
+  body: `You missed a call from ${callerName}`,
+  data: {
+    type: 'missed_call',
+    action: 'open_activity',
+    callerName,
+    callerImage,
+    targetUserId,
+  },
+});

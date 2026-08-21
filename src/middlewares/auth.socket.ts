@@ -11,7 +11,7 @@ interface DecodedToken {
 
 export interface AuthenticatedSocket extends Socket {
     user?: {
-        role: "owner" | "superAdmin" | "admin" | "coinSeller" | "host" | "user";
+        role: "owner" | "operator" | "superAdmin" | "admin" | "agency" | "coinSeller" | "customerSupport" | "host" | "user";
         userId: number;
         id: Types.ObjectId;
         name: string;
@@ -25,7 +25,7 @@ export const socketAuth = async (
     next: (err?: ExtendedError) => void
 ) => {
     try {
-        // 1️⃣ Token extract from headers or query
+        // 1ï¸âƒ£ Token extract from headers or query
         const token =
             (socket.handshake.auth?.token as string) ||
             (socket.handshake.headers?.authorization?.split(" ")[1] as string) ||
@@ -35,7 +35,7 @@ export const socketAuth = async (
             return next(new Error("Unauthorized - No token provided"));
         }
 
-        // 2️⃣ Verify JWT
+        // 2ï¸âƒ£ Verify JWT
         const decoded = jwt.verify(
             token,
             config.JWT_ACCESS_SECRET as string
@@ -45,14 +45,14 @@ export const socketAuth = async (
             return next(new Error("Unauthorized - Invalid token payload"));
         }
 
-        // 3️⃣ Find user
+        // 3ï¸âƒ£ Find user
         const user = await User.findOne({ userId: decoded.userId, isDeleted: false });
 
         if (!user) {
             return next(new Error("Unauthorized - User not found"));
         }
 
-        // 4️⃣ Attach user to socket
+        // 4ï¸âƒ£ Attach user to socket
         socket.user = {
             role: user.role ?? "user",
             userId: user.userId,

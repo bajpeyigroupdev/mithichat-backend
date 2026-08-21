@@ -31,6 +31,7 @@ const userSchema = new Schema<UserInterface>(
     role: { type: String, enum: Object.values(UserRole), default: UserRole.USER },
     authType: { type: String, enum: Object.values(AuthType), default: AuthType.PHONE },
     coins: { type: Number, default: 0 },
+    diamonds: { type: Number, default: 0 },
     image: { type: String, default: "" },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     isDeleted: { type: Boolean, default: false },
@@ -40,6 +41,11 @@ const userSchema = new Schema<UserInterface>(
     device: { type: DeviceSchema, default: () => ({}) },
     googleId: { type: String, default: "" },
     language: { type: [String], default: [] },
+    country: {
+      name: { type: String, default: '' },
+      code: { type: String, default: '' },
+      flag: { type: String, default: '' },
+    },
     frameId: { type: String, default: "" },
     blockedUsers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     refreshToken: { type: String, select: false },
@@ -50,7 +56,12 @@ const userSchema = new Schema<UserInterface>(
     isActive: { type: Boolean, default: false },
     isBusy: { type: Boolean, default: false },
     meethiId: { type: String, default: "" },
-    level: { type: Number, default: 6 }
+    level: { type: Number, default: 1 },
+    employeeCode: { type: String, unique: true, sparse: true },
+    parentId: { type: Schema.Types.ObjectId, ref: "User" },
+    referredBy: { type: Schema.Types.ObjectId, ref: "User" },
+    documents: { type: [String], default: [] },
+    sourceForm: { type: String, default: "" }
   },
   {
     timestamps: true,

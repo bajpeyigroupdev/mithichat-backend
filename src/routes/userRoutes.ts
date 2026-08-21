@@ -19,12 +19,15 @@ import {
   unblockContact,
   getBlockedContacts,
   getCoinHistory,
+  exchangeCoinsToDiamonds,
+  requestDeletion,
 } from "../controllers/userController";
 
 import { verifyToken } from "../middlewares/authorize.middleware";
 // import { upload } from "../utils/multer";
 import { validationUpdateUserLimited } from "../validations/user.validator";
 import { requestValidator } from "../middlewares/validation.middleware";
+import { createReport } from "../controllers/reportsController";
 
 const router = express.Router();
 
@@ -32,6 +35,9 @@ const router = express.Router();
 router.post("/set-username", verifyToken, setUserName)
 
 router.post("/verify-phone", verifyToken, setVerifiedPhone)
+
+router.post("/exchange-coins", verifyToken, exchangeCoinsToDiamonds);
+router.post("/exchange", verifyToken, exchangeCoinsToDiamonds);
 
 // email verification for Authorized User 
 router.post("/verify-email", verifyToken, emailVerification);
@@ -58,6 +64,7 @@ router.get("/hosts", verifyToken, getAllHosts);
 router.get("/blocked-contacts", verifyToken, getBlockedContacts);
 router.post("/block-contact/:id", verifyToken, blockContact);
 router.post("/unblock-contact/:id", verifyToken, unblockContact);
+router.post("/report", verifyToken, createReport);
 
 // get user by id
 router.get("/:userId", verifyToken, getUserById);
@@ -70,6 +77,9 @@ router.patch("/:userId", validationUpdateUserLimited, requestValidator, verifyTo
 
 // delete user by id
 router.delete("/:userId", verifyToken, deleteUser);
+
+// request account deletion
+router.post("/request-deletion", verifyToken, requestDeletion);
 
 // block user by id (only superAdmin/admin)
 router.patch("/block/:userId", verifyToken, blockUser);

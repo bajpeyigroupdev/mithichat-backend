@@ -6,6 +6,7 @@ import {
     getAdminProfile,
     updateAdminProfile,
     addCoinsToUser,
+    addDiamondsToUser,
 } from '../controllers/adminAuthController';
 import {
     getDashboardStats,
@@ -29,9 +30,14 @@ router.post('/logout', verifyToken, adminLogout);
 router.get('/profile', verifyToken, getAdminProfile);
 router.patch('/profile', verifyToken, updateAdminProfile);
 router.post('/users/add-coins', verifyToken, addCoinsToUser);
+router.post('/users/add-diamonds', verifyToken, addDiamondsToUser);
 
-import { createAgencyAdmin, getAllAdmins, toggleBlockAdmin } from '../controllers/adminAuthController';
-// SuperAdmin Only: Manage Agency Admins
+import { createAgencyAdmin, getAllAdmins, toggleBlockAdmin, createEmployee, listEmployees, toggleBlockEmployee } from '../controllers/adminAuthController';
+// Role Hierarchy: Create/List/Block employees
+router.post('/employees/create', verifyToken, createEmployee);
+router.get('/employees/list', verifyToken, listEmployees);
+router.patch('/employees/block/:id', verifyToken, toggleBlockEmployee);
+// Legacy routes (kept for backward compat)
 router.post('/create-admin', verifyToken, createAgencyAdmin);
 router.get('/list-admins', verifyToken, getAllAdmins);
 router.patch('/block-admin/:id', verifyToken, toggleBlockAdmin);
@@ -109,7 +115,11 @@ import {
     addBlockedWord,
     deleteBlockedWord,
     getAuditLogs,
-    getSystemLogs
+    getSystemLogs,
+    getHelpTickets,
+    replyHelpTicket,
+    getDeletionRequests,
+    processDeletionRequest
 } from '../controllers/managementController';
 
 // Rooms Management
@@ -158,5 +168,24 @@ router.delete('/moderation/blocked-words/:id', verifyToken, deleteBlockedWord);
 // Security & Logs
 router.get('/security/audit-logs', verifyToken, getAuditLogs);
 router.get('/security/system-logs', verifyToken, getSystemLogs);
+
+// Help Desk Support
+router.get('/help', verifyToken, getHelpTickets);
+router.patch('/help/:id/reply', verifyToken, replyHelpTicket);
+
+// User Deletion Approval Management
+router.get('/deletion-requests', verifyToken, getDeletionRequests);
+router.post('/deletion-requests/:id/process', verifyToken, processDeletionRequest);
+
+// ============ Level Management Routes ============
+import { getLevels, createLevel, updateLevel, deleteLevel } from '../controllers/levelController';
+router.get('/levels', verifyToken, getLevels);
+router.post('/levels', verifyToken, createLevel);
+router.patch('/levels/:id', verifyToken, updateLevel);
+router.delete('/levels/:id', verifyToken, deleteLevel);
+
+// ============ Event/Offer Broadcast Route ============
+import { broadcastEvent } from '../controllers/managementController';
+router.post('/events/broadcast', verifyToken, broadcastEvent);
 
 export default router;

@@ -173,7 +173,12 @@ export const createReport = async (
 ): Promise<void> => {
     try {
         const { reportedUserId, reason, description, severity } = req.body;
-        const reporterId = (req as any).user._id;
+        const reporterId = (req as any).user?.id || (req as any).user?._id;
+
+        if (!reporterId || !reportedUserId || !reason) {
+            res.status(400).json({ success: false, message: 'Reported user and reason are required' });
+            return;
+        }
 
         // Generate unique report ID
         const reportCount = await Report.countDocuments();

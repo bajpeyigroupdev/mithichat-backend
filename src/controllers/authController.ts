@@ -10,17 +10,24 @@ import { generateRandomName, generateToken, generateUniqueId } from "../utils/ge
 import { OAuth2Client } from 'google-auth-library';
 import { Logger } from "../utils/logger";
 import { generateSecureHash, verifySecureHash } from "../utils/passwordHelper";
+import { verifyFirebasePhoneToken } from "../utils/firebasePhoneVerification";
+import { APP_ACCOUNT_ROLES } from "../utils/accountScope";
 
 export const resetPassword = async (req: Request, res: Response) => {
 
   try {
-    const { phoneNumber, newPassword } = req.body;
+    const { phoneNumber, newPassword, firebaseIdToken } = req.body;
 
-    if (!phoneNumber || !newPassword) {
-      return sendResponse(res, 400, false, "Phone number and new password are required");
+    if (!phoneNumber || !newPassword || !firebaseIdToken) {
+      return sendResponse(res, 400, false, "Phone number, new password and Firebase verification are required");
     }
 
-    const user = await User.findOne({ phoneNumber, isDeleted: false });
+    const firebaseVerification = await verifyFirebasePhoneToken(firebaseIdToken, phoneNumber);
+    if (!firebaseVerification.success) {
+      return sendResponse(res, 401, false, firebaseVerification.message);
+    }
+
+    const user = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
     if (!user) {
       return sendResponse(res, 404, false, "User not found");
     }
@@ -35,14 +42,8 @@ export const resetPassword = async (req: Request, res: Response) => {
 
     return sendResponse(res, 200, true, "Password reset successfully");
  } catch (error: any) {
-    console.log("========== GOOGLE AUTH ERROR ==========");
-    console.dir(error, { depth: null });
-
-    console.log("NAME:", error?.name);
-    console.log("MESSAGE:", error?.message);
-    console.log("CODE:", error?.code);
-    console.log("STACK:", error?.stack);
-
+    // BUG-08 FIX: Removed copy-paste "GOOGLE AUTH ERROR" label (this is resetPassword, not Google auth)
+    console.error("resetPassword error:", error?.message);
     return sendResponse(
       res,
       500,
@@ -50,6 +51,54 @@ export const resetPassword = async (req: Request, res: Response) => {
       error?.message || "Internal Server Error"
     );
 }
+};
+
+// ==================== FORGOT PASSWORD ====================
+export const forgotPassword = async (req: Request, res: Response) => {
+  try {
+    const rawPhone = req.body?.phoneNumber;
+
+    if (!rawPhone) {
+      return sendResponse(res, 400, false, "Phone number is required");
+    }
+
+    // Trim + normalize: remove all spaces
+    const phoneNumber = String(rawPhone).trim().replace(/\s+/g, "");
+
+    // Extract last 10 digits for flexible matching (+91 / no +91)
+    const digitsOnly = phoneNumber.replace(/\D/g, "");
+    const tenDigits = digitsOnly.length >= 10 ? digitsOnly.slice(-10) : digitsOnly;
+    const phoneRegex = new RegExp(`${tenDigits}$`);
+
+    console.log(`[forgotPassword] Looking up phone: "${phoneNumber}" (last 10: "${tenDigits}")`);
+
+    // Query: match phoneNumber by exact string or 10-digit regex
+    const user = await User.findOne({
+      $or: [
+        { phoneNumber },
+        { phoneNumber: { $regex: phoneRegex } },
+      ],
+      role: { $in: APP_ACCOUNT_ROLES },
+      $and: [
+        { $or: [{ isDeleted: false }, { isDeleted: { $exists: false } }] }
+      ]
+    });
+
+    console.log(`[forgotPassword] User found: ${user ? `userId=${user.userId}` : "NOT FOUND"}`);
+
+    if (!user) {
+      return sendResponse(res, 404, false, "No account found with this phone number. Please check and try again.");
+    }
+
+    if (user.isBlocked) {
+      return sendResponse(res, 403, false, "Your account is currently blocked. Please contact support.");
+    }
+
+    return sendResponse(res, 200, true, "Phone number is eligible for Firebase verification.");
+  } catch (error: any) {
+    await Logger("forgotPassword", error);
+    return sendResponse(res, 500, false, error.message || "Internal Server Error");
+  }
 };
 
 export const checkPhoneAvailability = async (req: Request, res: Response, next: NextFunction) => {
@@ -60,7 +109,7 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
     if (!phone) return sendResponse(res, 400, false, "Phone number is required.");
     if (!deviceId) return sendResponse(res, 400, false, "Device ID is required.");
 
-    // 🔹 Step 1: Check if this device already has an account
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ Step 1: Check if this device already has an account
     // const userByDevice = await User.findOne({
     //   $or: [
     //     { "device.createdDeviceId": deviceId },
@@ -74,8 +123,8 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
     //   return sendResponse(res, 403, false, "This device already has an account.");
     // }
 
-    // 🔹 Step 2: Check if phone number already exists
-    const existingUser = await User.findOne({ phoneNumber: phone, isDeleted: false }).lean();
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ Step 2: Check if phone number already exists
+    const existingUser = await User.findOne({ phoneNumber: phone, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false }).lean();
 
     if (existingUser) {
       if (existingUser.isBlocked) {
@@ -85,7 +134,7 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
       return sendResponse(res, 400, false, "Phone number already registered.");
     }
 
-    // 🔹 Step 3: New device + new phone → send OTP for registration
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ Step 3: New device + new phone ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ send OTP for registration
     return sendResponse(res, 200, true, "New device & phone. Send OTP for registration.");
   } catch (err) {
     await Logger("checkPhoneAvailability", err);
@@ -97,10 +146,20 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
 // ==================== REGISTER ====================
 export const userRegister = async (req: AuthRequest, res: Response) => {
   try {
-    const { phoneNumber, password, gender, deviceId, userFrom, language } = req.body;
+    const { phoneNumber, password, gender, deviceId, userFrom, language, country, age, firebaseIdToken } = req.body;
 
-    if (!phoneNumber || !password || !gender) {
-      return sendResponse(res, 400, false, "Phone number, password and gender are required");
+    if (!phoneNumber || !password || !gender || !firebaseIdToken) {
+      return sendResponse(res, 400, false, "Phone number, password, gender and Firebase verification are required");
+    }
+
+    const firebaseVerification = await verifyFirebasePhoneToken(firebaseIdToken, phoneNumber);
+    if (!firebaseVerification.success) {
+      return sendResponse(res, 401, false, firebaseVerification.message);
+    }
+
+    const duplicatePhoneUser = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
+    if (duplicatePhoneUser) {
+      return sendResponse(res, 400, false, "Phone number already registered");
     }
 
     if (userFrom === "app") {
@@ -108,17 +167,17 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 400, false, "deviceId is required for app users");
       }
 
-      // ✅ Device already registered with another user → block
-      const existingUser = await User.findOne({
-        "device.createdDeviceId": deviceId,
-        isDeleted: false,
-      });
-      if (existingUser) {
-        return sendResponse(res, 409, false, "This device already created an account");
-      }
+      // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Temporarily disabled per user request: one device can create multiple accounts
+      // const existingUser = await User.findOne({
+      //   "device.createdDeviceId": deviceId,
+      //   isDeleted: false,
+      // });
+      // if (existingUser) {
+      //   return sendResponse(res, 409, false, "This device already created an account");
+      // }
     }
 
-    // ✅ Unique ID and defaults
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ Unique ID and defaults
     const userId = await generateUniqueId();
     const name = await generateRandomName();
     const hashedPassword = await generateSecureHash(password);
@@ -145,7 +204,9 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       name,
       image,
       language,
+      country,
       authType: "phone",
+      age: Number(age) || 18,
       device: {
         createdDeviceId: deviceId || "",   // fixed at signup
         currentDeviceId: deviceId || "",
@@ -155,14 +216,14 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
 
     await newUser.save();
 
-    // ✅ Generate tokens
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ Generate tokens
     const accessToken = await generateToken(newUser.userId.toString(), "access");
     const refreshToken = await generateToken(newUser.userId.toString(), "refresh");
 
     newUser.refreshToken = refreshToken;
     await newUser.save();
 
-    // ✅ Response with tokens
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ Response with tokens
     return sendResponse(res, 201, true, "User created successfully", {
       accessToken,
       refreshToken,
@@ -182,7 +243,7 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
     const { phoneNumber, userId, password, deviceId, userFrom } = req.body;
 
     const query = phoneNumber ? { phoneNumber } : { userId };
-    const user = await User.findOne({ ...query, isDeleted: false }).select("+password");
+    const user = await User.findOne({ ...query, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false }).select("+password");
 
     if (!user) {
       return sendResponse(res, 400, false, "Account not found, please sign up.");
@@ -192,7 +253,7 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
       return sendResponse(res, 403, false, "You are blocked due to some reason.");
     }
 
-    // ✅ For app users: handle device logic
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ For app users: handle device logic
     if (userFrom === "app") {
       if (!deviceId) {
         return sendResponse(res, 400, false, "deviceId is required for app users.");
@@ -204,8 +265,8 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
         loggedInDeviceIds: [],
       };
 
-      // ❌ createdDeviceId never changes after signup
-      // ✅ Update current + loggedIn devices
+      // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ createdDeviceId never changes after signup
+      // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ Update current + loggedIn devices
       user.device.currentDeviceId = deviceId;
       if (!user.device.loggedInDeviceIds.includes(deviceId)) {
         user.device.loggedInDeviceIds.push(deviceId);
@@ -214,7 +275,7 @@ export const userLogin = async (req: Request, res: Response, next: NextFunction)
       await user.save();
     }
 
-    // ✅ Password match
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ Password match
     const isMatch = await verifySecureHash(password, user.password as string);
     if (!isMatch) {
       return sendResponse(res, 400, false, "Invalid credentials.");
@@ -265,7 +326,7 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
         return sendResponse(res, 400, false, "This device is not currently logged in.");
       }
 
-      // ✅ Remove only that device
+      // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ Remove only that device
       user.device.loggedInDeviceIds = user.device.loggedInDeviceIds.filter(
         (id) => id !== deviceId
       );
@@ -277,7 +338,7 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
       await user.save();
     }
 
-    // ✅ Invalidate refresh token globally
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ Invalidate refresh token globally
     user.refreshToken = "";
     await user.save();
 
@@ -293,7 +354,7 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
   const client = new OAuth2Client(config.GOOGLE_CLIENT_ID);
 
   try {
-    const { googleIdToken, deviceId, userFrom, gender, language } = req.body;
+    const { googleIdToken, deviceId, userFrom, gender, language, country, age } = req.body;
 
     if (!googleIdToken) return sendResponse(res, 400, false, "Google token required");
 
@@ -311,11 +372,11 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       googleId: payload.sub,
     };
 
-    // 1️⃣ Check if user exists
-    let user = await User.findOne({ googleId: googleUserInfo.googleId, isDeleted: false });
+    // 1ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£ Check if user exists
+    let user = await User.findOne({ googleId: googleUserInfo.googleId, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
 
     if (user) {
-      // Existing user → login
+      // Existing user ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ login
       if (userFrom === "app") {
         user.device = user.device || { createdDeviceId: "", currentDeviceId: "", loggedInDeviceIds: [] };
         if (!user.device.createdDeviceId) user.device.createdDeviceId = deviceId;
@@ -338,15 +399,35 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       });
     }
 
-    // 2️⃣ New user → require gender & language
-    if (!gender || !language) {
-      return sendResponse(res, 400, false, "Gender and language required for signup");
+    // 2ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¯ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¸ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£ New user ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ require gender & language
+    if (!gender || !Array.isArray(language) || language.length < 2 || !country?.name) {
+      return sendResponse(res, 428, false, "Complete gender, country and 2 languages to create your account");
     }
 
     // Check duplicate email
-    const existingEmailUser = await User.findOne({ email: googleUserInfo.email });
+    const existingEmailUser = await User.findOne({ email: googleUserInfo.email, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
     if (existingEmailUser) {
-      return sendResponse(res, 409, false, "User with this email already exists");
+      if (!payload.email_verified) {
+        return sendResponse(res, 403, false, "Google email must be verified");
+      }
+      existingEmailUser.googleId = googleUserInfo.googleId;
+      existingEmailUser.device = existingEmailUser.device || { createdDeviceId: "", currentDeviceId: "", loggedInDeviceIds: [] };
+      if (!existingEmailUser.device.createdDeviceId) existingEmailUser.device.createdDeviceId = deviceId || '';
+      if (deviceId && !existingEmailUser.device.loggedInDeviceIds.includes(deviceId)) {
+        existingEmailUser.device.loggedInDeviceIds.push(deviceId);
+      }
+      existingEmailUser.device.currentDeviceId = deviceId || existingEmailUser.device.currentDeviceId;
+      const accessToken = await generateToken(existingEmailUser.userId.toString(), "access");
+      const refreshToken = await generateToken(existingEmailUser.userId.toString(), "refresh");
+      existingEmailUser.refreshToken = refreshToken;
+      await existingEmailUser.save();
+      return sendResponse(res, 200, true, "Google account linked successfully", {
+        accessToken,
+        refreshToken,
+        role: existingEmailUser.role,
+        gender: existingEmailUser.gender,
+        isAccount: true,
+      });
     }
     let image;
     switch (gender) {
@@ -373,6 +454,8 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       authType: "google",
       emailVerified: payload.email_verified || false,
       language,
+      country,
+      age: Number(age) || 18,
       device: userFrom === "app" ? { createdDeviceId: deviceId, currentDeviceId: deviceId, loggedInDeviceIds: [deviceId] } : {},
     });
 
@@ -451,7 +534,7 @@ export const linkAccount = async (req: AuthRequest, res: Response) => {
       if (!payload) return sendResponse(res, 400, false, "Invalid Google credentials");
 
       // Check if another user is using this google account
-      const existingGoogle = await User.findOne({ googleId: payload.sub, isDeleted: false });
+      const existingGoogle = await User.findOne({ googleId: payload.sub, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
       if (existingGoogle && existingGoogle.userId !== user.userId) {
         return sendResponse(res, 409, false, "This Google account is already linked to another user");
       }
@@ -472,7 +555,7 @@ export const linkAccount = async (req: AuthRequest, res: Response) => {
       }
 
       // Check if another user is using this phone number
-      const existingPhone = await User.findOne({ phoneNumber, isDeleted: false });
+      const existingPhone = await User.findOne({ phoneNumber, role: { $in: APP_ACCOUNT_ROLES }, isDeleted: false });
       if (existingPhone && existingPhone.userId !== user.userId) {
         return sendResponse(res, 409, false, "This Phone number is already linked to another user");
       }

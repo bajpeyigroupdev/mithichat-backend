@@ -6,17 +6,25 @@ import { AuthRequest } from "../middlewares/authorize.middleware";
 import { Query } from "mongoose";
 import { BlockedUser } from "../models/blockedUser.model";
 import { RechargeHistory } from "../models/RechargeHistory"; // Import Model
+import { Agency } from "../models/agency.model";
+import { CoinsTransaction } from "../models/spentCoinModel";
+import HostLevel from "../models/hostLevel.model";
+import mongoose from "mongoose";
 
 // import { deleteFromS3, uploadToS3 } from "../utils/uploadS3";
 import { generateOtp, sendCustomEmail, sendOtpForEmailVerification } from "../utils/otp";
 import OtpModel from "../models/otp.model";
 import { Logger } from "../utils/logger";
+import { verifyFirebasePhoneToken } from "../utils/firebasePhoneVerification";
 import { UserInterface } from "../interfaces/user.interface";
 import { getAllHostsService, invalidateHostCache } from "../services/user.service";
-import { getIO } from "../sockets";
+import { getIO, getUserRoom } from "../sockets";
 import { Gender } from "../constants/user";
 import HelpRequest from "../models/help.model";
+import DeletionRequest from "../models/deletionRequest.model";
 import { deleteImageFromCloudinary } from "../utils/cloudinary";
+import { getAccessibleUserFilter } from "./formsController";
+import { generateSecureHash } from "../utils/passwordHelper";
 
 // set user name by authorized users
 export const setUserName = async (req: AuthRequest, res: Response) => {
@@ -36,7 +44,8 @@ export const setUserName = async (req: AuthRequest, res: Response) => {
       await User.findOneAndUpdate({ userId: targetId }, { userName, isUserName: true }, { new: true });
       return sendResponse(res, 200, true, "UserName updated successfully");
     }
-    return sendResponse(res, 400, true, "Not Available");
+    // BUG-04 FIX: success must be false when username is taken
+    return sendResponse(res, 400, false, "Not Available");
 
   } catch (error: any) {
     await Logger("Set Name Error", error)
@@ -102,23 +111,32 @@ export const otpVerification = async (req: AuthRequest, res: Response) => {
 export const setVerifiedPhone = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
-    const { token } = req.body;
+    const { phoneNumber, firebaseIdToken } = req.body;
 
-    if (!userId || !token) {
-      return sendResponse(res, 400, false, "UserId and Firebase token are required");
+    if (!userId || !phoneNumber || !firebaseIdToken) {
+      return sendResponse(res, 400, false, "Phone number and Firebase verification are required");
     }
 
-    // ✅ Verify the Firebase token sent from frontend after OTP verification
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    console.log("decoded : ", decodedToken)
-    if (!decodedToken?.phone_number) {
-      return sendResponse(res, 400, false, "Invalid Firebase token");
+    const verification = await verifyFirebasePhoneToken(firebaseIdToken, phoneNumber);
+    if (!verification.success) {
+      return sendResponse(res, 401, false, verification.message);
     }
 
-    // ✅ Update only the verification status
+    const digits = String(phoneNumber).replace(/\D/g, "");
+    const lastTenDigits = digits.slice(-10);
+    const existingUser = await User.findOne({
+      userId: { $ne: Number(userId) },
+      isDeleted: false,
+      phoneNumber: { $regex: new RegExp(`${lastTenDigits}$`) },
+    }).lean();
+
+    if (existingUser) {
+      return sendResponse(res, 409, false, "This phone number is already linked to another account");
+    }
+
     const updatedUser = await User.findOneAndUpdate(
-      { userId: Number(userId) },
-      { phoneVerified: true },
+      { userId: Number(userId), isDeleted: false },
+      { phoneNumber: String(phoneNumber).trim(), phoneVerified: true },
       { new: true }
     );
 
@@ -128,12 +146,10 @@ export const setVerifiedPhone = async (req: AuthRequest, res: Response) => {
 
     return sendResponse(res, 200, true, "Phone verified successfully", updatedUser);
   } catch (error: any) {
-    console.log("error : ", error)
     await Logger("Set Verified Phone Error", error);
-    return sendResponse(res, 500, false, "Please try again later");
+    return sendResponse(res, 500, false, error.message || "Please try again later");
   }
 };
-
 // get users with role based access
 // work as expected
 export const getUsers = async (req: AuthRequest, res: Response) => {
@@ -149,7 +165,8 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
     let totalUsers = 0;
 
     switch (role) {
-      case "superAdmin":
+      case "owner":
+      case "operator":
         totalUsers = await User.countDocuments({
           isDeleted: false,
           role: { $ne: "superAdmin" }, // Exclude superAdmins
@@ -158,38 +175,30 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
           isDeleted: false,
           role: { $ne: "superAdmin" },
         })
-          .select("userId name coins isBlocked createdAt role email phoneNumber image") // Added isBlocked field
+          .select("userId name coins isBlocked createdAt role email phoneNumber image")
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limitNumber);
         break;
 
+      case "superAdmin":
       case "admin":
-        totalUsers = await User.countDocuments({
-          isDeleted: false,
-          isBlocked: false, // Exclude blocked users
-        });
-        usersQuery = User.find({
-          isDeleted: false,
-          isBlocked: false,
-        })
-          .select("userId name coins diamonds createdAt role email phoneNumber image")
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limitNumber);
-        break;
+      case "agency":
+      case "coinSeller":
+      case "customerSupport":
+        return sendResponse(res, 403, false, "Only owner and operator can view the user list");
 
 
       case "host":
         const host = await User.findOne({ userId })
-          .select("userId name email phoneNumber gender role bio image audio coins isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level")
+          .select("userId name email phoneNumber gender role bio image audio coins diamonds isBlocked emailVerified phoneVerified language frameId isUserName userName isActive level")
           .lean();
         if (host && host.level === undefined) host.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user: host });
 
       case "user":
         const user = await User.findOne({ userId })
-          .select("userId name email gender phoneNumber role bio image coins isBlocked emailVerified phoneVerified language isUserName userName isActive level")
+          .select("userId name email gender phoneNumber role bio image coins diamonds isBlocked emailVerified phoneVerified language isUserName userName isActive level")
           .lean();
         if (user && user.level === undefined) user.level = 6;
         return sendResponse(res, 200, true, "User fetched successfully", { user });
@@ -225,8 +234,8 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 
     let query: any = { isDeleted: false };
 
-    // If superAdmin, allow searching by name, email, or phoneNumber
-    if (role === "superAdmin") {
+    // Only owner/operator may search arbitrary users.
+    if (["owner", "operator"].includes(role || "")) {
       if (userId) query.userId = userId;
       if (name) query.name = name;
       if (email) query.email = email;
@@ -241,12 +250,16 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 
     // Role-based filtering
     switch (role) {
-      case "superAdmin":
-        break; // SuperAdmin can see all users
-
-      case "admin":
-        query.isBlocked = false; // Admin cannot fetch blocked users
+      case "owner":
+      case "operator":
         break;
+
+      case "superAdmin":
+      case "admin":
+      case "agency":
+      case "coinSeller":
+      case "customerSupport":
+        return sendResponse(res, 403, false, "Only owner and operator can view user details");
 
 
       case "user":
@@ -273,7 +286,7 @@ export const getUserById = async (req: AuthRequest, res: Response) => {
 // update user by userID with role based update 
 export const updateUser = async (req: AuthRequest, res: Response) => {
   try {
-    const { name, phoneNumber, bio, role, coins, language, gender, phoneVerified, image } = req.body;
+    const { name, phoneNumber, bio, role, coins, diamonds, language, gender, phoneVerified, image, country, age, password, level } = req.body;
     const { role: requesterRole, userId: requesterId } = req.user || {};
 
     let targetUserId: string;
@@ -285,10 +298,10 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 400, false, "Requester ID missing");
       }
       targetUserId = String(requesterId);
-    } else if (requesterRole === "superAdmin") {
-      // superAdmin and host can update any user by providing userId in params
+    } else if (["owner", "operator", "superAdmin", "admin"].includes(requesterRole || '')) {
+      // superAdmin, owner, operator, and admin can update any user by providing userId in params
       if (!req.params.userId) {
-        return sendResponse(res, 400, false, "User ID is required in URL for superAdmins");
+        return sendResponse(res, 400, false, "User ID is required in URL");
       }
       targetUserId = req.params.userId;
     } else {
@@ -296,7 +309,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 403, false, "Access Denied: Invalid requester role");
     }
 
-    // 🔍 Find the user to update
+    // Ã°Å¸â€Â Find the user to update
     const userToUpdate: UserInterface | null = await User.findOne({ userId: targetUserId, isDeleted: false });
     if (!userToUpdate) {
       return sendResponse(res, 404, false, "User not found");
@@ -309,8 +322,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     // Initialize with the specific interface for type safety
     const updatedFields: Partial<UserInterface> = {};
 
-    // 📞 Check for duplicate phoneNumber
-    // This check should always be performed if phoneNumber is being updated, regardless of role.
+    // Ã°Å¸â€œÅ¾ Check for duplicate phoneNumber
     if (phoneNumber && phoneNumber !== userToUpdate.phoneNumber) {
       const existingPhone = await User.findOne({ phoneNumber, isDeleted: false });
       if (existingPhone && existingPhone.userId !== userToUpdate.userId) { // Ensure it's not the same user
@@ -319,14 +331,17 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       updatedFields.phoneNumber = phoneNumber;
     }
 
-
-    // 🛡 Role-based permissions for what fields can be updated
+    // Ã°Å¸â€ºÂ¡ Role-based permissions for what fields can be updated
     switch (requesterRole) {
+      case "owner":
+      case "operator":
       case "superAdmin":
-        // SuperAdmin can update all fields for any user
+      case "admin":
+        // Admin staff can update all fields for any user
         if (name !== undefined) updatedFields.name = name;
         if (bio !== undefined) updatedFields.bio = bio;
         if (coins !== undefined) updatedFields.coins = coins;
+        if (diamonds !== undefined) updatedFields.diamonds = diamonds;
         if (role !== undefined) {
           updatedFields.role = role;
           if (role === 'host') {
@@ -336,6 +351,13 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
         if (gender !== undefined) updatedFields.gender = gender;
         if (language && Array.isArray(language)) updatedFields.language = language;
         if (phoneVerified !== undefined) updatedFields.phoneVerified = phoneVerified;
+        if (country !== undefined) updatedFields.country = country;
+        if (age !== undefined) updatedFields.age = age;
+        if (level !== undefined) updatedFields.level = level;
+        if (image !== undefined) updatedFields.image = image;
+        if (password !== undefined && password.trim() !== "") {
+          updatedFields.password = await generateSecureHash(password);
+        }
         break;
 
       case "host":
@@ -372,7 +394,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 403, false, "Access Denied: Unknown role");
     }
 
-    // 💾 Apply and save updates
+    // Ã°Å¸â€™Â¾ Apply and save updates
     if (Object.keys(updatedFields).length > 0) {
       Object.assign(userToUpdate, updatedFields);
       await userToUpdate.save();
@@ -387,15 +409,15 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// user delete by userID with only role superAdmin
+// user delete by userID with administrative roles
 export const deleteUser = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.params;
     const { role, userId: requesterId } = req.user || {};
 
-    // Allow if superAdmin OR if user is deleting themselves
-    if (role !== "superAdmin" && String(requesterId) !== String(userId)) {
-      return sendResponse(res, 403, false, "Access Denied - You can only delete your own account");
+    // Allow if admin staff OR if user is deleting themselves
+    if (!["owner", "operator", "superAdmin", "admin"].includes(role || "") && String(requesterId) !== String(userId)) {
+      return sendResponse(res, 403, false, "Access Denied - Insufficient permissions to delete user");
     }
 
     const userToDelete = await User.findOne({ userId });
@@ -403,11 +425,135 @@ export const deleteUser = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, "User not found");
     }
 
-    // ✅ Soft delete by setting isDeleted = true
-    userToDelete.isDeleted = true;
-    await userToDelete.save();
+    // Ensure Firebase is initialized
+    if (!admin.apps.length) {
+      try {
+        await import("../utils/pushNotification");
+      } catch (e) {
+        console.warn("Firebase was not initialized at user delete, doing lazy initialize:", e);
+        admin.initializeApp();
+      }
+    }
 
-    return sendResponse(res, 200, true, "User soft deleted successfully");
+    // 1. Delete Firebase Auth user if present
+    if (userToDelete.phoneNumber) {
+      try {
+        const firebaseUser = await admin.auth().getUserByPhoneNumber(userToDelete.phoneNumber);
+        if (firebaseUser) {
+          await admin.auth().deleteUser(firebaseUser.uid);
+          console.log(`Successfully deleted Firebase user for phone: ${userToDelete.phoneNumber}`);
+        }
+      } catch (err: any) {
+        if (err.code !== 'auth/user-not-found') {
+          console.error(`Firebase delete phone error: ${err.message}`);
+        }
+      }
+    }
+
+    if (userToDelete.email) {
+      try {
+        const firebaseUser = await admin.auth().getUserByEmail(userToDelete.email);
+        if (firebaseUser) {
+          await admin.auth().deleteUser(firebaseUser.uid);
+          console.log(`Successfully deleted Firebase user for email: ${userToDelete.email}`);
+        }
+      } catch (err: any) {
+        if (err.code !== 'auth/user-not-found') {
+          console.error(`Firebase delete email error: ${err.message}`);
+        }
+      }
+    }
+
+    // 2. Remove associated Kyc documents
+    try {
+      const { Kyc } = await import("../models/kyc.model");
+      await Kyc.deleteMany({ userId: userToDelete.userId });
+    } catch (e: any) {
+      console.warn("Could not clear KYC data:", e.message);
+    }
+
+    // 3. Remove associated Host records
+    try {
+      const HostModel = (await import("../models/host.model")).default;
+      await HostModel.deleteMany({ hostId: userToDelete.userId });
+    } catch (e: any) {
+      console.warn("Could not clear Host data:", e.message);
+    }
+
+    // 4. Remove associated TempHost records
+    try {
+      const TempHostModel = (await import("../models/temp.host.model")).default;
+      await TempHostModel.deleteMany({ userId: userToDelete.userId });
+    } catch (e: any) {
+      console.warn("Could not clear TempHost data:", e.message);
+    }
+
+    // 5. Remove associated BlockedUser records
+    try {
+      await BlockedUser.deleteMany({
+        $or: [
+          { userId: String(userToDelete.userId) },
+          { blockedBy: String(userToDelete.userId) }
+        ]
+      });
+    } catch (e: any) {
+      console.warn("Could not clear BlockedUser records:", e.message);
+    }
+
+    // 6. Remove associated Agency records
+    try {
+      const { Agency } = await import("../models/agency.model");
+      await Agency.deleteMany({ ownerId: userToDelete._id });
+    } catch (e: any) {
+      console.warn("Could not clear Agency records:", e.message);
+    }
+
+    // 7. Remove associated DeletionRequest records
+    try {
+      await DeletionRequest.deleteMany({ userId: userToDelete._id });
+    } catch (e: any) {
+      console.warn("Could not clear DeletionRequest records:", e.message);
+    }
+
+    // 8. Remove associated HelpRequest records
+    try {
+      await HelpRequest.deleteMany({ userId: userToDelete.userId });
+    } catch (e: any) {
+      console.warn("Could not clear HelpRequest records:", e.message);
+    }
+
+    // 9. Pull deleted user _id from all other users' blocked list
+    try {
+      await User.updateMany(
+        { blockedUsers: userToDelete._id },
+        { $pull: { blockedUsers: userToDelete._id } }
+      );
+    } catch (e: any) {
+      console.warn("Could not update other users' blocked lists:", e.message);
+    }
+
+    // 10. Clear Redis online state
+    try {
+      const redis = (await import("../configs/redisConfig")).default;
+      await redis.srem("online_users", String(userToDelete.userId));
+    } catch (e: any) {
+      console.warn("Could not srem from online_users:", e.message);
+    }
+
+    // 11. Broadcast force logout on Socket.IO
+    try {
+      const io = getIO();
+      const userRoom = getUserRoom(String(userToDelete.userId));
+      io.to(userRoom).emit("force_logout", { reason: "Account permanently deleted" });
+      io.in(userRoom).disconnectSockets(true);
+    } catch (e: any) {
+      console.warn("Socket force logout warning:", e.message);
+    }
+
+    // 12. Hard delete User document itself from MongoDB
+    await User.deleteOne({ _id: userToDelete._id });
+
+    return sendResponse(res, 200, true, "User and all associated records permanently deleted successfully");
   } catch (error: any) {
     await Logger("deleteUser", error)
     return sendResponse(res, 500, false, error.message);
@@ -555,6 +701,103 @@ export const getAllHosts = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// ============ Admin: Get all host-role users ============
+export const getAdminHostUsers = async (req: AuthRequest, res: Response) => {
+  try {
+    const { role } = req.user || {};
+    if (!["owner", "operator", "superAdmin", "admin"].includes(role || "")) {
+      return sendResponse(res, 403, false, "Unauthorized access");
+    }
+
+    const page = parseInt((req.query.page as string) || "1", 10);
+    const limit = parseInt((req.query.limit as string) || "20", 10);
+    const search = (req.query.search as string) || "";
+    const skip = (page - 1) * limit;
+
+    const filter: Record<string, any> = { role: "host", isDeleted: false };
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { phoneNumber: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const [hosts, total, maxLevelDoc] = await Promise.all([
+      User.find(filter)
+        .select("userId name image phoneNumber email gender level coins diamonds isBlocked isOnline isActive country language agencyId createdAt")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean() as any,
+      User.countDocuments(filter),
+      HostLevel.findOne().sort({ level: -1 }).lean(),
+    ]);
+
+    const maxLevel: number = (maxLevelDoc as any)?.level || 8;
+
+    // Enrich each host with agency name + call/gift coin stats
+    const enriched = await Promise.all(hosts.map(async (host: any) => {
+      // Agency name lookup
+      let agencyName: string | null = null;
+      if (host.agencyId) {
+        const agency = await Agency.findById(host.agencyId).select("name").lean() as any;
+        agencyName = agency?.name || null;
+      }
+
+      // Aggregate: coins received by host (coinsSpent by users on this host)
+      const hostObjectId = host._id;
+      const coinStats = await CoinsTransaction.aggregate([
+        { $match: { hostId: hostObjectId } },
+        {
+          $group: {
+            _id: "$type",
+            totalCoinsReceived: { $sum: "$coinsSpent" },
+            totalDiamondEarned: { $sum: "$hostEarning" },
+          },
+        },
+      ]);
+
+      let callCoinsReceived = 0;
+      let giftCoinsReceived = 0;
+      let callDiamondsEarned = 0;
+      let giftDiamondsEarned = 0;
+
+      for (const stat of coinStats) {
+        if (stat._id === "voice_call") {
+          callCoinsReceived = stat.totalCoinsReceived || 0;
+          callDiamondsEarned = stat.totalDiamondEarned || 0;
+        } else if (stat._id === "gift" || stat._id === "gift_sent") {
+          giftCoinsReceived += stat.totalCoinsReceived || 0;
+          giftDiamondsEarned += stat.totalDiamondEarned || 0;
+        }
+      }
+
+      return {
+        ...host,
+        agencyName,
+        callCoinsReceived,
+        giftCoinsReceived,
+        totalCoinsReceived: callCoinsReceived + giftCoinsReceived,
+        callDiamondsEarned,
+        giftDiamondsEarned,
+        totalDiamondsEarned: callDiamondsEarned + giftDiamondsEarned,
+      };
+    }));
+
+    return sendResponse(res, 200, true, "Host users fetched successfully", {
+      total,
+      page,
+      limit,
+      maxLevel,
+      data: enriched,
+    });
+  } catch (error: any) {
+    await Logger("getAdminHostUsers", error);
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
 // save fcm token
 export const saveFcmToken = async (req: AuthRequest, res: Response) => {
   try {
@@ -586,10 +829,15 @@ export const saveFcmToken = async (req: AuthRequest, res: Response) => {
 // get user recharge history
 export const getRechargeHistory = async (req: AuthRequest, res: Response) => {
   try {
-    const { userId } = req.user || {};
-    const { page = 1, limit = 10 } = req.query;
+    const { userId, role } = req.user || {};
+    const { page = 1, limit = 10, targetUserId } = req.query;
 
-    if (!userId) {
+    let finalUserId = userId;
+    if (["owner", "operator", "superAdmin", "admin"].includes(role || "") && targetUserId) {
+      finalUserId = Number(targetUserId);
+    }
+
+    if (!finalUserId) {
       return sendResponse(res, 400, false, "User ID is required");
     }
 
@@ -597,9 +845,9 @@ export const getRechargeHistory = async (req: AuthRequest, res: Response) => {
     const limitNumber = parseInt(limit as string, 10);
     const skip = (pageNumber - 1) * limitNumber;
 
-    const totalRecords = await RechargeHistory.countDocuments({ userId: Number(userId) });
+    const totalRecords = await RechargeHistory.countDocuments({ userId: Number(finalUserId) });
 
-    const history = await RechargeHistory.find({ userId: Number(userId) })
+    const history = await RechargeHistory.find({ userId: Number(finalUserId) })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limitNumber);
@@ -619,14 +867,19 @@ export const getRechargeHistory = async (req: AuthRequest, res: Response) => {
 // get coin transaction history (calls, gifts, messages)
 export const getCoinHistory = async (req: AuthRequest, res: Response) => {
   try {
-    const { userId } = req.user || {};
-    const { page = 1, limit = 50 } = req.query;
+    const { userId, role } = req.user || {};
+    const { page = 1, limit = 50, targetUserId } = req.query;
 
-    if (!userId) {
+    let finalUserId = userId;
+    if (["owner", "operator", "superAdmin", "admin"].includes(role || "") && targetUserId) {
+      finalUserId = Number(targetUserId);
+    }
+
+    if (!finalUserId) {
       return sendResponse(res, 400, false, "User ID is required");
     }
 
-    const user = await User.findOne({ userId, isDeleted: false });
+    const user = await User.findOne({ userId: finalUserId, isDeleted: false });
     if (!user) return sendResponse(res, 404, false, "User not found");
 
     const { CoinsTransaction } = await import("../models/spentCoinModel");
@@ -643,14 +896,22 @@ export const getCoinHistory = async (req: AuthRequest, res: Response) => {
       .limit(limitNumber)
       .lean();
 
-    // Map to a cleaner format for the app
-    const history = transactions.map(tx => ({
-      type: tx.type,
-      coinsSpent: tx.coinsSpent || 0,
-      coins: tx.coinsSpent || 0,
-      createdAt: tx.createdAt,
-      meta: tx.meta,
-    }));
+    const userIdStr = (user as any)._id.toString();
+    const history = transactions.map(tx => {
+      const isHost = tx.hostId && tx.hostId.toString() === userIdStr;
+      const amount = isHost ? (tx.hostEarning || 0) : (tx.coinsSpent || 0);
+      const isEarning = isHost || (tx.type as string) === "recharge";
+      const displayType = isHost && (tx.type as string) === "voice_call" ? "call_earning" : tx.type;
+
+      return {
+        type: displayType,
+        coinsSpent: amount,
+        coins: amount,
+        isEarning,
+        createdAt: tx.createdAt,
+        meta: tx.meta,
+      };
+    });
 
     return sendResponse(res, 200, true, "Coin history fetched", { history });
   } catch (error: any) {
@@ -811,7 +1072,7 @@ export const toggleActiveStatus = async (req: AuthRequest, res: Response) => {
 
 
 
-// 🛑 Add user to personal blocklist
+// Ã°Å¸â€ºâ€˜ Add user to personal blocklist
 export const blockContact = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
@@ -840,7 +1101,7 @@ export const blockContact = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// 🟢 Remove user from personal blocklist
+// Ã°Å¸Å¸Â¢ Remove user from personal blocklist
 export const unblockContact = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
@@ -865,7 +1126,7 @@ export const unblockContact = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// 📋 Get blocked contacts list
+// Ã°Å¸â€œâ€¹ Get blocked contacts list
 export const getBlockedContacts = async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.user || {};
@@ -886,3 +1147,156 @@ export const getBlockedContacts = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 500, false, error.message);
   }
 };
+
+// Ã°Å¸â€â€ž Exchange Coins to Diamonds
+const EXCHANGE_PACKAGES: Record<number, number> = {
+  1000: 900,
+  2000: 1800,
+  5000: 4500,
+  10000: 9000,
+  20000: 18000,
+  50000: 45000,
+  100000: 90000,
+  200000: 180000,
+  500000: 450000
+};
+
+export const exchangeCoinsToDiamonds = async (req: AuthRequest, res: Response) => {
+  try {
+
+    console.log("===== EXCHANGE REQUEST =====");
+    console.log("req.user =", req.user);
+    console.log("req.body =", req.body);
+
+
+    const { userId } = req.user || {};
+    const { coins } = req.body;
+
+    if (!userId) return sendResponse(res, 401, false, "Unauthorized");
+
+    const coinsNum = Number(coins);
+    if (isNaN(coinsNum) || coinsNum <= 0) {
+      return sendResponse(res, 400, false, "Invalid coins amount");
+    }
+
+    const diamondYield = EXCHANGE_PACKAGES[coinsNum];
+    if (!diamondYield) {
+      return sendResponse(res, 400, false, "Invalid exchange package");
+    }
+
+    const updatedUser = await User.findOneAndUpdate(
+      { userId, isDeleted: false, coins: { $gte: coinsNum } },
+      {
+        $inc: {
+          coins: -coinsNum,
+          diamonds: diamondYield
+        }
+      },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      const exists = await User.exists({ userId, isDeleted: false });
+      return sendResponse(res, exists ? 400 : 404, false, exists ? "Insufficient coins balance" : "User not found");
+    }
+
+    return sendResponse(res, 200, true, "Exchange successful", {
+      coins: updatedUser.coins,
+      diamonds: updatedUser.diamonds
+    });
+  } catch (error: any) {
+    console.error("Ã¢ÂÅ’ Exchange coins backend error:", error);
+    return sendResponse(res, 500, false, error.message);
+  }
+};
+
+export const getMyHelpRequests = async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+    if (!userId) {
+      return sendResponse(res, 401, false, "Unauthorized");
+    }
+
+    const helpRequests = await HelpRequest.find({ userId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return sendResponse(res, 200, true, "Help requests fetched successfully", helpRequests);
+  } catch (error: any) {
+    console.error("Ã¢ÂÅ’ Get my help requests backend error:", error);
+    return sendResponse(res, 500, false, error.message || "Failed to fetch help requests");
+  }
+};
+
+// User replies to or reopens a ticket
+export const replyToHelpTicket = async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+    if (!userId) return sendResponse(res, 401, false, "Unauthorized");
+
+    const { id } = req.params;
+    const { message, reopen } = req.body;
+
+    if (!message?.trim()) {
+      return sendResponse(res, 400, false, "Message is required");
+    }
+
+    const ticket = await HelpRequest.findOne({ _id: id, userId });
+    if (!ticket) return sendResponse(res, 404, false, "Ticket not found");
+
+    // Push user reply to thread
+    ticket.replies.push({ sender: 'user', message: message.trim(), createdAt: new Date() } as any);
+
+    // If reopening
+    if (reopen && ticket.status === 'resolved') {
+      ticket.status = 'reopened';
+      ticket.reopenCount = (ticket.reopenCount || 0) + 1;
+    } else if (ticket.status === 'resolved' || ticket.status === 'rejected') {
+      // Any reply on resolved = reopen
+      ticket.status = 'reopened';
+      ticket.reopenCount = (ticket.reopenCount || 0) + 1;
+    }
+
+    await ticket.save();
+    return sendResponse(res, 200, true, "Reply submitted successfully", ticket);
+  } catch (error: any) {
+    console.error("Ã¢ÂÅ’ Reply to ticket error:", error);
+    return sendResponse(res, 500, false, error.message || "Failed to submit reply");
+  }
+};
+
+export const requestDeletion = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id: requesterObjectId } = req.user || {};
+    const { reason } = req.body;
+
+    if (!requesterObjectId) {
+      return sendResponse(res, 401, false, "Unauthorized");
+    }
+
+    if (!reason || !reason.trim()) {
+      return sendResponse(res, 400, false, "Reason for deletion is required");
+    }
+
+    const userDoc = await User.findById(requesterObjectId);
+    if (!userDoc) {
+      return sendResponse(res, 404, false, "User not found");
+    }
+
+    const request = await DeletionRequest.create({
+      userId: requesterObjectId,
+      meethiId: String(userDoc.userId),
+      name: userDoc.name || "User",
+      role: userDoc.role || "user",
+      phoneNumber: userDoc.phoneNumber || "",
+      reason,
+      status: "pending"
+    });
+
+    return sendResponse(res, 201, true, "Deletion request submitted successfully", request);
+  } catch (error: any) {
+    await Logger("requestDeletion", error);
+    return sendResponse(res, 500, false, error.message || "Failed to request deletion");
+  }
+};
+

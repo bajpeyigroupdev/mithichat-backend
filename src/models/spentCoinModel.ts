@@ -23,6 +23,7 @@ const coinsTransactionSchema = new Schema<ICoinsTransaction>(
       default: CallStatus.INITIATED,
     },
     lastHeartbeat: { type: Date },
+    ringExpiresAt: { type: Date },
     channelName: { type: String },
     meta: {
       type: Object,
@@ -42,6 +43,7 @@ coinsTransactionSchema.index({ userId: 1, status: 1 }); // User transaction hist
 coinsTransactionSchema.index({ hostId: 1, status: 1 }); // Host earnings history
 coinsTransactionSchema.index({ callStart: -1 }); // Rankings/leaderboards
 coinsTransactionSchema.index({ userId: 1, type: 1, callStart: -1 }); // Filtered history queries
+coinsTransactionSchema.index({ status: 1, ringExpiresAt: 1 }); // Unanswered-call expiry
 
 export const CoinsTransaction = mongoose.model<ICoinsTransaction>(
   'CoinsTransaction',

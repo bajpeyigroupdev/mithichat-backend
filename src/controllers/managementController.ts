@@ -14,6 +14,8 @@ import { getIO } from '../sockets';
 import sendResponse from '../utils/reponse';
 import AppError from '../utils/errorHandler';
 import dayjs from 'dayjs';
+import HelpRequest from '../models/help.model';
+import DeletionRequest from '../models/deletionRequest.model';
 
 // Helper to log administrative actions
 const logAudit = async (req: Request, action: string, target: string, details: string) => {
@@ -158,6 +160,52 @@ export const kickUserFromRoom = async (req: Request, res: Response, next: NextFu
     }
 };
 
+export const broadcastEvent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { title, body } = req.body;
+        if (!title || !body) {
+            return sendResponse(res, 400, false, 'Title and body are required for event broadcast');
+        }
+
+        const users = await User.find({ isDeleted: false, fcmToken: { $ne: null } }).select('fcmToken _id');
+        const tokens = users.map(u => u.fcmToken).filter(Boolean) as string[];
+
+        // 1. Save generic notifications in DB for all these users
+        // Note: For 100k+ users this should be done via a background job, but keeping it simple for now
+        const notifications = users.map(user => ({
+            userId: user._id,
+            title,
+            message: body,
+            type: 'event',
+            data: { action: 'open_activity' },
+        }));
+        
+        if (notifications.length > 0) {
+            const { default: Notification } = await import('../models/notification.model');
+            await Notification.insertMany(notifications, { ordered: false }).catch(() => {});
+        }
+
+        // 2. Send FCM Multicast
+        if (tokens.length > 0) {
+            const { sendPushNotification } = await import('../utils/pushNotification');
+            // send in chunks of 500 (firebase limit)
+            for (let i = 0; i < tokens.length; i += 500) {
+                const chunk = tokens.slice(i, i + 500);
+                await sendPushNotification(chunk, {
+                    title,
+                    body,
+                    data: { type: 'event', action: 'open_activity' }
+                });
+            }
+        }
+
+        await logAudit(req as any, 'BROADCAST_EVENT', 'ALL', `Broadcasted event: ${title}`);
+        return sendResponse(res, 200, true, 'Event broadcasted successfully');
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error broadcasting event', 500));
+    }
+};
+
 export const muteUserInRoom = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
@@ -236,14 +284,19 @@ export const deleteBanner = async (req: Request, res: Response, next: NextFuncti
 export const updateBannerPriority = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
-        const { priority, isActive } = req.body;
+        const { title, imageUrl, linkUrl, priority, startDate, endDate, isActive } = req.body;
 
         const banner = await Banner.findById(id);
         if (!banner) {
             return sendResponse(res, 404, false, 'Banner not found');
         }
 
+        if (title !== undefined) banner.title = title;
+        if (imageUrl !== undefined) banner.imageUrl = imageUrl;
+        if (linkUrl !== undefined) banner.linkUrl = linkUrl;
         if (priority !== undefined) banner.priority = parseInt(priority);
+        if (startDate !== undefined) banner.startDate = startDate ? new Date(startDate) : undefined;
+        if (endDate !== undefined) banner.endDate = endDate ? new Date(endDate) : undefined;
         if (isActive !== undefined) banner.isActive = isActive;
 
         await banner.save();
@@ -469,7 +522,20 @@ export const getVipSubscribers = async (req: Request, res: Response, next: NextF
 
 export const getAllAgencies = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const agencies = await Agency.find()
+        const adminUser = (req as any).user;
+        const adminRole = adminUser?.role;
+        const adminMongoId = adminUser?.id;
+
+        const query: any = {};
+        // Data isolation: admin/agency only see their own sub-agencies
+        if (adminRole === 'admin' || adminRole === 'agency') {
+            // Find agencies whose owner was referred by this admin
+            const mySubUsers = await User.find({ referredBy: adminMongoId, isDeleted: false }).select('_id');
+            const mySubIds = mySubUsers.map(u => u._id);
+            query.ownerId = { $in: mySubIds };
+        }
+
+        const agencies = await Agency.find(query)
             .populate('ownerId', 'name email userId image')
             .sort({ createdAt: -1 });
 
@@ -496,8 +562,8 @@ export const createAgency = async (req: Request, res: Response, next: NextFuncti
             commissionRate: commissionRate ? parseFloat(commissionRate) : 10
         });
 
-        // Set the owner role as host/admin if required
-        await User.findByIdAndUpdate(ownerId, { role: 'admin' });
+        // Set the owner role as an agency-level admin so it stays separate from standard admins.
+        await User.findByIdAndUpdate(ownerId, { role: 'agency' });
 
         await logAudit(req, 'CREATE_AGENCY', agency.code, `Agency Name: ${name}`);
         return sendResponse(res, 201, true, 'Agency profile created successfully', agency);
@@ -634,5 +700,117 @@ export const getSystemLogs = async (req: Request, res: Response, next: NextFunct
         return sendResponse(res, 200, true, 'System logs fetched successfully', mockLogs);
     } catch (error: any) {
         next(new AppError(error.message || 'Error fetching system logs', 500));
+    }
+};
+
+export const getHelpTickets = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { search = '', status = '' } = req.query;
+        const adminUser = (req as any).user;
+        const adminRole = adminUser?.role;
+        const adminMongoId = adminUser?.id;
+
+        const query: any = {};
+        if (status) {
+            query.status = status;
+        }
+        if (search) {
+            query.$or = [
+                { reason: { $regex: search, $options: 'i' } },
+                { message: { $regex: search, $options: 'i' } },
+                { ticketNumber: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Data isolation: admins only see tickets from their sub-users
+        if (adminRole === 'admin' || adminRole === 'agency') {
+            const mySubUsers = await User.find({ referredBy: adminMongoId, isDeleted: false }).select('userId');
+            const mySubUserIds = mySubUsers.map(u => u.userId);
+            query.userId = { $in: mySubUserIds };
+        }
+
+        const tickets = await HelpRequest.find(query)
+            .populate('userId', 'name email userId image role meethiId employeeCode')
+            .sort({ createdAt: -1 });
+        return sendResponse(res, 200, true, 'Help tickets fetched successfully', tickets);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error fetching help tickets', 500));
+    }
+};
+
+export const replyHelpTicket = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const { reply, status } = req.body;
+        if (!reply) {
+            return sendResponse(res, 400, false, 'Reply text is required');
+        }
+
+        const ticket = await HelpRequest.findById(id);
+        if (!ticket) {
+            return sendResponse(res, 404, false, 'Help ticket not found');
+        }
+
+        // Push admin reply to thread
+        ticket.replies.push({ sender: 'admin', message: reply, createdAt: new Date() } as any);
+        ticket.adminReply = reply;
+        ticket.status = status || 'resolved';
+        await ticket.save();
+
+        await logAudit(req, 'REPLY_HELP_TICKET', String(ticket._id), `Reply: ${reply}`);
+        return sendResponse(res, 200, true, 'Help ticket replied successfully', ticket);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error replying to help ticket', 500));
+    }
+};
+
+export const getDeletionRequests = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const requests = await DeletionRequest.find().sort({ createdAt: -1 });
+        return sendResponse(res, 200, true, 'Deletion requests fetched successfully', requests);
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error fetching deletion requests', 500));
+    }
+};
+
+export const processDeletionRequest = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const { action } = req.body; // 'approve' | 'reject'
+        if (!['approve', 'reject'].includes(action)) {
+            return sendResponse(res, 400, false, 'Action must be approve or reject');
+        }
+
+        const delReq = await DeletionRequest.findById(id);
+        if (!delReq) {
+            return sendResponse(res, 404, false, 'Deletion request not found');
+        }
+
+        if (action === 'approve') {
+            delReq.status = 'approved';
+            await delReq.save();
+
+            // Find user and soft-delete them
+            const user = await User.findById(delReq.userId);
+            if (user) {
+                const suffix = `_deleted_${Date.now()}`;
+                if (user.phoneNumber) user.phoneNumber = user.phoneNumber + suffix;
+                if (user.email) user.email = user.email + suffix;
+                if (user.userName) user.userName = user.userName + suffix;
+                user.isDeleted = true;
+                await user.save();
+            }
+
+            await logAudit(req, 'APPROVE_DELETION', String(delReq.userId), `Approved deletion request ID: ${id}`);
+            return sendResponse(res, 200, true, 'User deletion approved and soft deleted successfully');
+        } else {
+            delReq.status = 'rejected';
+            await delReq.save();
+
+            await logAudit(req, 'REJECT_DELETION', String(delReq.userId), `Rejected deletion request ID: ${id}`);
+            return sendResponse(res, 200, true, 'User deletion request rejected successfully');
+        }
+    } catch (error: any) {
+        next(new AppError(error.message || 'Error processing deletion request', 500));
     }
 };

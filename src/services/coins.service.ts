@@ -25,9 +25,8 @@ async function updateBalance(
       break;
 
     case 'deduct':
-      targetField = 'coins';
-      // Safety Check: user must have enough coins
-      filter['coins'] = { $gte: amount };
+      targetField = 'diamonds';
+      filter['diamonds'] = { $gte: amount };
       operatorValue = -amount;
       break;
 
@@ -51,8 +50,8 @@ async function updateBalance(
     // If it failed during deduct, it might be due to insufficient funds (filter constraint)
     if (operation === 'deduct') {
       const userExists = await User.findById(userId).session(session || null);
-      if (userExists && (userExists.coins || 0) < amount) {
-        throw new Error(`Insufficient balance. Available: ${userExists.coins}, Required: ${amount}`);
+      if (userExists && (userExists.diamonds || 0) < amount) {
+        throw new Error(`Insufficient balance. Available: ${userExists.diamonds || 0}, Required: ${amount}`);
       }
     }
     throw new Error(`User with ID ${userId} not found or update failed.`);
