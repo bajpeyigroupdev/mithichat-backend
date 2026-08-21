@@ -212,7 +212,8 @@ export const downloadLatestRelease = async (_req: Request, res: Response) => {
       }
     }
 
-    return sendResponse(res, 404, false, "No APK build file found on server.");
+    // Final fallback: redirect to website static release build
+    return res.redirect("https://mithichat.live/app-release.apk");
   } catch (error: any) {
     console.error("[AppRelease] downloadLatestRelease error:", error);
     return sendResponse(res, 500, false, "Download failed due to server error.");
