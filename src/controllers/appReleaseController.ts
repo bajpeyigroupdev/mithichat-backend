@@ -160,8 +160,11 @@ export const downloadLatestRelease = async (_req: Request, res: Response) => {
     if (release) {
       // Direct URL link support (e.g. S3, Cloudinary, CDN)
       if (release.fileUrl && (release.fileUrl.startsWith("http://") || release.fileUrl.startsWith("https://"))) {
-        await AppRelease.updateOne({ _id: release._id }, { $inc: { downloadCount: 1 } });
-        return res.redirect(release.fileUrl);
+        const isTunnelUrl = /loca\.lt|ngrok|trycloudflare/i.test(release.fileUrl);
+        if (!isTunnelUrl) {
+          await AppRelease.updateOne({ _id: release._id }, { $inc: { downloadCount: 1 } });
+          return res.redirect(release.fileUrl);
+        }
       }
 
       if (release.filePath && fs.existsSync(release.filePath)) {
