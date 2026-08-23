@@ -1,8 +1,13 @@
 import express from 'express';
 import { verifyToken } from '../middlewares/authorize.middleware';
 import { getReferralDetails, claimReferralCode } from '../controllers/referralController';
+import { renderReferralLandingPage } from '../controllers/referralLandingController';
 
 const router = express.Router();
+
+// Public Web Referral Landing Page
+router.get('/invite', renderReferralLandingPage);
+router.get('/v1/invite', renderReferralLandingPage);
 
 router.get('/referral/details', verifyToken, getReferralDetails);
 router.get('/v1/referral/details', verifyToken, getReferralDetails);

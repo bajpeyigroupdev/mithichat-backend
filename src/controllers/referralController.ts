@@ -144,11 +144,12 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
       currentUser.referredBy = referrerUser._id;
       currentUser.referralClaimed = true;
 
-      // Credit Referrer with Coins and Diamonds
+      const step1Coins = 25;
+      // Credit Referrer with 25 COINS ONLY (NO DIAMONDS)
       await User.updateOne(
         { _id: referrerUser._id },
         {
-          $inc: { coins: referralRewardAmount, diamonds: referralRewardAmount, totalReferrals: 1 },
+          $inc: { coins: step1Coins, totalReferrals: 1 },
         }
       );
 
@@ -156,15 +157,15 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
       await RechargeHistory.create({
         userId: referrerUser.userId,
         type: 'online' as any,
-        coins: referralRewardAmount,
-        diamonds: referralRewardAmount,
+        coins: step1Coins,
+        diamonds: 0,
         amount: 0,
         currency: 'INR',
         status: 'COMPLETED',
         date: new Date(),
         processedAt: new Date(),
-        productId: 'REFERRAL_REWARD',
-        rawGoogleData: { note: `${referralRewardAmount} Coins & Diamonds Referral Reward for referring user ${currentUser.userId}` },
+        productId: 'REFERRAL_STEP1_REWARD',
+        rawGoogleData: { note: `Step 1 Referral Reward: ${step1Coins} Coins for referring user ${currentUser.userId}` },
       });
 
       // Create Referral record
@@ -173,9 +174,15 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
           referrer: referrerUser._id,
           referee: currentUser._id,
           referralCode: cleanReferralCode,
-          referrerReward: referralRewardAmount,
+          referrerReward: step1Coins,
           refereeReward: welcomeRewardAmount,
-          status: 'CLAIMED',
+          step1Claimed: true,
+          step1Coins,
+          step1ClaimedAt: new Date(),
+          step2Claimed: false,
+          step2Coins: 0,
+          totalCallSeconds: 0,
+          status: 'STEP1_CLAIMED',
           claimedAt: new Date(),
         });
       } catch (refErr: any) {
@@ -309,36 +316,43 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "You cannot use your own referral code");
     }
 
+    const step1Coins = 25;
     currentUser.referredBy = referrerUser._id;
     currentUser.referralClaimed = true;
     await currentUser.save();
 
     await User.updateOne(
       { _id: referrerUser._id },
-      { $inc: { coins: referralRewardAmount, diamonds: referralRewardAmount, totalReferrals: 1 } }
+      { $inc: { coins: step1Coins, totalReferrals: 1 } }
     );
 
     await RechargeHistory.create({
       userId: referrerUser.userId,
       type: 'online' as any,
-      coins: referralRewardAmount,
-      diamonds: referralRewardAmount,
+      coins: step1Coins,
+      diamonds: 0,
       amount: 0,
       currency: 'INR',
       status: 'COMPLETED',
       date: new Date(),
       processedAt: new Date(),
-      productId: 'REFERRAL_REWARD',
-      rawGoogleData: { note: `${referralRewardAmount} Coins & Diamonds Referral Reward for referring user ${currentUser.userId}` },
+      productId: 'REFERRAL_STEP1_REWARD',
+      rawGoogleData: { note: `Step 1 Referral Reward: ${step1Coins} Coins for referring user ${currentUser.userId}` },
     });
 
     await Referral.create({
       referrer: referrerUser._id,
       referee: currentUser._id,
       referralCode: cleanCode,
-      referrerReward: referralRewardAmount,
+      referrerReward: step1Coins,
       refereeReward: 100,
-      status: 'CLAIMED',
+      step1Claimed: true,
+      step1Coins,
+      step1ClaimedAt: new Date(),
+      step2Claimed: false,
+      step2Coins: 0,
+      totalCallSeconds: 0,
+      status: 'STEP1_CLAIMED',
       claimedAt: new Date(),
     });
 

@@ -202,6 +202,14 @@ export class BillingService {
 
             await session.commitTransaction();
 
+            // Evaluate 2-Step Referral 5-minute call milestone
+            if (durationSec > 0 && transaction.userId) {
+                const { evaluateReferralCallMilestone } = await import('./referralMilestoneService');
+                evaluateReferralCallMilestone(transaction.userId, durationSec).catch(err =>
+                    console.error("Failed to evaluate referral call milestone:", err)
+                );
+            }
+
             // 7. Post-commit: Check if chat should be enabled (10-minute rule)
             this.checkAndEnableChat(transaction.userId, transaction.hostId).catch(err =>
                 console.error("Failed to enable chat after call:", err)

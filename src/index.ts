@@ -157,6 +157,7 @@ app.use("/api/public", publicRoutes);
 app.use("/api/teamleader", publicRoutes);
 import referralRoutes from "./routes/referral.routes";
 app.use("/api", referralRoutes);
+app.use("/", referralRoutes);
 import appReleaseRoutes from "./routes/appReleaseRoutes";
 app.use("/api/v1/app-releases", appReleaseRoutes);
 app.use("/api/app-releases", appReleaseRoutes);
