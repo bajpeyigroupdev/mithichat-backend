@@ -73,6 +73,12 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
       // Trigger automatic escalation evaluation (idempotent)
       await evaluateModerationEscalation(String(userId), String(violation._id));
 
+      // Update Trust & Safety Risk Score & Level (idempotent)
+      const { updateUserModerationRisk } = await import("../services/moderationRiskService");
+      await updateUserModerationRisk(String(userId), String(violation._id)).catch(err =>
+        console.warn("Failed to update user moderation risk:", err?.message)
+      );
+
       return res.status(400).json({
         success: false,
         code: "CHAT_CONTENT_VIOLATION",

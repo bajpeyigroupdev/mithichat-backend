@@ -122,4 +122,9 @@ export interface UserInterface extends Document {
   accountReviewReason?: string;
   lastEscalationAction?: string;
   lastEscalatedAt?: Date;
+  moderationRiskScore?: number;
+  moderationRiskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  moderationLastViolationAt?: Date;
+  lastLoginIp?: string;
+  deviceId?: string;
 }

@@ -137,6 +137,16 @@ const userSchema = new Schema<UserInterface>(
     accountReviewReason: { type: String, default: "" },
     lastEscalationAction: { type: String, default: "NONE" },
     lastEscalatedAt: { type: Date },
+    moderationRiskScore: { type: Number, default: 0, index: true },
+    moderationRiskLevel: {
+      type: String,
+      enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+      default: "LOW",
+      index: true,
+    },
+    moderationLastViolationAt: { type: Date },
+    lastLoginIp: { type: String, default: "" },
+    deviceId: { type: String, default: "" },
   },
   {
     timestamps: true,

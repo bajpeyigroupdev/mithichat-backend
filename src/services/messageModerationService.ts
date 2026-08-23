@@ -500,6 +500,12 @@ export async function handleModerationViolation({
     console.warn("Socket broadcast warning for moderation violation:", sockErr?.message);
   }
 
+  // Asynchronously trigger Trust & Safety Risk Score calculation (idempotent)
+  try {
+    const { updateUserModerationRisk } = require("./moderationRiskService");
+    updateUserModerationRisk(senderId, violation._id).catch(() => {});
+  } catch (err) {}
+
   return violation;
 }
 
