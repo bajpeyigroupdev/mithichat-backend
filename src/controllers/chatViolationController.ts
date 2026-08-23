@@ -6,6 +6,7 @@ import { BlockedUser } from "../models/blockedUser.model";
 import sendResponse from "../utils/reponse";
 import { Logger } from "../utils/logger";
 import { getIO, getUserRoom } from "../sockets";
+import { PermissionEngine } from "../utils/permissionEngine";
 
 /**
  * GET /api/moderation/violations
@@ -13,9 +14,9 @@ import { getIO, getUserRoom } from "../sockets";
  */
 export const getChatViolations = async (req: AuthRequest, res: Response) => {
   try {
-    const { role } = req.user || {};
-    if (!["owner", "operator", "superAdmin", "admin"].includes(role || "")) {
-      return sendResponse(res, 403, false, "Permission denied");
+    const hasPerm = await PermissionEngine.hasModerationPermission(req.user, "view");
+    if (!hasPerm) {
+      return sendResponse(res, 403, false, "Access Denied: Insufficient moderation permissions (moderation:view)");
     }
 
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
@@ -217,3 +218,154 @@ export const blockUserViolation = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 500, false, error.message || "Failed to block violating user");
   }
 };
+
+/**
+ * GET /api/moderation/violations/unread-count
+ * Returns unread / pending moderation violation count for admin notification badges
+ */
+export const getUnreadViolationCount = async (req: AuthRequest, res: Response) => {
+  try {
+    const { role } = req.user || {};
+    if (!["owner", "operator", "superAdmin", "admin"].includes(role || "")) {
+      return sendResponse(res, 403, false, "Permission denied");
+    }
+
+    const unreadCount = await ChatViolation.countDocuments({ status: "PENDING" });
+    return sendResponse(res, 200, true, "Unread violation count retrieved", { unreadCount });
+  } catch (error: any) {
+    await Logger("getUnreadViolationCount", error);
+    return sendResponse(res, 500, false, error.message || "Failed to retrieve unread violation count");
+  }
+};
+
+/**
+ * GET /api/moderation/violations/:id
+ * Get single chat violation by ID
+ */
+export const getChatViolationById = async (req: AuthRequest, res: Response) => {
+  try {
+    const { role } = req.user || {};
+    if (!["owner", "operator", "superAdmin", "admin"].includes(role || "")) {
+      return sendResponse(res, 403, false, "Permission denied");
+    }
+
+    const { id } = req.params;
+    const violation = await ChatViolation.findById(id)
+      .populate("sender", "userId name email phoneNumber image role isBlocked")
+      .populate("receiver", "userId name email phoneNumber image role")
+      .populate("reviewedBy", "userId name role")
+      .lean();
+
+    if (!violation) {
+      return sendResponse(res, 404, false, "Chat violation record not found");
+    }
+
+    return sendResponse(res, 200, true, "Chat violation retrieved", violation);
+  } catch (error: any) {
+    await Logger("getChatViolationById", error);
+    return sendResponse(res, 500, false, error.message || "Failed to retrieve chat violation");
+  }
+};
+
+/**
+ * PATCH /api/moderation/violations/:id/status
+ * Update violation status (e.g. REVIEWED, DISMISSED, ACTION_TAKEN)
+ */
+export const updateChatViolationStatus = async (req: AuthRequest, res: Response) => {
+  try {
+    const { role, id: adminId } = req.user || {};
+    if (!["owner", "operator", "superAdmin", "admin"].includes(role || "")) {
+      return sendResponse(res, 403, false, "Permission denied");
+    }
+
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!["PENDING", "REVIEWED", "DISMISSED", "ACTION_TAKEN"].includes(status)) {
+      return sendResponse(res, 400, false, "Invalid violation status");
+    }
+
+    const violation = await ChatViolation.findById(id);
+    if (!violation) {
+      return sendResponse(res, 404, false, "Chat violation record not found");
+    }
+
+    violation.status = status;
+    violation.reviewedBy = adminId as any;
+    violation.reviewedAt = new Date();
+    await violation.save();
+
+    return sendResponse(res, 200, true, "Chat violation status updated", violation);
+  } catch (error: any) {
+    await Logger("updateChatViolationStatus", error);
+    return sendResponse(res, 500, false, error.message || "Failed to update violation status");
+  }
+};
+
+/**
+ * POST /api/moderation/users/:userId/unmute
+ * Admin endpoint to manually remove chat mute restriction from user
+ */
+export const unmuteUserChat = async (req: AuthRequest, res: Response) => {
+  try {
+    const hasPerm = await PermissionEngine.hasModerationPermission(req.user, "unmute");
+    if (!hasPerm) {
+      return sendResponse(res, 403, false, "Access Denied: Insufficient permissions (moderation:unmute)");
+    }
+
+    const { userId } = req.params;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return sendResponse(res, 404, false, "User not found");
+    }
+
+    user.chatMuteUntil = undefined;
+    user.chatMuteReason = "";
+    user.lastEscalationAction = "UNMUTED";
+    await user.save();
+
+    return sendResponse(res, 200, true, "User chat access unmuted successfully", {
+      userId: user._id,
+      name: user.name,
+      chatMuteUntil: user.chatMuteUntil,
+    });
+  } catch (error: any) {
+    await Logger("unmuteUserChat", error);
+    return sendResponse(res, 500, false, error.message || "Failed to unmute user chat");
+  }
+};
+
+/**
+ * PATCH /api/moderation/users/:userId/review-status
+ * Admin endpoint to resolve / dismiss account review required status
+ */
+export const dismissAccountReview = async (req: AuthRequest, res: Response) => {
+  try {
+    const hasPerm = await PermissionEngine.hasModerationPermission(req.user, "review");
+    if (!hasPerm) {
+      return sendResponse(res, 403, false, "Access Denied: Insufficient permissions (moderation:review)");
+    }
+
+    const { userId } = req.params;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return sendResponse(res, 404, false, "User not found");
+    }
+
+    user.accountReviewRequired = false;
+    user.accountReviewReason = "";
+    await user.save();
+
+    return sendResponse(res, 200, true, "Account review status cleared successfully", {
+      userId: user._id,
+      accountReviewRequired: user.accountReviewRequired,
+    });
+  } catch (error: any) {
+    await Logger("dismissAccountReview", error);
+    return sendResponse(res, 500, false, error.message || "Failed to clear account review status");
+  }
+};
+
+

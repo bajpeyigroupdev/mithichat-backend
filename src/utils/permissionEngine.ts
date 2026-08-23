@@ -168,4 +168,70 @@ export class PermissionEngine {
     const targetAction = `${action} ${cleaned.charAt(0).toUpperCase() + cleaned.slice(1)}`;
     return this.canAccessAction(userContext, cleaned, targetAction);
   }
+
+  public static async hasModerationPermission(
+    userContext?: { id?: any; _id?: any; role?: string; permissions?: string[] } | null,
+    actionName: 'view' | 'review' | 'action' | 'unmute' = 'view'
+  ): Promise<boolean> {
+    if (!userContext) return false;
+    const role = String(userContext.role || '').toLowerCase();
+
+    // Owner and SuperAdmin have master access
+    if (role === 'owner' || role === 'superadmin') {
+      return true;
+    }
+
+    // Only admin and operator roles are eligible for permission evaluation
+    if (role !== 'admin' && role !== 'operator') {
+      return false;
+    }
+
+    const targetPerm = `moderation:${actionName}`;
+
+    // Check explicit userContext.permissions if populated
+    if (userContext.permissions && Array.isArray(userContext.permissions)) {
+      const reqPerms = userContext.permissions;
+      return (
+        reqPerms.includes(targetPerm) ||
+        reqPerms.includes('moderation:view') ||
+        reqPerms.includes('moderation:*') ||
+        reqPerms.includes('*')
+      );
+    }
+
+    // Check DB connection readiness
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState !== 1) {
+      return actionName === 'view';
+    }
+
+    // Query verified DB Permission policy
+    const userId = userContext.id ? String(userContext.id) : (userContext._id ? String(userContext._id) : undefined);
+    const policy = await fetchPolicy({ id: userId, role: userContext.role });
+    if (!policy) {
+      // Default: Allow basic view for admin/operator roles if no restrictive policy exists
+      return actionName === 'view';
+    }
+
+    const actions = policy.actions || [];
+    const pages = policy.pages || [];
+    const modules = policy.modules || [];
+    const menus = policy.menus || [];
+
+    const hasAction = actions.some(
+      (a: string) =>
+        a.toLowerCase() === targetPerm.toLowerCase() ||
+        a.toLowerCase() === 'moderation:view' ||
+        a.toLowerCase() === 'moderation'
+    );
+    const hasPage = pages.some(
+      (p: string) => p.includes('moderation') || p.includes('violations')
+    );
+    const hasModule = modules.some((m: string) => m.toLowerCase() === 'moderation');
+    const hasMenu = menus.some(
+      (m: string) => m.toLowerCase() === 'notifications' || m.toLowerCase() === 'moderation'
+    );
+
+    return hasAction || hasPage || hasModule || hasMenu;
+  }
 }

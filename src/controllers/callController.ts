@@ -438,7 +438,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "You already have an active call in progress");
     }
 
-    const availableDiamonds = callerBalance;
+    const availableDiamonds = callerDiamonds;
 
     let host: any = null;
     if (randomMatch) {

@@ -17,7 +17,11 @@ import { Types } from "mongoose";
 import { User } from "../models/user.model";
 import { updateBalance } from "../services/coins.service";
 import { getCachedSettings } from "./settingsController";
-import { detectChatViolation } from "../utils/chatModeration";
+import {
+  validateMessageContent,
+  handleModerationViolation,
+} from "../services/messageModerationService";
+import { evaluateModerationEscalation } from "../services/moderationEscalationService";
 import { ChatViolation } from "../models/chatViolation.model";
 import { sendPushNotification } from '../utils/pushNotification';
 
@@ -29,6 +33,17 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
 
     if (!userId || !receiverId || !content) {
       return sendResponse(res, 400, false, "Missing required fields");
+    }
+
+    // 🚫 CHAT MUTE ENFORCEMENT (Check if sender account is currently muted)
+    const senderUser = await User.findById(userId);
+    if (senderUser && senderUser.chatMuteUntil && new Date(senderUser.chatMuteUntil).getTime() > Date.now()) {
+      return res.status(400).json({
+        success: false,
+        code: "CHAT_TEMPORARILY_RESTRICTED",
+        message: "Your chat access is temporarily restricted.",
+        chatMuteUntil: senderUser.chatMuteUntil,
+      });
     }
 
     const settings = await getCachedSettings();
@@ -43,43 +58,25 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
       });
     }
 
-    // 🛡️ CHAT CONTENT MODERATION CHECK (BEFORE coin deduction or delivery)
-    const moderation = detectChatViolation(content);
-    if (moderation.isViolated) {
-      // Abuse prevention: Check if recent duplicate violation exists within 5 mins
-      const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000);
-      const existingViolation = await ChatViolation.findOne({
-        sender: userId,
-        receiver: receiverId,
-        violationType: moderation.type,
-        createdAt: { $gte: fiveMinsAgo },
+    // 🛡️ CHAT CONTENT MODERATION CHECK (BEFORE coin deduction, DB storage, Redis, Socket or FCM delivery)
+    const moderationResult = validateMessageContent(content);
+    if (!moderationResult.allowed) {
+      const violation = await handleModerationViolation({
+        senderId: userId,
+        receiverId,
+        content,
+        moderationResult,
+        source: "REST",
+        conversationId,
       });
 
-      if (existingViolation) {
-        existingViolation.attemptCount = (existingViolation.attemptCount || 1) + 1;
-        existingViolation.content = content;
-        await existingViolation.save();
-      } else {
-        await ChatViolation.create({
-          sender: userId,
-          receiver: receiverId,
-          content,
-          normalizedContent: moderation.normalizedContent,
-          violationType: moderation.type,
-          reason: moderation.reason,
-          matchedPattern: moderation.matchedPattern,
-          severity: moderation.severity || "MEDIUM",
-          status: "PENDING",
-          source: "PRIVATE_CHAT",
-          actionTaken: "NONE",
-        });
-      }
+      // Trigger automatic escalation evaluation (idempotent)
+      await evaluateModerationEscalation(String(userId), String(violation._id));
 
       return res.status(400).json({
         success: false,
         code: "CHAT_CONTENT_VIOLATION",
-        violationType: moderation.type,
-        message: "Sharing contact information, social handles, or external links is not allowed.",
+        message: "Sharing phone numbers, IDs, links, or contact information is not allowed.",
       });
     }
 

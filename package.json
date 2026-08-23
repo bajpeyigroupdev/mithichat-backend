@@ -7,6 +7,7 @@
     "dev": "nodemon --exec ts-node --transpile-only src/index.ts",
     "build": "tsc",
     "test:verification": "node --test -r ts-node/register src/tests/verificationRules.test.ts src/tests/verificationSecurity.test.ts",
+    "test:moderation": "node --test -r ts-node/register src/tests/messageModeration.test.ts",
     "start": "node dist/index.js",
     "script:updateLevels": "ts-node src/scripts/updateLevels.ts",
     "script:migrateVerificationSummaries": "ts-node src/scripts/migrateVerificationSummaries.ts"

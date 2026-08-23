@@ -1,7 +1,15 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 
 export type ViolationTypeEnum =
+  | "DIGIT"
+  | "NUMBER_WORD"
   | "PHONE_NUMBER"
+  | "ID_SHARING"
+  | "URL"
+  | "DOMAIN"
+  | "EMAIL"
+  | "SOCIAL_CONTACT"
+  | "OBFUSCATED_CONTACT"
   | "SOCIAL_HANDLE"
   | "LINK_URL"
   | "NUMBER_WORDS"
@@ -25,6 +33,8 @@ export interface IChatViolation extends Document {
   source: string;
   actionTaken: ActionTakenEnum;
   attemptCount: number;
+  escalationHandled?: boolean;
+  escalationAction?: string;
   reviewedBy?: Types.ObjectId;
   reviewedAt?: Date;
   createdAt: Date;
@@ -55,7 +65,15 @@ const chatViolationSchema = new Schema<IChatViolation>(
     violationType: {
       type: String,
       enum: [
+        "DIGIT",
+        "NUMBER_WORD",
         "PHONE_NUMBER",
+        "ID_SHARING",
+        "URL",
+        "DOMAIN",
+        "EMAIL",
+        "SOCIAL_CONTACT",
+        "OBFUSCATED_CONTACT",
         "SOCIAL_HANDLE",
         "LINK_URL",
         "NUMBER_WORDS",
@@ -94,6 +112,14 @@ const chatViolationSchema = new Schema<IChatViolation>(
     attemptCount: {
       type: Number,
       default: 1,
+    },
+    escalationHandled: {
+      type: Boolean,
+      default: false,
+    },
+    escalationAction: {
+      type: String,
+      default: "NONE",
     },
     reviewedBy: {
       type: Schema.Types.ObjectId,

@@ -130,6 +130,13 @@ const userSchema = new Schema<UserInterface>(
     profileCompleted: { type: Boolean, default: false, index: true },
     welcomeRewardClaimed: { type: Boolean, default: false },
     referralClaimed: { type: Boolean, default: false },
+    chatMuteUntil: { type: Date, index: true },
+    chatMuteReason: { type: String, default: "" },
+    chatMuteViolationCount: { type: Number, default: 0 },
+    accountReviewRequired: { type: Boolean, default: false, index: true },
+    accountReviewReason: { type: String, default: "" },
+    lastEscalationAction: { type: String, default: "NONE" },
+    lastEscalatedAt: { type: Date },
   },
   {
     timestamps: true,

@@ -8,6 +8,7 @@ import { User } from "../models/user.model";
 import { CallStatus } from "../constants/user";
 import { getAllHostsService, invalidateHostCache } from "../services/user.service";
 import { BillingService } from '../services/billing.service';
+import { PermissionEngine } from "../utils/permissionEngine";
 
 // Redis Pub/Sub for Adapter
 const pubClient = redis;
@@ -63,6 +64,33 @@ const chatSocket = (io: Server) => {
         if (socket.user.role === "host") {
             invalidateHostCache();
         }
+
+        // Join authorized admin/operator roles with verified server-side permission to moderation room
+        const canAccessModeration = await PermissionEngine.hasModerationPermission(
+            { id: socket.user.id, _id: socket.user.id, role: socket.user.role },
+            "view"
+        );
+
+        if (canAccessModeration) {
+            socket.join("admin_moderation");
+            console.log(`🛡️ Admin socket ${socket.id} (user: ${socket.user.id}, role: ${socket.user.role}) joined room admin_moderation`);
+        } else {
+            console.warn(`🔒 Access Denied: Socket ${socket.id} (user: ${socket.user.id}, role: ${socket.user.role}) denied admin_moderation room access`);
+        }
+
+        socket.on("joinModerationRoom", async () => {
+            const hasPermission = await PermissionEngine.hasModerationPermission(
+                { id: socket.user?.id, _id: socket.user?.id, role: socket.user?.role },
+                "view"
+            );
+            if (hasPermission) {
+                socket.join("admin_moderation");
+                socket.emit("moderationRoomJoined", { success: true });
+            } else {
+                console.warn(`🔒 Access Denied: Socket ${socket.id} requested joinModerationRoom without permission`);
+                socket.emit("moderationRoomJoined", { success: false, message: "Permission denied" });
+            }
+        });
 
         socket.emit("connectionConfirmed", {
             userId: userIdStr,

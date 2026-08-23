@@ -115,4 +115,11 @@ export interface UserInterface extends Document {
   kycVerificationStatus?: 'NOT_SUBMITTED' | 'PENDING' | 'APPROVED' | 'REJECTED';
   faceVerifiedAt?: Date;
   kycVerifiedAt?: Date;
+  chatMuteUntil?: Date;
+  chatMuteReason?: string;
+  chatMuteViolationCount?: number;
+  accountReviewRequired?: boolean;
+  accountReviewReason?: string;
+  lastEscalationAction?: string;
+  lastEscalatedAt?: Date;
 }
