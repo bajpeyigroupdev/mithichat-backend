@@ -204,6 +204,9 @@ export const createGift = async (req: AuthRequest, res: Response) => {
     try {
         const { name, icon, animationUrl, mediaType, cost, category } = req.body;
         const giftDoc = await Gift.create({ name, icon, animationUrl, mediaType, cost, category });
+        try {
+            getIO().emit("giftCatalogUpdated", { action: "create", gift: giftDoc });
+        } catch (e) { }
         return sendResponse(res, 201, true, "Gift created", giftDoc);
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
@@ -227,6 +230,9 @@ export const toggleGiftActive = async (req: AuthRequest, res: Response) => {
         const { isActive } = req.body;
         const giftDoc = await Gift.findByIdAndUpdate(id, { isActive }, { new: true });
         if (!giftDoc) return sendResponse(res, 404, false, "Gift not found");
+        try {
+            getIO().emit("giftCatalogUpdated", { action: "toggle", giftId: id, isActive });
+        } catch (e) { }
         return sendResponse(res, 200, true, `Gift ${isActive ? 'enabled' : 'disabled'}`, giftDoc);
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
@@ -246,6 +252,9 @@ export const updateGift = async (req: AuthRequest, res: Response) => {
         );
 
         if (!updated) return sendResponse(res, 404, false, "Gift not found");
+        try {
+            getIO().emit("giftCatalogUpdated", { action: "update", gift: updated });
+        } catch (e) { }
         return sendResponse(res, 200, true, "Gift updated successfully", updated);
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
@@ -258,6 +267,9 @@ export const deleteGift = async (req: AuthRequest, res: Response) => {
         const { id } = req.params;
         const giftDoc = await Gift.findByIdAndDelete(id);
         if (!giftDoc) return sendResponse(res, 404, false, "Gift not found");
+        try {
+            getIO().emit("giftCatalogUpdated", { action: "delete", giftId: id });
+        } catch (e) { }
         return sendResponse(res, 200, true, "Gift deleted successfully");
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message);
