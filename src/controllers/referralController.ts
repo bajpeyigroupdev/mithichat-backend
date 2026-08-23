@@ -144,11 +144,11 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
       currentUser.referredBy = referrerUser._id;
       currentUser.referralClaimed = true;
 
-      // Credit Referrer
+      // Credit Referrer with Coins and Diamonds
       await User.updateOne(
         { _id: referrerUser._id },
         {
-          $inc: { diamonds: referralRewardAmount, totalReferrals: 1 },
+          $inc: { coins: referralRewardAmount, diamonds: referralRewardAmount, totalReferrals: 1 },
         }
       );
 
@@ -156,6 +156,7 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
       await RechargeHistory.create({
         userId: referrerUser.userId,
         type: 'online' as any,
+        coins: referralRewardAmount,
         diamonds: referralRewardAmount,
         amount: 0,
         currency: 'INR',
@@ -163,7 +164,7 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
         date: new Date(),
         processedAt: new Date(),
         productId: 'REFERRAL_REWARD',
-        rawGoogleData: { note: `${referralRewardAmount} Diamonds Referral Reward for user ${currentUser.userId}` },
+        rawGoogleData: { note: `${referralRewardAmount} Coins & Diamonds Referral Reward for referring user ${currentUser.userId}` },
       });
 
       // Create Referral record
@@ -219,7 +220,8 @@ export const getReferralDetails = async (req: AuthRequest, res: Response) => {
       .lean();
 
     const totalReferrals = referrals.length || user.totalReferrals || 0;
-    const totalEarnedDiamonds = referrals.reduce((sum, r) => sum + (r.referrerReward || 50), 0);
+    const totalEarnedCoins = referrals.reduce((sum, r) => sum + (r.referrerReward || 50), 0);
+    const totalEarnedDiamonds = totalEarnedCoins;
 
     const hasRedeemedReferral = Boolean(
       user.referralClaimed || (await Referral.findOne({ referee: user._id }))
@@ -229,6 +231,7 @@ export const getReferralDetails = async (req: AuthRequest, res: Response) => {
       name: r.referee?.name || 'New User',
       image: r.referee?.image || '',
       createdAt: r.createdAt || r.claimedAt,
+      rewardCoins: r.referrerReward || 50,
       rewardDiamonds: r.referrerReward || 50,
     }));
 
@@ -238,6 +241,7 @@ export const getReferralDetails = async (req: AuthRequest, res: Response) => {
       referralCode: user.referralCode,
       referralLink,
       totalReferrals,
+      totalEarnedCoins,
       totalEarnedDiamonds,
       hasRedeemedReferral,
       referredUsers,
@@ -311,12 +315,13 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
 
     await User.updateOne(
       { _id: referrerUser._id },
-      { $inc: { diamonds: referralRewardAmount, totalReferrals: 1 } }
+      { $inc: { coins: referralRewardAmount, diamonds: referralRewardAmount, totalReferrals: 1 } }
     );
 
     await RechargeHistory.create({
       userId: referrerUser.userId,
       type: 'online' as any,
+      coins: referralRewardAmount,
       diamonds: referralRewardAmount,
       amount: 0,
       currency: 'INR',
@@ -324,7 +329,7 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
       date: new Date(),
       processedAt: new Date(),
       productId: 'REFERRAL_REWARD',
-      rawGoogleData: { note: `${referralRewardAmount} Diamonds Referral Reward for user ${currentUser.userId}` },
+      rawGoogleData: { note: `${referralRewardAmount} Coins & Diamonds Referral Reward for referring user ${currentUser.userId}` },
     });
 
     await Referral.create({
