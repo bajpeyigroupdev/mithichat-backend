@@ -233,6 +233,25 @@ export const toggleGiftActive = async (req: AuthRequest, res: Response) => {
     }
 };
 
+// Admin: Update Gift details
+export const updateGift = async (req: AuthRequest, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { name, icon, animationUrl, mediaType, cost, category, isActive } = req.body;
+
+        const updated = await Gift.findByIdAndUpdate(
+            id,
+            { name, icon, animationUrl, mediaType, cost, category, isActive },
+            { new: true, runValidators: true }
+        );
+
+        if (!updated) return sendResponse(res, 404, false, "Gift not found");
+        return sendResponse(res, 200, true, "Gift updated successfully", updated);
+    } catch (error: any) {
+        return sendResponse(res, 500, false, error.message);
+    }
+};
+
 // Admin: Delete Gift (hard delete)
 export const deleteGift = async (req: AuthRequest, res: Response) => {
     try {
