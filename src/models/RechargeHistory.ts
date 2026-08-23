@@ -1,6 +1,8 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { RechargeType } from '../constants/user';
 
+export type SettlementStatus = 'PENDING' | 'SETTLED' | 'FAILED';
+
 export interface IRechargeHistory extends Document {
   userId: number;                        // User who recharged
   sellerId?: number;                     // Seller (if offline)
@@ -15,6 +17,8 @@ export interface IRechargeHistory extends Document {
   amount?: number;                       // Purchase price in INR
   currency?: string;                     // Currency code (e.g., INR)
   status?: string;                       // Transaction status: COMPLETED, PENDING, FAILED, REFUNDED
+  settlementStatus?: SettlementStatus;   // Financial balance settlement status: PENDING, SETTLED, FAILED
+  settledAt?: Date;                      // Balance credit completion timestamp
   orderId?: string;                      // Google Play GPA order ID
   processedAt?: Date;                    // Verification/credit timestamp
   rawGoogleData?: Record<string, any>;   // Verified payload snapshot
@@ -39,6 +43,12 @@ const rechargeHistorySchema = new Schema<IRechargeHistory>(
     amount: { type: Number, default: 0 },
     currency: { type: String, default: 'INR' },
     status: { type: String, default: 'COMPLETED' },
+    settlementStatus: {
+      type: String,
+      enum: ['PENDING', 'SETTLED', 'FAILED'],
+      default: 'SETTLED',
+    },
+    settledAt: { type: Date, default: Date.now },
     orderId: { type: String },
     processedAt: { type: Date, default: Date.now },
     rawGoogleData: { type: Schema.Types.Mixed },
@@ -49,7 +59,7 @@ const rechargeHistorySchema = new Schema<IRechargeHistory>(
 // Indexes for high performance and idempotency
 rechargeHistorySchema.index({ userId: 1, date: -1 });
 rechargeHistorySchema.index({ type: 1, date: -1 });
-rechargeHistorySchema.index({ purchaseToken: 1 }, { unique: true, sparse: true });
+rechargeHistorySchema.index({ transactionId: 1, settlementStatus: 1 });
 
 export const RechargeHistory = mongoose.model<IRechargeHistory>(
   'RechargeHistory',

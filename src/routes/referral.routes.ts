@@ -1,6 +1,6 @@
 import express from 'express';
 import { verifyToken } from '../middlewares/authorize.middleware';
-import { getReferralDetails, claimReferralCode } from '../controllers/referralController';
+import { getReferralDetails, claimReferralCode, triggerReconciliation } from '../controllers/referralController';
 import { renderReferralLandingPage } from '../controllers/referralLandingController';
 
 const router = express.Router();
@@ -14,5 +14,9 @@ router.get('/v1/referral/details', verifyToken, getReferralDetails);
 
 router.post('/referral/claim', verifyToken, claimReferralCode);
 router.post('/v1/referral/claim', verifyToken, claimReferralCode);
+
+// Admin Manual Reconciliation Endpoint
+router.post('/admin/referrals/reconcile', verifyToken, triggerReconciliation);
+router.post('/v1/admin/referrals/reconcile', verifyToken, triggerReconciliation);
 
 export default router;

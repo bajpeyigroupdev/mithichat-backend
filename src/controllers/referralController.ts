@@ -4,6 +4,7 @@ import { User } from '../models/user.model';
 import { Referral } from '../models/referral.model';
 import { RechargeHistory } from '../models/RechargeHistory';
 import { DeviceLimit } from '../models/deviceLimit.model';
+import { RechargeType } from '../constants/user';
 import { getCachedSettings } from './settingsController';
 import sendResponse from '../utils/reponse';
 import { Logger } from '../utils/logger';
@@ -145,30 +146,87 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
       currentUser.referralClaimed = true;
 
       const step1Coins = 25;
-      // Credit Referrer with 25 COINS ONLY (NO DIAMONDS)
-      await User.updateOne(
-        { _id: referrerUser._id },
-        {
-          $inc: { coins: step1Coins, totalReferrals: 1 },
+      const step1TxId = `REF_STEP1_${currentUser._id}`;
+
+      // Risk Assessment Model
+      let riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
+      const riskFlags: string[] = [];
+      let reviewStatus: 'PASSED' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' = 'PASSED';
+
+      const userDeviceId = (currentUser as any).device?.createdDeviceId || (currentUser as any).device?.currentDeviceId;
+      if (userDeviceId) {
+        const linkedAccounts = await User.countDocuments({
+          $or: [
+            { "device.createdDeviceId": userDeviceId },
+            { "device.currentDeviceId": userDeviceId }
+          ],
+          isDeleted: false,
+        });
+
+        if (linkedAccounts > 2) {
+          riskLevel = 'HIGH';
+          riskFlags.push('MULTIPLE_ACCOUNTS_SAME_DEVICE');
+          reviewStatus = 'PENDING_REVIEW';
+          console.log(`[REFERRAL_RISK_FLAGGED] High risk referral flagged: ${linkedAccounts} accounts on device ${userDeviceId}`);
         }
-      );
+      }
 
-      // Ledger entry for Referrer
-      await RechargeHistory.create({
-        userId: referrerUser.userId,
-        type: 'online' as any,
-        coins: step1Coins,
-        diamonds: 0,
-        amount: 0,
-        currency: 'INR',
-        status: 'COMPLETED',
-        date: new Date(),
-        processedAt: new Date(),
-        productId: 'REFERRAL_STEP1_REWARD',
-        rawGoogleData: { note: `Step 1 Referral Reward: ${step1Coins} Coins for referring user ${currentUser.userId}` },
-      });
+      let step1LedgerDoc: any = null;
+      let shouldCreditStep1 = true;
 
-      // Create Referral record
+      try {
+        step1LedgerDoc = await RechargeHistory.create({
+          userId: referrerUser.userId,
+          type: RechargeType.REFERRAL_REGISTRATION_REWARD,
+          coins: step1Coins,
+          diamonds: 0,
+          amount: 0,
+          currency: 'COIN',
+          status: 'COMPLETED',
+          settlementStatus: 'PENDING',
+          date: new Date(),
+          processedAt: new Date(),
+          productId: 'REFERRAL_STEP1_REWARD',
+          transactionId: step1TxId,
+          rawGoogleData: {
+            type: 'REFERRAL_REGISTRATION_REWARD',
+            amount: step1Coins,
+            currency: 'COIN',
+            referredUserId: currentUser.userId,
+            note: `Step 1 Referral Reward: ${step1Coins} Coins for referring user ${currentUser.userId}`
+          },
+        });
+      } catch (txErr: any) {
+        if (txErr.code === 11000 || txErr.message?.includes('E11000')) {
+          const existingTx = await RechargeHistory.findOne({ transactionId: step1TxId });
+          if (existingTx) {
+            if (existingTx.settlementStatus === 'SETTLED') {
+              shouldCreditStep1 = false;
+              step1LedgerDoc = existingTx;
+              console.log(`[REFERRAL_STEP1_DUPLICATE_BLOCKED] Step 1 reward ${step1TxId} already SETTLED. Skipping balance credit.`);
+            } else {
+              step1LedgerDoc = existingTx;
+            }
+          }
+        }
+      }
+
+      if (shouldCreditStep1) {
+        console.log(`[REFERRAL_STEP1_SETTLEMENT_STARTED] Settling +25 Coins for referrer ${referrerUser.userId}`);
+        await User.updateOne(
+          { _id: referrerUser._id },
+          { $inc: { coins: step1Coins, totalReferrals: 1 } }
+        );
+
+        if (step1LedgerDoc && step1LedgerDoc.settlementStatus !== 'SETTLED') {
+          await RechargeHistory.updateOne(
+            { _id: step1LedgerDoc._id },
+            { $set: { settlementStatus: 'SETTLED', settledAt: new Date() } }
+          );
+        }
+        console.log(`[REFERRAL_STEP1_SETTLED] Settled Step 1 +25 Coins for referrer ${referrerUser.userId}`);
+      }
+
       try {
         await Referral.create({
           referrer: referrerUser._id,
@@ -179,14 +237,46 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
           step1Claimed: true,
           step1Coins,
           step1ClaimedAt: new Date(),
+          step1RewardStatus: 'COMPLETED',
           step2Claimed: false,
           step2Coins: 0,
+          step2RewardStatus: 'NOT_STARTED',
           totalCallSeconds: 0,
+          riskLevel,
+          riskFlags,
+          reviewStatus,
           status: 'STEP1_CLAIMED',
           claimedAt: new Date(),
         });
       } catch (refErr: any) {
         console.log("Referral record duplicate warning:", refErr.message);
+      }
+
+      // Send Step 1 real-time socket & FCM push notification to Referrer
+      try {
+        const { getIO, getUserRoom } = require("../sockets");
+        const { sendCallNotification } = require("../utils/pushNotification");
+
+        const io = getIO();
+        if (io) {
+          io.to(getUserRoom(String(referrerUser._id))).emit("referralReward:step1", {
+            coinsEarned: 25,
+            refereeUserId: currentUser.userId,
+            message: "🎉 Referral Reward Earned! Your friend successfully joined MithiChat. You received 25 Coins!",
+          });
+        }
+
+        if (referrerUser.fcmToken) {
+          await sendCallNotification(
+            referrerUser.fcmToken,
+            "🎉 Referral Reward Earned!",
+            "Your friend successfully joined MithiChat. You received 25 Coins!",
+            "",
+            false
+          ).catch(() => {});
+        }
+      } catch (notifErr: any) {
+        console.warn("Step 1 referral notification warning:", notifErr?.message);
       }
     }
 
@@ -227,29 +317,54 @@ export const getReferralDetails = async (req: AuthRequest, res: Response) => {
       .lean();
 
     const totalReferrals = referrals.length || user.totalReferrals || 0;
-    const totalEarnedCoins = referrals.reduce((sum, r) => sum + (r.referrerReward || 50), 0);
-    const totalEarnedDiamonds = totalEarnedCoins;
+    const totalEarnedCoins = referrals.reduce(
+      (sum, r) => sum + (r.step1Coins || 25) + (r.step2Claimed ? (r.step2Coins || 25) : 0),
+      0
+    );
+    const pendingCallRewardsCount = referrals.filter((r) => !r.step2Claimed).length;
+    const completedReferralsCount = referrals.filter((r) => r.step2Claimed).length;
 
     const hasRedeemedReferral = Boolean(
       user.referralClaimed || (await Referral.findOne({ referee: user._id }))
     );
 
-    const referredUsers = referrals.map((r: any) => ({
-      name: r.referee?.name || 'New User',
-      image: r.referee?.image || '',
-      createdAt: r.createdAt || r.claimedAt,
-      rewardCoins: r.referrerReward || 50,
-      rewardDiamonds: r.referrerReward || 50,
-    }));
+    const referredUsers = referrals.map((r: any) => {
+      const callSec = r.totalCallSeconds || 0;
+      const callMin = Math.floor(callSec / 60);
+      const callSecRem = callSec % 60;
+      const formattedCallTime = `${callMin}:${callSecRem < 10 ? '0' : ''}${callSecRem}`;
 
-    const referralLink = `https://mithichat.live/invite?ref=${user.referralCode}`;
+      return {
+        _id: r._id,
+        name: r.referee?.name || 'New User',
+        userId: r.referee?.userId,
+        image: r.referee?.image || '',
+        createdAt: r.createdAt || r.claimedAt,
+        step1Claimed: Boolean(r.step1Claimed),
+        step1Coins: r.step1Coins || 25,
+        step1RewardStatus: r.step1RewardStatus || 'COMPLETED',
+        step2Claimed: Boolean(r.step2Claimed),
+        step2Coins: r.step2Coins || (r.step2Claimed ? 25 : 0),
+        step2RewardStatus: r.step2RewardStatus || (r.step2Claimed ? 'COMPLETED' : 'NOT_STARTED'),
+        totalCallSeconds: callSec,
+        formattedCallTime,
+        requiredCallSeconds: 300,
+        riskLevel: r.riskLevel || 'LOW',
+        reviewStatus: r.reviewStatus || 'PASSED',
+        status: r.status || (r.step2Claimed ? 'COMPLETED' : 'STEP1_CLAIMED'),
+        totalCoinsEarned: (r.step1Coins || 25) + (r.step2Claimed ? (r.step2Coins || 25) : 0),
+      };
+    });
+
+    const referralLink = `https://mithichat.live/refer/${user.referralCode}`;
 
     return sendResponse(res, 200, true, "Referral details fetched successfully", {
       referralCode: user.referralCode,
       referralLink,
       totalReferrals,
       totalEarnedCoins,
-      totalEarnedDiamonds,
+      pendingCallRewardsCount,
+      completedReferralsCount,
       hasRedeemedReferral,
       referredUsers,
     });
@@ -317,28 +432,63 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
     }
 
     const step1Coins = 25;
+    const step1TxId = `REF_STEP1_${currentUser._id}`;
     currentUser.referredBy = referrerUser._id;
     currentUser.referralClaimed = true;
     await currentUser.save();
 
-    await User.updateOne(
-      { _id: referrerUser._id },
-      { $inc: { coins: step1Coins, totalReferrals: 1 } }
-    );
+    let step1LedgerDoc: any = null;
+    let shouldCreditStep1 = true;
 
-    await RechargeHistory.create({
-      userId: referrerUser.userId,
-      type: 'online' as any,
-      coins: step1Coins,
-      diamonds: 0,
-      amount: 0,
-      currency: 'INR',
-      status: 'COMPLETED',
-      date: new Date(),
-      processedAt: new Date(),
-      productId: 'REFERRAL_STEP1_REWARD',
-      rawGoogleData: { note: `Step 1 Referral Reward: ${step1Coins} Coins for referring user ${currentUser.userId}` },
-    });
+    try {
+      step1LedgerDoc = await RechargeHistory.create({
+        userId: referrerUser.userId,
+        type: RechargeType.REFERRAL_REGISTRATION_REWARD,
+        coins: step1Coins,
+        diamonds: 0,
+        amount: 0,
+        currency: 'COIN',
+        status: 'COMPLETED',
+        settlementStatus: 'PENDING',
+        date: new Date(),
+        processedAt: new Date(),
+        productId: 'REFERRAL_STEP1_REWARD',
+        transactionId: step1TxId,
+        rawGoogleData: {
+          type: 'REFERRAL_REGISTRATION_REWARD',
+          amount: step1Coins,
+          currency: 'COIN',
+          referredUserId: currentUser.userId,
+          note: `Step 1 Referral Reward: ${step1Coins} Coins for referring user ${currentUser.userId}`
+        },
+      });
+    } catch (txErr: any) {
+      if (txErr.code === 11000 || txErr.message?.includes('E11000')) {
+        const existingTx = await RechargeHistory.findOne({ transactionId: step1TxId });
+        if (existingTx) {
+          if (existingTx.settlementStatus === 'SETTLED') {
+            shouldCreditStep1 = false;
+            step1LedgerDoc = existingTx;
+          } else {
+            step1LedgerDoc = existingTx;
+          }
+        }
+      }
+    }
+
+    if (shouldCreditStep1) {
+      await User.updateOne(
+        { _id: referrerUser._id },
+        { $inc: { coins: step1Coins, totalReferrals: 1 } }
+      );
+
+      if (step1LedgerDoc && step1LedgerDoc.settlementStatus !== 'SETTLED') {
+        await RechargeHistory.updateOne(
+          { _id: step1LedgerDoc._id },
+          { $set: { settlementStatus: 'SETTLED', settledAt: new Date() } }
+        );
+      }
+    }
 
     await Referral.create({
       referrer: referrerUser._id,
@@ -349,12 +499,41 @@ export const claimReferralCode = async (req: AuthRequest, res: Response) => {
       step1Claimed: true,
       step1Coins,
       step1ClaimedAt: new Date(),
+      step1RewardStatus: 'COMPLETED',
       step2Claimed: false,
       step2Coins: 0,
+      step2RewardStatus: 'NOT_STARTED',
       totalCallSeconds: 0,
       status: 'STEP1_CLAIMED',
       claimedAt: new Date(),
     });
+
+    // Send Step 1 real-time socket & FCM push notification to Referrer
+    try {
+      const { getIO, getUserRoom } = require("../sockets");
+      const { sendCallNotification } = require("../utils/pushNotification");
+
+      const io = getIO();
+      if (io) {
+        io.to(getUserRoom(String(referrerUser._id))).emit("referralReward:step1", {
+          coinsEarned: 25,
+          refereeUserId: currentUser.userId,
+          message: "🎉 Referral Reward Earned! Your friend successfully joined MithiChat. You received 25 Coins!",
+        });
+      }
+
+      if (referrerUser.fcmToken) {
+        await sendCallNotification(
+          referrerUser.fcmToken,
+          "🎉 Referral Reward Earned!",
+          "Your friend successfully joined MithiChat. You received 25 Coins!",
+          "",
+          false
+        ).catch(() => {});
+      }
+    } catch (notifErr: any) {
+      console.warn("Step 1 referral notification warning in claimReferralCode:", notifErr?.message);
+    }
 
     return sendResponse(res, 200, true, "Referral code redeemed successfully!", {
       referralCode: cleanCode,
@@ -372,9 +551,9 @@ export const getAdminReferrals = async (req: AuthRequest, res: Response) => {
   try {
     const totalReferrals = await Referral.countDocuments();
     const aggregateReward = await Referral.aggregate([
-      { $group: { _id: null, totalDiamonds: { $sum: '$referrerReward' } } }
+      { $group: { _id: null, totalCoins: { $sum: '$referrerReward' } } }
     ]);
-    const totalDiamondsGranted = aggregateReward[0]?.totalDiamonds || 0;
+    const totalCoinsGranted = aggregateReward[0]?.totalCoins || 0;
 
     // Aggregated top referrers by joined user count & earnings
     const referrerStats = await Referral.aggregate([
@@ -432,7 +611,8 @@ export const getAdminReferrals = async (req: AuthRequest, res: Response) => {
 
     return sendResponse(res, 200, true, "Admin referral analytics fetched successfully", {
       totalReferrals,
-      totalDiamondsGranted,
+      totalCoinsGranted,
+      totalDiamondsGranted: totalCoinsGranted,
       topReferrers,
       referralLogs,
     });
@@ -474,6 +654,11 @@ export const getReferrerReferees = async (req: AuthRequest, res: Response) => {
       referralCode: r.referralCode,
       referrerReward: r.referrerReward,
       refereeReward: r.refereeReward,
+      step1RewardStatus: r.step1RewardStatus || 'COMPLETED',
+      step2RewardStatus: r.step2RewardStatus || (r.step2Claimed ? 'COMPLETED' : 'NOT_STARTED'),
+      riskLevel: r.riskLevel || 'LOW',
+      riskFlags: r.riskFlags || [],
+      reviewStatus: r.reviewStatus || 'PASSED',
       status: r.status,
       joinedAt: r.createdAt || r.claimedAt,
     }));
@@ -495,6 +680,21 @@ export const getReferrerReferees = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     await Logger("getReferrerReferees", error);
     return sendResponse(res, 500, false, error.message || "Failed to fetch referee list");
+  }
+};
+
+/**
+ * POST Admin Manual Reconciliation Trigger
+ */
+export const triggerReconciliation = async (req: AuthRequest, res: Response) => {
+  try {
+    const { reconcileReferralFailures } = require('../services/referralReconciliationService');
+    const metrics = await reconcileReferralFailures();
+
+    return sendResponse(res, 200, true, "Referral crash reconciliation executed successfully", metrics);
+  } catch (error: any) {
+    await Logger("triggerReconciliation", error);
+    return sendResponse(res, 500, false, error.message || "Failed to execute referral reconciliation");
   }
 };
 
@@ -621,4 +821,3 @@ export const getUserDeviceDetails = async (req: AuthRequest, res: Response) => {
     return sendResponse(res, 500, false, error.message || "Failed to fetch user device details");
   }
 };
-

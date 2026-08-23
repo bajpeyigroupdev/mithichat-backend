@@ -37,8 +37,9 @@ export enum RechargeType {
   ONLINE = 'online',
   OFFLINE = 'offline',
   GOOGLE_PLAY = 'google_play',
+  REFERRAL_REGISTRATION_REWARD = 'referral_registration_reward',
+  REFERRAL_CALL_REWARD = 'referral_call_reward',
 }
-
 
 export enum TransactionType {
   VOICE_CALL = 'voice_call',

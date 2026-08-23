@@ -16,7 +16,6 @@ export const getUploadSignature = async (req: AuthRequest, res: Response) => {
 
         const timestamp = Math.round(new Date().getTime() / 1000);
 
-        // Map type to strict folder names
         let folderName = 'general';
         const normalizedType = type?.toLowerCase().trim();
 
@@ -64,13 +63,6 @@ export const getUploadSignature = async (req: AuthRequest, res: Response) => {
                 return sendResponse(res, 400, false, `Invalid upload type: ${type}. Allowed: kyc, avatar, frame, help, chat, host, banner, raw, audio, voice, doc`);
         }
 
-        // Generate a unique public_id on the backend
-        // Format: <folder>/<userId>_<timestamp>_<short_uuid>
-        // Note: In Cloudinary, if you specify 'folder', the public_id should effectively be the filename inside that folder.
-        // However, we can also just provide a full public_id that includes the folder if we want specific hierarchy control, 
-        // but using the 'folder' parameter + a unique filename is standard.
-        // Let's generate a unique filename.
-
         const uniqueSuffix = uuidv4().split('-')[0];
         const public_id = `${userId}_${normalizedType}_${timestamp}_${uniqueSuffix}`;
 
@@ -96,4 +88,29 @@ export const getUploadSignature = async (req: AuthRequest, res: Response) => {
     } catch (error: any) {
         return sendResponse(res, 500, false, error.message || "Failed to generate signature");
     }
+};
+
+/**
+ * Direct file upload handler for gift icons, animations (.svga, .gif, .webp, .png) and admin assets.
+ */
+export const uploadDirectFile = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return sendResponse(res, 400, false, "No file uploaded");
+    }
+
+    const host = req.get("host") || "api.mithichat.live";
+    const protocol = req.protocol === "https" || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+    const fileUrl = `${protocol}://${host}/uploads/gifts/${file.filename}`;
+
+    return sendResponse(res, 200, true, "File uploaded successfully", {
+      url: fileUrl,
+      filename: file.filename,
+      size: file.size,
+      mimetype: file.mimetype,
+    });
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message || "Failed to upload file");
+  }
 };
