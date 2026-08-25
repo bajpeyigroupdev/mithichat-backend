@@ -196,7 +196,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
         const totalUsers = await User.countDocuments(filter);
         const users = await User.find(filter)
-          .select("userId name userName isUserName meethiId mithiId coins diamonds isBlocked createdAt role email phoneNumber image gender level isVIP country age")
+          .select("userId name coins diamonds isBlocked createdAt role email phoneNumber image gender level isVIP")
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limitNumber)
@@ -759,7 +759,7 @@ export const getAdminHostUsers = async (req: AuthRequest, res: Response) => {
 
     const [hosts, total, maxLevelDoc] = await Promise.all([
       User.find(filter)
-        .select("userId name userName isUserName meethiId mithiId image phoneNumber email gender level coins diamonds isBlocked isOnline isActive country language agencyId createdAt")
+        .select("userId name image phoneNumber email gender level coins diamonds isBlocked isOnline isActive country language agencyId createdAt")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
