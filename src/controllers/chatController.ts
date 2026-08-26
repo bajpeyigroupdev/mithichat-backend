@@ -67,7 +67,7 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
       const moderationResult = validateMessageContent(content);
       if (!moderationResult.allowed) {
         const violation = await handleModerationViolation({
-          senderId: userId,
+          senderId: userId as any,
           receiverId,
           content,
           moderationResult,
@@ -103,7 +103,7 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
       }
 
       // Deduct 35 Diamonds/Coins synchronously
-      await updateBalance(userId, MESSAGE_COST, "deduct");
+      await updateBalance(userId as any, MESSAGE_COST, "deduct");
     }
 
     // ⚡ FAST PATH: Queue the message (Redis)
