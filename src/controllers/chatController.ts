@@ -27,7 +27,8 @@ import { sendPushNotification } from '../utils/pushNotification';
 
 export const sendMessageController = async (req: AuthRequest, res: Response) => {
   try {
-    const { id, role } = req.user || {};
+    const { id, userId: reqUserId, role } = req.user || {};
+    const userId = id || reqUserId;
     const { content, conversationId } = req.body;
     const targetReceiverId = req.body.receiverId || req.body.receiver || req.body.recipientId;
 

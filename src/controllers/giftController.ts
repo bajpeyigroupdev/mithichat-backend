@@ -52,6 +52,8 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, "Sender not found");
         }
 
+        let receiverId: string | mongoose.Types.ObjectId | null = null;
+        let callTransaction: any = null;
         let rawReceiverId = req.body.receiverId || req.body.receiver || req.body.recipientId;
 
         if (callId) {

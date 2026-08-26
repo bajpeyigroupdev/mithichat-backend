@@ -367,7 +367,7 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
     try {
       const { invalidateHostCache } = await import('../services/user.service');
       invalidateHostCache();
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Failed to invalidate host cache on logout:', err?.message);
     }
 
