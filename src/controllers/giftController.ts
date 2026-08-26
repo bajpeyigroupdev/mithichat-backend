@@ -52,8 +52,7 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 404, false, "Sender not found");
         }
 
-        let receiverId: string | mongoose.Types.ObjectId | null = null;
-        let callTransaction: any = null;
+        let rawReceiverId = req.body.receiverId || req.body.receiver || req.body.recipientId;
 
         if (callId) {
             callTransaction = await CoinsTransaction.findById(callId).session(session);
@@ -64,8 +63,8 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             }
         }
 
-        if (!receiverId && req.body.receiverId) {
-            receiverId = req.body.receiverId;
+        if (!receiverId && rawReceiverId) {
+            receiverId = rawReceiverId;
         }
 
         if (!receiverId) {

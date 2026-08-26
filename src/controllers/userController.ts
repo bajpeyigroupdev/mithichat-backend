@@ -157,7 +157,7 @@ export const setVerifiedPhone = async (req: AuthRequest, res: Response) => {
 export const getUsers = async (req: AuthRequest, res: Response) => {
   try {
     const { role, userId } = req.user || {};
-    const { page = 1, limit = 10, role: targetRole, search } = req.query;
+    const { page = 1, limit = 10, role: targetRole, search, startDate, endDate } = req.query;
 
     const pageNumber = Math.max(1, parseInt(page as string, 10) || 1);
     const limitNumber = Math.max(1, parseInt(limit as string, 10) || 10);
@@ -177,6 +177,28 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
         } else {
           // Exclude Admin Panel Staff roles from regular user management list
           filter.role = { $nin: PANEL_ACCOUNT_ROLES };
+        }
+
+        if (startDate || endDate) {
+          const createdAtFilter: any = {};
+          if (startDate) {
+            const start = new Date(startDate as string);
+            if (!isNaN(start.getTime())) {
+              createdAtFilter.$gte = start;
+            }
+          }
+          if (endDate) {
+            const end = new Date(endDate as string);
+            if (!isNaN(end.getTime())) {
+              if (typeof endDate === 'string' && endDate.length <= 10) {
+                end.setHours(23, 59, 59, 999);
+              }
+              createdAtFilter.$lte = end;
+            }
+          }
+          if (Object.keys(createdAtFilter).length > 0) {
+            filter.createdAt = createdAtFilter;
+          }
         }
 
         if (search) {

@@ -14,6 +14,7 @@ const router = Router();
 
 // ✅ Send a message
 router.post("/send", verifyToken, sendMessageController);
+router.post("/send-message", verifyToken, sendMessageController);
 
 // ✅ Get messages of a conversation
 router.get("/messages",verifyToken, getMessagesController);

@@ -28,12 +28,13 @@ import { sendPushNotification } from '../utils/pushNotification';
 export const sendMessageController = async (req: AuthRequest, res: Response) => {
   try {
     const { id, role } = req.user || {};
-    const userId = id;
-    const { receiverId, content, conversationId } = req.body;
+    const { content, conversationId } = req.body;
+    const targetReceiverId = req.body.receiverId || req.body.receiver || req.body.recipientId;
 
-    if (!userId || !receiverId || !content) {
+    if (!userId || !targetReceiverId || !content) {
       return sendResponse(res, 400, false, "Missing required fields");
     }
+    const receiverId = targetReceiverId;
 
     // 🚫 CHAT MUTE ENFORCEMENT (Check if sender account is currently muted)
     const senderUser = await User.findById(userId);
@@ -58,46 +59,49 @@ export const sendMessageController = async (req: AuthRequest, res: Response) => 
       });
     }
 
-    // 🛡️ CHAT CONTENT MODERATION CHECK (BEFORE coin deduction, DB storage, Redis, Socket or FCM delivery)
-    const moderationResult = validateMessageContent(content);
-    if (!moderationResult.allowed) {
-      const violation = await handleModerationViolation({
-        senderId: userId,
-        receiverId,
-        content,
-        moderationResult,
-        source: "REST",
-        conversationId,
-      });
+    const isGiftMessage = req.body.type === 'gift' || content.includes('🎁') || content.toLowerCase().includes('gift');
 
-      // Trigger automatic escalation evaluation (idempotent)
-      await evaluateModerationEscalation(String(userId), String(violation._id));
+    // 🛡️ CHAT CONTENT MODERATION CHECK (Skip for system generated gift notifications)
+    if (!isGiftMessage) {
+      const moderationResult = validateMessageContent(content);
+      if (!moderationResult.allowed) {
+        const violation = await handleModerationViolation({
+          senderId: userId,
+          receiverId,
+          content,
+          moderationResult,
+          source: "REST",
+          conversationId,
+        });
 
-      // Update Trust & Safety Risk Score & Level (idempotent)
-      const { updateUserModerationRisk } = await import("../services/moderationRiskService");
-      await updateUserModerationRisk(String(userId), String(violation._id)).catch(err =>
-        console.warn("Failed to update user moderation risk:", err?.message)
-      );
+        // Trigger automatic escalation evaluation (idempotent)
+        await evaluateModerationEscalation(String(userId), String(violation._id));
 
-      return res.status(400).json({
-        success: false,
-        code: "CHAT_CONTENT_VIOLATION",
-        message: "Sharing phone numbers, IDs, links, or contact information is not allowed.",
-      });
+        // Update Trust & Safety Risk Score & Level (idempotent)
+        const { updateUserModerationRisk } = await import("../services/moderationRiskService");
+        await updateUserModerationRisk(String(userId), String(violation._id)).catch(err =>
+          console.warn("Failed to update user moderation risk:", err?.message)
+        );
+
+        return res.status(400).json({
+          success: false,
+          code: "CHAT_CONTENT_VIOLATION",
+          message: "Sharing phone numbers, IDs, links, or contact information is not allowed.",
+        });
+      }
     }
 
-    // 💰 Deduct coins if the sender is a user
-    if (role === "user") {
+    // 💰 Deduct 35 Diamonds per text message if the sender is a user (Skip for gifts as gift cost is already charged by /gift/send)
+    if (role === "user" && !isGiftMessage) {
       const dbUser = await User.findById(userId);
-      const settings = await getCachedSettings();
-      const MESSAGE_COST = settings.chatMessageCost || 10; // Dynamic config cost
+      const MESSAGE_COST = 35; // 35 Diamonds per message as requested
 
-      const totalBalance = Number(dbUser?.coins || 0) + Number(dbUser?.diamonds || 0);
+      const totalBalance = Number(dbUser?.diamonds || 0) + Number(dbUser?.coins || 0);
       if (!dbUser || totalBalance < MESSAGE_COST) {
-        return sendResponse(res, 400, false, "Insufficient balance to send message");
+        return sendResponse(res, 400, false, "Insufficient Diamonds. 35 Diamonds required per message.");
       }
 
-      // Deduct coins synchronously
+      // Deduct 35 Diamonds/Coins synchronously
       await updateBalance(userId, MESSAGE_COST, "deduct");
     }
 

@@ -356,9 +356,20 @@ export const userLogout = async (req: AuthRequest, res: Response, next: NextFunc
       await user.save();
     }
 
+    user.isOnline = false;
+    user.isActive = false;
+    user.isBusy = false;
+    user.fcmToken = "";
     user.refreshToken = "";
     user.activeToken = "";
     await user.save();
+
+    try {
+      const { invalidateHostCache } = await import('../services/user.service');
+      invalidateHostCache();
+    } catch (err) {
+      console.warn('Failed to invalidate host cache on logout:', err?.message);
+    }
 
     return sendResponse(res, 200, true, "Logout successful.");
   } catch (error: any) {

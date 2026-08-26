@@ -295,11 +295,8 @@ export const getAllHostsService = async ({
     case "user":
     case "host":
       filter.isBlocked = false;
-      // 🧠 CHANGED: Show hosts if they are 'isActive' (Available for calls) 
-      // even if socket (isOnline) is disconnected due to background.
-      // We will rely on Push Notifications to wake them.
       filter.isActive = true;
-      // filter.isOnline = true; // ❌ Removed strict online check
+      filter.isOnline = true; // Hide hosts on home screen when they log out or delete/uninstall the app
 
       // 🧠 Exclude the current host's own record
       if (userId) {
