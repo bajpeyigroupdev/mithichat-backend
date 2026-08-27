@@ -43,6 +43,9 @@ export function isLegacyPresetAvatarUrl(url: any): boolean {
   if (
     lower.includes('uploads/avatars/205766/') ||
     lower.includes('uploads/avatars/582737/') ||
+    lower.includes('dinjtxdtj/image/upload/') ||
+    lower.includes('728327_avatars') ||
+    lower.includes('1000000001_avatars') ||
     lower.includes('default_female') ||
     lower.includes('default_male') ||
     lower.includes('default_neutral')
