@@ -720,6 +720,20 @@ export const getDeviceLimits = async (req: AuthRequest, res: Response) => {
 
 export const updateDeviceLimit = async (req: AuthRequest, res: Response) => {
   try {
+    const userRole = (req.user as any)?.role;
+    const allowedRoles = ['owner', 'superAdmin', 'admin', 'operator'];
+    if (!userRole || !allowedRoles.includes(userRole)) {
+      return sendResponse(
+        res,
+        403,
+        false,
+        "Unauthorized: Only Admin, Owner or Operator can modify device registration limits.",
+        undefined,
+        undefined,
+        "UNAUTHORIZED"
+      );
+    }
+
     const { deviceId, maxAllowedAccounts, note } = req.body;
     if (!deviceId) {
       return sendResponse(res, 400, false, "Device ID is required");

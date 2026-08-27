@@ -13,6 +13,7 @@ import { verifyFirebasePhoneToken } from "../utils/firebasePhoneVerification";
 import { APP_ACCOUNT_ROLES } from "../utils/accountScope";
 import { DeviceLimit } from "../models/deviceLimit.model";
 import { getCachedSettings } from "./settingsController";
+import { checkAndLockDeviceRegistration } from "../services/deviceLimitService";
 
 // ==================== RESET PASSWORD ====================
 export const resetPassword = async (req: Request, res: Response) => {
@@ -117,27 +118,16 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
     }
 
     if (deviceId) {
-      const cleanDeviceId = String(deviceId).trim();
-      const customLimit = await DeviceLimit.findOne({ deviceId: cleanDeviceId });
-      const settings = await getCachedSettings();
-      const maxAllowed = customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1);
-
-      const existingDeviceAccounts = await User.countDocuments({
-        $or: [
-          { "device.createdDeviceId": cleanDeviceId },
-          { "device.currentDeviceId": cleanDeviceId },
-          { deviceId: cleanDeviceId }
-        ],
-        role: { $in: APP_ACCOUNT_ROLES },
-        isDeleted: false,
-      });
-
-      if (existingDeviceAccounts >= maxAllowed) {
+      const check = await checkAndLockDeviceRegistration(deviceId, undefined, false);
+      if (!check.allowed) {
         return sendResponse(
           res,
           400,
           false,
-          `Registration limit reached for this device (Limit: ${maxAllowed}). Contact Admin to increase your device registration limit.`
+          check.message || `Registration limit reached for this device (Limit: ${check.maxAllowed || 1}). Contact Admin to increase your device registration limit.`,
+          undefined,
+          undefined,
+          check.code || "DEVICE_REGISTRATION_LIMIT_REACHED"
         );
       }
     }
@@ -173,28 +163,16 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
         return sendResponse(res, 400, false, "deviceId is required for app users");
       }
 
-      // Check max account creation limit for this device (default 1)
-      const cleanDeviceId = String(deviceId).trim();
-      const customLimit = await DeviceLimit.findOne({ deviceId: cleanDeviceId });
-      const settings = await getCachedSettings();
-      const maxAllowed = customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1);
-
-      const existingDeviceAccounts = await User.countDocuments({
-        $or: [
-          { "device.createdDeviceId": cleanDeviceId },
-          { "device.currentDeviceId": cleanDeviceId },
-          { deviceId: cleanDeviceId }
-        ],
-        role: { $in: APP_ACCOUNT_ROLES },
-        isDeleted: false,
-      });
-
-      if (existingDeviceAccounts >= maxAllowed) {
+      const check = await checkAndLockDeviceRegistration(deviceId, undefined, true);
+      if (!check.allowed) {
         return sendResponse(
           res,
           400,
           false,
-          `Registration limit reached for this device (Limit: ${maxAllowed}). Contact Admin to increase your device registration limit.`
+          check.message || `Registration limit reached for this device (Limit: ${check.maxAllowed || 1}). Contact Admin to increase your device registration limit.`,
+          undefined,
+          undefined,
+          check.code || "DEVICE_REGISTRATION_LIMIT_REACHED"
         );
       }
     }
@@ -489,27 +467,16 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
     }
 
     if (userFrom === "app" && deviceId) {
-      const cleanDeviceId = String(deviceId).trim();
-      const customLimit = await DeviceLimit.findOne({ deviceId: cleanDeviceId });
-      const settings = await getCachedSettings();
-      const maxAllowed = customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1);
-
-      const existingDeviceAccounts = await User.countDocuments({
-        $or: [
-          { "device.createdDeviceId": cleanDeviceId },
-          { "device.currentDeviceId": cleanDeviceId },
-          { deviceId: cleanDeviceId }
-        ],
-        role: { $in: APP_ACCOUNT_ROLES },
-        isDeleted: false,
-      });
-
-      if (existingDeviceAccounts >= maxAllowed) {
+      const check = await checkAndLockDeviceRegistration(deviceId, undefined, true);
+      if (!check.allowed) {
         return sendResponse(
           res,
           400,
           false,
-          `Registration limit reached for this device (Limit: ${maxAllowed}). Contact Admin to increase your device registration limit.`
+          check.message || `Registration limit reached for this device (Limit: ${check.maxAllowed || 1}). Contact Admin to increase your device registration limit.`,
+          undefined,
+          undefined,
+          check.code || "DEVICE_REGISTRATION_LIMIT_REACHED"
         );
       }
     }
