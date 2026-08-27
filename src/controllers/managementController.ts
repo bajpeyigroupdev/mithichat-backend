@@ -52,7 +52,7 @@ export const getAllRooms = async (req: Request, res: Response, next: NextFunctio
         }
 
         const rooms = await Room.find(query)
-            .populate('ownerId', 'name email userId image')
+            .populate('ownerId', 'name email userId image gender')
             .skip((pageNum - 1) * limitNum)
             .limit(limitNum)
             .sort({ createdAt: -1 });
@@ -746,7 +746,7 @@ export const getAllAgencies = async (req: Request, res: Response, next: NextFunc
         }
 
         const agencies = await Agency.find(query)
-            .populate('ownerId', 'name email userId phoneNumber image agencyLogo referralCode specialCode')
+            .populate('ownerId', 'name email userId phoneNumber image gender agencyLogo referralCode specialCode')
             .sort({ createdAt: -1 });
 
         return sendResponse(res, 200, true, 'Agencies fetched successfully', agencies);

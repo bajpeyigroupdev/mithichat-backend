@@ -97,7 +97,7 @@ export const listAdmins = async (req: AuthRequest, res: Response) => {
 
     const [admins, total] = await Promise.all([
       User.find(matchStage)
-        .select('userId name email phoneNumber image role isBlocked isActive isOnline lastOnline coins diamonds createdAt country specialCode agencyId createdBy')
+        .select('userId name email phoneNumber image gender role isBlocked isActive isOnline lastOnline coins diamonds createdAt country specialCode agencyId createdBy')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(Number(limit))
@@ -362,7 +362,7 @@ export const getRecruitedMembers = async (req: Request, res: Response) => {
 
     const [members, total] = await Promise.all([
       User.find(matchStage)
-        .select('userId name email phoneNumber image role isBlocked isActive isOnline lastOnline coins diamonds createdAt country specialCode referralCode agencyId createdBy parentId operatorId superAdminId adminId')
+        .select('userId name email phoneNumber image gender role isBlocked isActive isOnline lastOnline coins diamonds createdAt country specialCode referralCode agencyId createdBy parentId operatorId superAdminId adminId')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)

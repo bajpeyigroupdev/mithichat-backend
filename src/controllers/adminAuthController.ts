@@ -680,7 +680,7 @@ export const getAdminRechargeHistory = async (req: AuthRequest, res: Response) =
         const allIds = [...new Set([...userIds, ...sellerIds])];
 
         const users = await User.find({ userId: { $in: allIds } })
-            .select('userId name email phoneNumber meethiId role image specialCode employeeCode')
+            .select('userId name email phoneNumber meethiId role image gender specialCode employeeCode')
             .lean();
         const userMap = new Map(users.map(u => [u.userId, u]));
 
