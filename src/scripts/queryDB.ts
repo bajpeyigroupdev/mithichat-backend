@@ -1,19 +1,20 @@
 import mongoose from 'mongoose';
-import HostLevel from '../models/hostLevel.model';
+import { User } from '../models/user.model';
 import { config } from '../configs/envConfig';
 
 async function run() {
   try {
     await mongoose.connect(config.MONGO_URI as string);
-    console.log("Connected to DB successfully!");
 
-    const levels = await HostLevel.find({}).sort({ level: 1 }).lean();
-    console.log("Host Levels count:", levels.length);
-    console.log("Host Levels data:", JSON.stringify(levels, null, 2));
+    const imagePatterns = await User.aggregate([
+      { $match: { isDeleted: false } },
+      { $group: { _id: { gender: "$gender", image: "$image" }, count: { $sum: 1 } } }
+    ]);
+    console.log("Image & Gender Patterns in DB:", JSON.stringify(imagePatterns, null, 2));
 
     process.exit(0);
   } catch (error) {
-    console.error("Error connecting or querying:", error);
+    console.error("Error querying DB:", error);
     process.exit(1);
   }
 }

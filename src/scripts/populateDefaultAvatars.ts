@@ -37,6 +37,21 @@ export function isValidAvatarUrl(url: any): boolean {
   return false;
 }
 
+export function isLegacyPresetAvatarUrl(url: any): boolean {
+  if (!url || typeof url !== 'string') return true;
+  const lower = url.trim().toLowerCase();
+  if (
+    lower.includes('uploads/avatars/205766/') ||
+    lower.includes('uploads/avatars/582737/') ||
+    lower.includes('default_female') ||
+    lower.includes('default_male') ||
+    lower.includes('default_neutral')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function getDefaultAvatarUrlByGender(gender: any): string {
   if (!gender || typeof gender !== 'string') return DEFAULT_NEUTRAL_AVATAR_URL;
   const g = gender.trim().toLowerCase();
@@ -62,22 +77,28 @@ export async function populateDefaultAvatarsForExistingUsers() {
     let skippedCustomCount = 0;
 
     for (const u of users) {
-      if (isValidAvatarUrl(u.image)) {
+      const isCustomValid = isValidAvatarUrl(u.image) && !isLegacyPresetAvatarUrl(u.image);
+
+      if (isCustomValid) {
         skippedCustomCount++;
         continue;
       }
 
       const defaultAvatar = getDefaultAvatarUrlByGender(u.gender);
-      await User.updateOne(
-        { _id: u._id },
-        { $set: { image: defaultAvatar } }
-      );
-      updatedCount++;
+      if (u.image !== defaultAvatar) {
+        await User.updateOne(
+          { _id: u._id },
+          { $set: { image: defaultAvatar } }
+        );
+        updatedCount++;
+      } else {
+        skippedCustomCount++;
+      }
     }
 
     console.log(`✅ Default Avatar Population Complete!`);
-    console.log(`   - Updated ${updatedCount} users without custom avatars.`);
-    console.log(`   - Preserved ${skippedCustomCount} users with valid custom avatars.`);
+    console.log(`   - Updated ${updatedCount} users with correct gender default avatars.`);
+    console.log(`   - Preserved ${skippedCustomCount} users with valid custom/correct avatars.`);
   } catch (error) {
     console.error("❌ Error populating default avatars:", error);
   }
