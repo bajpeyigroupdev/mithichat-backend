@@ -116,6 +116,32 @@ export const checkPhoneAvailability = async (req: Request, res: Response, next: 
       return sendResponse(res, 400, false, "Phone number already registered.");
     }
 
+    if (deviceId) {
+      const cleanDeviceId = String(deviceId).trim();
+      const customLimit = await DeviceLimit.findOne({ deviceId: cleanDeviceId });
+      const settings = await getCachedSettings();
+      const maxAllowed = customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1);
+
+      const existingDeviceAccounts = await User.countDocuments({
+        $or: [
+          { "device.createdDeviceId": cleanDeviceId },
+          { "device.currentDeviceId": cleanDeviceId },
+          { deviceId: cleanDeviceId }
+        ],
+        role: { $in: APP_ACCOUNT_ROLES },
+        isDeleted: false,
+      });
+
+      if (existingDeviceAccounts >= maxAllowed) {
+        return sendResponse(
+          res,
+          400,
+          false,
+          `Registration limit reached for this device (Limit: ${maxAllowed}). Contact Admin to increase your device registration limit.`
+        );
+      }
+    }
+
     return sendResponse(res, 200, true, "New device & phone. Send OTP for registration.");
   } catch (err) {
     await Logger("checkPhoneAvailability", err);
@@ -148,12 +174,17 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
       }
 
       // Check max account creation limit for this device (default 1)
-      const customLimit = await DeviceLimit.findOne({ deviceId });
+      const cleanDeviceId = String(deviceId).trim();
+      const customLimit = await DeviceLimit.findOne({ deviceId: cleanDeviceId });
       const settings = await getCachedSettings();
       const maxAllowed = customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1);
 
       const existingDeviceAccounts = await User.countDocuments({
-        "device.createdDeviceId": deviceId,
+        $or: [
+          { "device.createdDeviceId": cleanDeviceId },
+          { "device.currentDeviceId": cleanDeviceId },
+          { deviceId: cleanDeviceId }
+        ],
         role: { $in: APP_ACCOUNT_ROLES },
         isDeleted: false,
       });
@@ -163,7 +194,7 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
           res,
           400,
           false,
-          `Registration limit reached for this device (Max allowed: ${maxAllowed}). Contact support to allow more accounts.`
+          `Registration limit reached for this device (Limit: ${maxAllowed}). Contact Admin to increase your device registration limit.`
         );
       }
     }
@@ -177,11 +208,11 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
     let image = "";
     switch (gender) {
       case "male": {
-        image = "https://api.mithichat.live/uploads/avatars/205766/77c96d4c-7224-4e7f-893a-542e9727d232.jpg";
+        image = "https://api.mithichat.live/uploads/avatars/male_default.webp";
         break;
       }
       case "female": {
-        image = "https://api.mithichat.live/uploads/avatars/582737/83f0beef-e50a-4ab4-9302-1665a62a9dae.jpg";
+        image = "https://api.mithichat.live/uploads/avatars/female_default.webp";
         break;
       }
       default: {
@@ -457,14 +488,40 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
       });
     }
 
+    if (userFrom === "app" && deviceId) {
+      const cleanDeviceId = String(deviceId).trim();
+      const customLimit = await DeviceLimit.findOne({ deviceId: cleanDeviceId });
+      const settings = await getCachedSettings();
+      const maxAllowed = customLimit ? customLimit.maxAllowedAccounts : (settings?.defaultMaxAccountsPerDevice || 1);
+
+      const existingDeviceAccounts = await User.countDocuments({
+        $or: [
+          { "device.createdDeviceId": cleanDeviceId },
+          { "device.currentDeviceId": cleanDeviceId },
+          { deviceId: cleanDeviceId }
+        ],
+        role: { $in: APP_ACCOUNT_ROLES },
+        isDeleted: false,
+      });
+
+      if (existingDeviceAccounts >= maxAllowed) {
+        return sendResponse(
+          res,
+          400,
+          false,
+          `Registration limit reached for this device (Limit: ${maxAllowed}). Contact Admin to increase your device registration limit.`
+        );
+      }
+    }
+
     let image;
     switch (gender) {
       case "male": {
-        image = "https://api.mithichat.live/uploads/avatars/205766/77c96d4c-7224-4e7f-893a-542e9727d232.jpg";
+        image = "https://api.mithichat.live/uploads/avatars/male_default.webp";
         break;
       }
       case "female": {
-        image = "https://api.mithichat.live/uploads/avatars/582737/83f0beef-e50a-4ab4-9302-1665a62a9dae.jpg";
+        image = "https://api.mithichat.live/uploads/avatars/female_default.webp";
         break;
       }
       default: {
