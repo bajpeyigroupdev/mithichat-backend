@@ -41,6 +41,9 @@ export const completeProfile = async (req: AuthRequest, res: Response) => {
     if (!trimmedName) {
       return sendResponse(res, 400, false, "Name is required");
     }
+    if (trimmedName.length > 20) {
+      return sendResponse(res, 400, false, "Name cannot exceed 20 characters");
+    }
 
     // 2. Validate Username
     const trimmedUsername = String(username || '').trim();

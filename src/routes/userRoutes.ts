@@ -21,6 +21,7 @@ import {
   getCoinHistory,
   exchangeCoinsToDiamonds,
   requestDeletion,
+  checkUsernameAvailability,
 } from "../controllers/userController";
 
 import { verifyToken } from "../middlewares/authorize.middleware";
@@ -42,7 +43,8 @@ router.get("/referral/details", verifyToken, getReferralDetails);
 router.post("/referral/claim", verifyToken, claimReferralCode);
 
 // set user name for Authorized User
-router.post("/set-username", verifyToken, setUserName)
+router.post("/set-username", verifyToken, setUserName);
+router.get("/check-username", verifyToken, checkUsernameAvailability);
 
 router.post("/verify-phone", verifyToken, setVerifiedPhone)
 

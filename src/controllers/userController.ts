@@ -56,6 +56,26 @@ export const setUserName = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const checkUsernameAvailability = async (req: AuthRequest, res: Response) => {
+  try {
+    const rawUsername = String(req.query.username || '').trim();
+    if (!rawUsername) {
+      return sendResponse(res, 400, false, "Username is required");
+    }
+    const currentUserId = req.user?.userId;
+    const existing = await User.findOne({
+      userName: rawUsername,
+      userId: { $ne: Number(currentUserId) || -1 },
+    });
+    if (existing) {
+      return sendResponse(res, 200, true, "Username check complete", { available: false, message: "Username is already taken" });
+    }
+    return sendResponse(res, 200, true, "Username check complete", { available: true, message: "Username is available" });
+  } catch (error: any) {
+    return sendResponse(res, 500, false, error.message || "Failed to check username availability");
+  }
+};
+
 // email verification by authorized users
 export const emailVerification = async (req: AuthRequest, res: Response) => {
   try {
@@ -367,7 +387,7 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
     // Initialize with the specific interface for type safety
     const updatedFields: Partial<UserInterface> = {};
 
-    // ðŸ“ž Check for duplicate phoneNumber
+    // 📞 Check for duplicate phoneNumber
     if (phoneNumber && phoneNumber !== userToUpdate.phoneNumber) {
       const existingPhone = await User.findOne({ phoneNumber, isDeleted: false });
       if (existingPhone && existingPhone.userId !== userToUpdate.userId) { // Ensure it's not the same user
@@ -376,7 +396,17 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
       updatedFields.phoneNumber = phoneNumber;
     }
 
-    // ðŸ›¡ Role-based permissions for what fields can be updated
+    if (name !== undefined) {
+      const trimmedName = String(name).trim();
+      if (!trimmedName) {
+        return sendResponse(res, 400, false, "Name cannot be empty");
+      }
+      if (trimmedName.length > 20) {
+        return sendResponse(res, 400, false, "Name cannot exceed 20 characters");
+      }
+    }
+
+    // 🛡️ Role-based permissions for what fields can be updated
     switch (requesterRole) {
       case "owner":
       case "operator":
