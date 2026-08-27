@@ -294,9 +294,9 @@ export const getAllHostsService = async ({
 
     case "user":
     case "host":
-      filter.isBlocked = false;
-      filter.isActive = true;
-      filter.isOnline = true; // Hide hosts on home screen when they log out or delete/uninstall the app
+      filter.isBlocked = { $ne: true };
+      filter.isActive = { $ne: false };
+      // Show all active approved hosts sorted by online status
 
       // 🧠 Exclude the current host's own record
       if (userId) {
