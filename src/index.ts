@@ -137,6 +137,8 @@ app.use("/api/upload", UploadRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/seller", sellerRoutes);
 app.use("/api/v1/seller", sellerRoutes);
+app.use("/api/verifications", verificationRoutes);
+app.use("/api/v1/verifications", verificationRoutes);
 app.use("/api/v1/admin/verifications", adminVerificationRoutes);
 app.get("/api/admin/sellers/stock-requests", verifyToken, getAllStockRequestsAdmin);
 app.post("/api/admin/sellers/stock-requests/:id/approve", verifyToken, approveStockRequest);
