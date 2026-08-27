@@ -418,7 +418,8 @@ export const startCall = async (req: AuthRequest, res: Response) => {
 
     if (!liveCaller || callerDiamonds < CALL_RATE_PER_MINUTE) {
       console.log('[CALL] INSUFFICIENT DIAMONDS | CALL REJECTED BY BACKEND DB CHECK');
-      return sendResponse(res, 400, false, "INSUFFICIENT_DIAMONDS: You don't have enough Diamonds to start this call.", {
+      return sendResponse(res, 402, false, "INSUFFICIENT_DIAMONDS: Your Diamond balance is too low to start this call. Please recharge your Diamonds to continue.", {
+        code: 'INSUFFICIENT_DIAMONDS',
         errorCode: 'INSUFFICIENT_DIAMONDS',
         requiredBalance: CALL_RATE_PER_MINUTE,
         currentBalance: callerDiamonds,
