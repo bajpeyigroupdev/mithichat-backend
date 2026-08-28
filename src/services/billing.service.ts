@@ -114,12 +114,12 @@ export class BillingService {
                 meta?.callDiamondsPerMinute || fallbackSettings?.callRatePerMinute || CALL_DIAMONDS_PER_MINUTE
             ));
 
-            // Check if caller balance is 0 or completely exhausted mid-call
+            // Check if caller balance is less than call rate per minute (100 diamonds) mid-call
             const liveCaller = await User.findById(transaction.userId).select('coins diamonds').session(session).lean() as any;
             const callerBalance = Number(liveCaller?.coins || 0) + Number(liveCaller?.diamonds || 0);
 
-            if (callerBalance <= 0) {
-                console.log(`[CALL_BILLING] Caller ${transaction.userId} balance is 0 during active call ${transactionId}. Terminating call immediately.`);
+            if (callerBalance < callDiamondsPerMinute) {
+                console.log(`[CALL_BILLING] Caller ${transaction.userId} balance (${callerBalance}) is less than rate (${callDiamondsPerMinute}) during active call ${transactionId}. Terminating call immediately.`);
                 await session.abortTransaction();
 
                 const endResult = await BillingService.processCallEnd(transactionId, now, 0);
