@@ -25,6 +25,7 @@ export interface UserInterface extends Document {
   isOnline?: boolean;
   isBlocked?: boolean;
   lastOnline?: Date;
+  lastActiveAt?: Date;
   device: {
     createdDeviceId?: string;
     currentDeviceId?: string;

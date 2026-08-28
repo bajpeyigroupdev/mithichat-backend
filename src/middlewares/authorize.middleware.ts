@@ -65,6 +65,7 @@ export const verifyToken = async (req: AuthRequest, res: Response, next: NextFun
     const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
     if (!user.lastOnline || user.lastOnline.getTime() < fiveMinutesAgo) {
       user.lastOnline = new Date();
+      (user as any).lastActiveAt = new Date();
       await user.save();
     }
 

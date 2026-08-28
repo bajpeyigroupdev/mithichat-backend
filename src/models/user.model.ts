@@ -41,6 +41,7 @@ const userSchema = new Schema<UserInterface>(
     isOnline: { type: Boolean, default: false },
     isBlocked: { type: Boolean, default: false },
     lastOnline: { type: Date },
+    lastActiveAt: { type: Date, default: Date.now, index: true },
     device: { type: DeviceSchema, default: () => ({}) },
     googleId: { type: String, default: "" },
     language: { type: [String], default: [] },

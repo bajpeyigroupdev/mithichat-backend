@@ -298,6 +298,20 @@ export const getAllHostsService = async ({
       filter.isActive = { $ne: false };
       // Show all active approved hosts sorted by online status
 
+      // Mandatory Requirement: Hosts inactive for > 2 hours MUST be excluded from the host list, even if Id Manage toggle was left ON
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { lastActiveAt: { $gte: twoHoursAgo } },
+            { lastOnline: { $gte: twoHoursAgo } },
+            { updatedAt: { $gte: twoHoursAgo } },
+            { createdAt: { $gte: twoHoursAgo } }
+          ]
+        }
+      ];
+
       // 🧠 Exclude the current host's own record
       if (userId) {
         // Handle both ObjectId string and Numeric userId
