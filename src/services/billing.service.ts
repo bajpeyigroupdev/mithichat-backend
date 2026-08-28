@@ -2,23 +2,281 @@ import mongoose, { ClientSession, Types } from 'mongoose';
 import { CoinsTransaction } from '../models/spentCoinModel';
 import { User } from '../models/user.model';
 import { CallStatus, TransactionType } from '../constants/user';
-import { updateBalance } from './coins.service';
 import Conversation from '../models/conversation.model';
 import HostLevel from '../models/hostLevel.model';
 import { recalculateAndUpdateHostLevel } from './user.service';
 import { getCachedSettings } from '../controllers/settingsController';
+import { getIO, getUserRoom } from '../sockets';
 import {
     CALL_DIAMONDS_PER_MINUTE,
     HOST_LEVEL_COINS_PER_MINUTE,
 } from '../configs/monetization';
 
+/**
+ * Atomically deducts specified diamond/coin amount from user balance.
+ * Uses atomic MongoDB condition to guarantee balance >= amount and prevent negative balance.
+ * Handles diamond-only wallets (coins = 0) cleanly without requiring non-zero coins.
+ */
+export async function deductUserWalletAtomic(
+    userId: Types.ObjectId | string,
+    amount: number,
+    session?: ClientSession
+): Promise<{ success: boolean; coinsDeduct: number; diamondsDeduct: number }> {
+    if (amount <= 0) return { success: true, coinsDeduct: 0, diamondsDeduct: 0 };
+
+    const query = User.findById(userId);
+    if (session) query.session(session);
+    const user = await query.lean();
+
+    if (!user) return { success: false, coinsDeduct: 0, diamondsDeduct: 0 };
+
+    const availableCoins = Math.max(0, Number((user as any).coins || 0));
+    const availableDiamonds = Math.max(0, Number((user as any).diamonds || 0));
+
+    if (availableCoins + availableDiamonds < amount) {
+        return { success: false, coinsDeduct: 0, diamondsDeduct: 0 };
+    }
+
+    const coinsDeduct = Math.min(availableCoins, amount);
+    const remaining = amount - coinsDeduct;
+    const diamondsDeduct = Math.min(availableDiamonds, remaining);
+
+    const updateFilter: any = { _id: userId };
+    const updateInc: any = {};
+
+    if (coinsDeduct > 0) {
+        updateFilter.coins = { $gte: coinsDeduct };
+        updateInc.coins = -coinsDeduct;
+    }
+
+    if (diamondsDeduct > 0) {
+        updateFilter.diamonds = { $gte: diamondsDeduct };
+        updateInc.diamonds = -diamondsDeduct;
+    }
+
+    let updatedUser: any = null;
+    if (session) {
+        updatedUser = await User.findOneAndUpdate(updateFilter, { $inc: updateInc }, { session, new: true });
+    } else {
+        updatedUser = await User.findOneAndUpdate(updateFilter, { $inc: updateInc }, { new: true });
+    }
+
+    if (!updatedUser) {
+        return { success: false, coinsDeduct: 0, diamondsDeduct: 0 };
+    }
+
+    return { success: true, coinsDeduct, diamondsDeduct };
+}
+
 export class BillingService {
 
+    /**
+     * Mid-call per-minute diamond block billing.
+     * Enforces 100 diamonds / minute ceiling calculation: billableMinutes = Math.ceil(durationSeconds / 60).
+     * Atomically secures 100 diamonds for each started minute.
+     * Immediately terminates call if caller balance is insufficient for next minute.
+     */
+    static async processActiveCallBilling(
+        transactionId: string | Types.ObjectId,
+        retryAttempt: number = 0
+    ): Promise<{ success: boolean; terminated?: boolean; billedMinutes?: number }> {
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            const transaction = await CoinsTransaction.findById(transactionId).session(session);
+            if (!transaction) {
+                await session.abortTransaction();
+                return { success: false };
+            }
+
+            const activeStatuses = [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED];
+            if (!activeStatuses.includes(transaction.status)) {
+                await session.abortTransaction();
+                return { success: true };
+            }
+
+            const now = new Date();
+            const callStart = transaction.callStart || now;
+            if (!transaction.callStart) {
+                transaction.callStart = now;
+            }
+
+            const elapsedSec = Math.max(1, Math.ceil((now.getTime() - new Date(callStart).getTime()) / 1000));
+            const requiredBilledMinutes = Math.ceil(elapsedSec / 60);
+
+            const meta = (transaction.meta || {}) as any;
+            let currentlyBilledMinutes = Number(meta.billedMinutes || 0);
+            let alreadyBilledAmount = Number(meta.alreadyBilledAmount || 0);
+
+            const fallbackSettings = meta?.callDiamondsPerMinute ? null : await getCachedSettings();
+            const callDiamondsPerMinute = Math.max(1, Number(
+                meta?.callDiamondsPerMinute || fallbackSettings?.callRatePerMinute || CALL_DIAMONDS_PER_MINUTE
+            ));
+
+            // Check if caller balance is 0 or completely exhausted mid-call
+            const liveCaller = await User.findById(transaction.userId).select('coins diamonds').session(session).lean() as any;
+            const callerBalance = Number(liveCaller?.coins || 0) + Number(liveCaller?.diamonds || 0);
+
+            if (callerBalance <= 0) {
+                console.log(`[CALL_BILLING] Caller ${transaction.userId} balance is 0 during active call ${transactionId}. Terminating call immediately.`);
+                await session.abortTransaction();
+
+                const endResult = await BillingService.processCallEnd(transactionId, now, 0);
+
+                try {
+                    const io = getIO();
+                    if (io && typeof io.to === 'function') {
+                        const endPayload = {
+                            transactionId: String(transactionId),
+                            reason: 'INSUFFICIENT_DIAMONDS',
+                            errorCode: 'INSUFFICIENT_DIAMONDS',
+                            message: 'Call ended due to insufficient diamonds.',
+                            duration: endResult.data?.duration || elapsedSec,
+                        };
+                        const txRef = await CoinsTransaction.findById(transactionId).select('userId hostId').lean() as any;
+                        if (txRef) {
+                            const callerDoc = await User.findById(txRef.userId).select('_id userId meethiId').lean();
+                            const hostDoc = await User.findById(txRef.hostId).select('_id userId meethiId').lean();
+
+                            const callerRooms = [
+                                `user:${txRef.userId}`,
+                                ...(callerDoc?.userId ? [`user:${callerDoc.userId}`] : []),
+                                ...(callerDoc?.meethiId ? [`user:${callerDoc.meethiId}`] : [])
+                            ];
+                            const hostRooms = [
+                                `user:${txRef.hostId}`,
+                                ...(hostDoc?.userId ? [`user:${hostDoc.userId}`] : []),
+                                ...(hostDoc?.meethiId ? [`user:${hostDoc.meethiId}`] : [])
+                            ];
+
+                            callerRooms.forEach(room => io.to(room).emit('callEnded', endPayload));
+                            hostRooms.forEach(room => io.to(room).emit('callEnded', endPayload));
+                        }
+                        io.to(`call:${String(transactionId)}`).emit('callEnded', endPayload);
+                    }
+                } catch (e) {
+                    console.error('Socket emit error on call termination:', e);
+                }
+
+                return { success: false, terminated: true, billedMinutes: currentlyBilledMinutes };
+            }
+
+            if (currentlyBilledMinutes >= requiredBilledMinutes) {
+                await transaction.save({ session });
+                await session.commitTransaction();
+                return { success: true, billedMinutes: currentlyBilledMinutes };
+            }
+
+            // Process minute blocks sequentially from currentlyBilledMinutes + 1 to requiredBilledMinutes
+            for (let m = currentlyBilledMinutes + 1; m <= requiredBilledMinutes; m++) {
+                const deductResult = await deductUserWalletAtomic(transaction.userId, callDiamondsPerMinute, session);
+
+                if (!deductResult.success) {
+                    // Caller cannot afford minute block m!
+                    console.log(`[CALL_BILLING] Insufficient balance for call ${transactionId} at minute ${m}. Terminating call.`);
+                    await session.abortTransaction();
+
+                    // Terminate call cleanly via processCallEnd
+                    const endResult = await BillingService.processCallEnd(transactionId, now, 0);
+
+                    // Notify caller & host sockets across all room aliases
+                    try {
+                        const io = getIO();
+                        if (io && typeof io.to === 'function') {
+                            const endPayload = {
+                                transactionId: String(transactionId),
+                                reason: 'INSUFFICIENT_DIAMONDS',
+                                errorCode: 'INSUFFICIENT_DIAMONDS',
+                                message: 'Call ended due to insufficient diamonds.',
+                                duration: endResult.data?.duration || elapsedSec,
+                            };
+                            const txRef = await CoinsTransaction.findById(transactionId).select('userId hostId').lean() as any;
+                            if (txRef) {
+                                const callerDoc = await User.findById(txRef.userId).select('_id userId meethiId').lean();
+                                const hostDoc = await User.findById(txRef.hostId).select('_id userId meethiId').lean();
+
+                                const callerRooms = [
+                                    `user:${txRef.userId}`,
+                                    ...(callerDoc?.userId ? [`user:${callerDoc.userId}`] : []),
+                                    ...(callerDoc?.meethiId ? [`user:${callerDoc.meethiId}`] : [])
+                                ];
+                                const hostRooms = [
+                                    `user:${txRef.hostId}`,
+                                    ...(hostDoc?.userId ? [`user:${hostDoc.userId}`] : []),
+                                    ...(hostDoc?.meethiId ? [`user:${hostDoc.meethiId}`] : [])
+                                ];
+
+                                callerRooms.forEach(room => io.to(room).emit('callEnded', endPayload));
+                                hostRooms.forEach(room => io.to(room).emit('callEnded', endPayload));
+                            }
+                            io.to(`call:${String(transactionId)}`).emit('callEnded', endPayload);
+                        }
+                    } catch (e) {
+                        console.error('Socket emit error on call termination:', e);
+                    }
+
+                    return { success: false, terminated: true, billedMinutes: m - 1 };
+                }
+
+                currentlyBilledMinutes = m;
+                alreadyBilledAmount += callDiamondsPerMinute;
+            }
+
+            transaction.coinsSpent = alreadyBilledAmount;
+            transaction.meta = {
+                ...(transaction.meta || {}),
+                billedMinutes: currentlyBilledMinutes,
+                alreadyBilledAmount,
+                callDiamondsPerMinute,
+            };
+
+            await transaction.save({ session });
+            await session.commitTransaction();
+
+            // Emit real-time updated balance to Caller across all room aliases
+            try {
+                const liveCaller = await User.findById(transaction.userId).select('coins diamonds userId meethiId').lean() as any;
+                if (liveCaller) {
+                    const io = getIO();
+                    if (io && typeof io.to === 'function') {
+                        const callerRooms = [
+                            `user:${transaction.userId}`,
+                            ...(liveCaller?.userId ? [`user:${liveCaller.userId}`] : []),
+                            ...(liveCaller?.meethiId ? [`user:${liveCaller.meethiId}`] : [])
+                        ];
+                        const balPayload = {
+                            userId: String(transaction.userId),
+                            coins: Number(liveCaller.coins || 0),
+                            diamonds: Number(liveCaller.diamonds || 0),
+                            totalBalance: Number(liveCaller.coins || 0) + Number(liveCaller.diamonds || 0),
+                        };
+                        callerRooms.forEach(room => io.to(room).emit('balanceUpdated', balPayload));
+                    }
+                }
+            } catch (e) {
+                console.error('Socket balance emit error:', e);
+            }
+
+            return { success: true, billedMinutes: currentlyBilledMinutes };
+        } catch (error: any) {
+            if (session.inTransaction()) await session.abortTransaction();
+            const isTransient = (error.hasErrorLabel && error.hasErrorLabel('TransientTransactionError')) || error.code === 112 || error.code === 11000;
+            if (isTransient && retryAttempt < 3) {
+                await new Promise(resolve => setTimeout(resolve, 60 * (retryAttempt + 1)));
+                return BillingService.processActiveCallBilling(transactionId, retryAttempt + 1);
+            }
+            console.error('Error in processActiveCallBilling:', error);
+            return { success: false };
+        } finally {
+            session.endSession();
+        }
+    }
 
     /**
-     * Process the end of a call with ACID properties (Atomicity).
+     * Process the end of a call with ACID properties (Atomicity & Idempotency).
      * Ensures money is deducted ONLY if the transaction status can be updated.
-     * Prevents double-billing and negative balances.
+     * Prevents double-billing, duplicate host earnings, and negative balances.
      */
     static async processCallEnd(
         transactionId: string | Types.ObjectId,
@@ -35,7 +293,7 @@ export class BillingService {
         session.startTransaction();
 
         try {
-            // 1. Fetch Transaction with Write Lock (simulated by finding it within session)
+            // 1. Fetch Transaction
             const transaction = await CoinsTransaction.findById(transactionId).session(session);
 
             if (!transaction) {
@@ -86,8 +344,6 @@ export class BillingService {
             }
 
             // 4. Calculate Duration & Cost
-            // Store the actual connected duration. Ceil avoids a connected sub-second
-            // call being recorded as zero seconds.
             const serverDurationSec = Math.max(
                 1,
                 Math.ceil(
@@ -108,17 +364,14 @@ export class BillingService {
                 maxPossibleDurationSec,
                 serverDurationSec + 20
             );
-            // When the app reports its connected-call timer, use it as the
-            // authoritative duration after validation. Server receipt time can
-            // include HTTP/socket teardown delay after the visible timer stops.
+
             const durationSec =
                 normalizedReportedDuration > 0
                     ? safeReportedDurationSec
                     : serverDurationSec;
             const billedMinutes = Math.ceil(durationSec / 60);
 
-            // ===== Level-based host earning =====
-            // Recalculate and update host's current level, then find coinPerMinute from HostLevel config
+            // Level-based host earning
             const hostLevel = await recalculateAndUpdateHostLevel(transaction.hostId, session);
             const hostLevelConfig = await HostLevel.findOne({ level: hostLevel }).session(session).lean() as any;
 
@@ -127,18 +380,57 @@ export class BillingService {
                 HOST_LEVEL_COINS_PER_MINUTE[hostLevel] ??
                 HOST_LEVEL_COINS_PER_MINUTE[1];
             const HOST_SHARE_PER_SECOND = hostSharePerMinute / 60;
-            console.log(`📊 Host Lv.${hostLevel} → coinPerMinute: ${hostSharePerMinute}`);
-            // ====================================
 
-            // Caller pays per started minute, while host earning stays proportional
-            // to the exact connected seconds at the configured level rate.
-            const startMeta = transaction.meta as any;
+            const startMeta = (transaction.meta || {}) as any;
             const fallbackSettings = startMeta?.callDiamondsPerMinute ? null : await getCachedSettings();
             const callDiamondsPerMinute = Math.max(1, Number(
                 startMeta?.callDiamondsPerMinute || fallbackSettings?.callRatePerMinute || CALL_DIAMONDS_PER_MINUTE
             ));
-            const coinsSpent = billedMinutes * callDiamondsPerMinute;
+
+            const totalCallCost = billedMinutes * callDiamondsPerMinute;
+            const alreadyBilledAmount = Number(startMeta?.alreadyBilledAmount || 0);
+
+            let netDeductRemaining = totalCallCost - alreadyBilledAmount;
+
+            if (netDeductRemaining > 0 && durationSec > 0) {
+                const deductRes = await deductUserWalletAtomic(transaction.userId, netDeductRemaining, session);
+                if (!deductRes.success) {
+                    // Partial deduction if balance ran out mid-minute
+                    const user = await User.findById(transaction.userId).session(session);
+                    if (user) {
+                        const availCoins = Math.max(0, Number(user.coins || 0));
+                        const availDiamonds = Math.max(0, Number(user.diamonds || 0));
+                        const pCoins = Math.min(availCoins, netDeductRemaining);
+                        const pRem = netDeductRemaining - pCoins;
+                        const pDiamonds = Math.min(availDiamonds, pRem);
+
+                        if (pCoins > 0 || pDiamonds > 0) {
+                            await User.findByIdAndUpdate(
+                                transaction.userId,
+                                { $inc: { coins: -pCoins, diamonds: -pDiamonds } },
+                                { session }
+                            );
+                        }
+                        transaction.coinsSpent = alreadyBilledAmount + pCoins + pDiamonds;
+                    }
+                } else {
+                    transaction.coinsSpent = totalCallCost;
+                }
+            } else {
+                transaction.coinsSpent = alreadyBilledAmount || totalCallCost;
+            }
+
             const hostEarning = Math.round(durationSec * HOST_SHARE_PER_SECOND);
+            transaction.hostEarning = hostEarning;
+
+            // Host earns coins exactly once (idempotent check)
+            if (hostEarning > 0 && !startMeta?.hostEarningsCredited) {
+                await User.findByIdAndUpdate(
+                    transaction.hostId,
+                    { $inc: { coins: hostEarning } },
+                    { session }
+                );
+            }
 
             // 5. Update Transaction State
             transaction.callEnd = callEndTime;
@@ -149,10 +441,9 @@ export class BillingService {
             }
             transaction.status = CallStatus.ENDED;
             transaction.duration = durationSec;
-            transaction.coinsSpent = coinsSpent;
-            transaction.hostEarning = hostEarning;
             transaction.meta = {
                 ...(transaction.meta || {}),
+                hostEarningsCredited: true,
                 billing: {
                     hostLevel,
                     hostCoinPerMinute: hostSharePerMinute,
@@ -164,60 +455,27 @@ export class BillingService {
                 },
             };
 
-            // 6. Deduct from User (coins first, then diamonds)
-            if (durationSec > 0 && coinsSpent > 0) {
-                const user = await User.findById(transaction.userId).session(session);
-                if (user) {
-                    let remaining = coinsSpent;
-                    let coinsDeduct = Math.min(user.coins || 0, remaining);
-                    remaining -= coinsDeduct;
-                    let diamondsDeduct = Math.min(user.diamonds || 0, remaining);
-
-                    await User.findByIdAndUpdate(
-                        transaction.userId,
-                        {
-                            $inc: {
-                                coins: -coinsDeduct,
-                                diamonds: -diamondsDeduct,
-                            }
-                        },
-                        { session }
-                    );
-
-                    transaction.coinsSpent = coinsDeduct + diamondsDeduct;
-                }
-
-                // Host earns coins
-                if (transaction.hostEarning > 0) {
-                    await User.findByIdAndUpdate(
-                        transaction.hostId,
-                        { $inc: { coins: transaction.hostEarning } },
-                        { session }
-                    );
-                }
-            }
-
             await transaction.save({ session });
             await BillingService.releaseHost(transaction.hostId, session);
 
             await session.commitTransaction();
 
-            // Evaluate 2-Step Referral 5-minute call milestone
+            // Evaluate Referral Milestone (post-commit)
             if (durationSec > 0) {
                 const { evaluateReferralCallMilestone } = await import('./referralMilestoneService');
                 if (transaction.userId) {
-                    evaluateReferralCallMilestone(transaction.userId, durationSec, transaction._id, session).catch(err =>
+                    evaluateReferralCallMilestone(transaction.userId, durationSec, transaction._id).catch(err =>
                         console.error("Failed to evaluate referral call milestone (user):", err)
                     );
                 }
                 if (transaction.hostId) {
-                    evaluateReferralCallMilestone(transaction.hostId, durationSec, transaction._id, session).catch(err =>
+                    evaluateReferralCallMilestone(transaction.hostId, durationSec, transaction._id).catch(err =>
                         console.error("Failed to evaluate referral call milestone (host):", err)
                     );
                 }
             }
 
-            // 7. Post-commit: Check if chat should be enabled (10-minute rule)
+            // Enable chat rule
             this.checkAndEnableChat(transaction.userId, transaction.hostId).catch(err =>
                 console.error("Failed to enable chat after call:", err)
             );
@@ -235,8 +493,9 @@ export class BillingService {
             };
         } catch (error: any) {
             if (session.inTransaction()) await session.abortTransaction();
-            if (error.code === 11000 || retryAttempt < 3) {
-                await new Promise(resolve => setTimeout(resolve, 80 * (retryAttempt + 1)));
+            const isTransient = (error.hasErrorLabel && error.hasErrorLabel('TransientTransactionError')) || error.code === 112 || error.code === 11000;
+            if (isTransient && retryAttempt < 3) {
+                await new Promise(resolve => setTimeout(resolve, 60 * (retryAttempt + 1)));
                 return BillingService.processCallEnd(
                     transactionId,
                     callEndTime,
@@ -273,6 +532,10 @@ export class BillingService {
                     }
                 ]
             );
+
+            // Await active call billing check
+            await BillingService.processActiveCallBilling(transactionId);
+
             return true;
         } catch (e) {
             console.error("Pulse Failed:", e);
@@ -290,7 +553,6 @@ export class BillingService {
         try {
             if (!userId || !hostId) return;
 
-            // Check total duration
             const transactions = await CoinsTransaction.find({
                 $or: [
                     { userId, hostId, type: TransactionType.VOICE_CALL },
@@ -301,8 +563,7 @@ export class BillingService {
 
             const totalDuration = transactions.reduce((sum, t) => sum + (Number(t.duration) || 0), 0);
 
-            if (totalDuration >= 120) { // 2 minutes (Testing)
-                // Check if conversation exists
+            if (totalDuration >= 120) {
                 const conversation = await Conversation.findOne({
                     participants: { $all: [userId, hostId] }
                 });

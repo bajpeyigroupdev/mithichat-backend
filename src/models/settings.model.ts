@@ -17,6 +17,8 @@ export interface ISettings extends Document {
     welcomeRewardDiamonds: number;
     referralRewardDiamonds: number;
     defaultMaxAccountsPerDevice: number;
+    minimumSupportedVersion: number;
+    latestVersionCode: number;
     agoraAppId: string;
     agoraCertificateEncrypted: string;
     privacyPolicy: string;
@@ -40,6 +42,8 @@ const SettingsSchema = new Schema<ISettings>({
     welcomeRewardDiamonds: { type: Number, default: 100, min: 0 },
     referralRewardDiamonds: { type: Number, default: 50, min: 0 },
     defaultMaxAccountsPerDevice: { type: Number, default: 1, min: 1 },
+    minimumSupportedVersion: { type: Number, default: 1, min: 1 },
+    latestVersionCode: { type: Number, default: 27, min: 1 },
     agoraAppId: { type: String, default: '', trim: true },
     agoraCertificateEncrypted: { type: String, default: '', select: false },
     privacyPolicy: {

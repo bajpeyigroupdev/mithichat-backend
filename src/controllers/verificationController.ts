@@ -337,9 +337,13 @@ const listRequests = async (req: AuthRequest, res: Response, type: "FACE" | "KYC
   if (scoped) filter.userId = { $in: scoped };
   const search = String(req.query.search || "").trim();
   if (search) {
+    const escapedSearch = search.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+    const searchRegex = new RegExp(escapedSearch, "i");
+    const numSearch = Number(search);
     const users = await User.find({ $or: [
-      { name: new RegExp(search, "i") }, { userName: new RegExp(search, "i") },
-      { meethiId: new RegExp(search, "i") }, { phoneNumber: new RegExp(search, "i") },
+      { name: searchRegex }, { userName: searchRegex },
+      { meethiId: searchRegex }, { phoneNumber: searchRegex },
+      ...(isNaN(numSearch) ? [] : [{ userId: numSearch }])
     ] }).select("_id");
     filter.userId = { $in: users.map(u => u._id).filter(id => !scoped || scoped.some(s => String(s) === String(id))) };
   }

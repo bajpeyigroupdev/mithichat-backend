@@ -645,8 +645,9 @@ export const getAdminRechargeHistory = async (req: AuthRequest, res: Response) =
 
         if (search) {
             const s = String(search).trim();
+            const escapedS = s.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
             const numSearch = !isNaN(Number(s)) ? Number(s) : null;
-            const searchRegex = new RegExp(s, 'i');
+            const searchRegex = new RegExp(escapedS, 'i');
 
             const matchingUsers = await User.find({
                 $or: [

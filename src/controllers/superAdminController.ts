@@ -26,8 +26,19 @@ export const listSuperAdmins = async (req: AuthRequest, res: Response) => {
     if (status === 'active') matchStage.isBlocked = false;
     if (status === 'suspended') matchStage.isBlocked = true;
     if (search) {
-      const q = new RegExp(String(search), 'i');
-      matchStage.$and.push({ $or: [{ name: q }, { email: q }, { phoneNumber: q }] });
+      const searchStr = String(search).trim();
+      const escapedSearch = searchStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const q = new RegExp(escapedSearch, 'i');
+      const searchNum = Number(searchStr);
+      matchStage.$and.push({
+        $or: [
+          { name: q },
+          { email: q },
+          { phoneNumber: q },
+          { meethiId: q },
+          ...(isNaN(searchNum) ? [] : [{ userId: searchNum }])
+        ]
+      });
     }
 
     const thirtyDaysAgo = new Date();

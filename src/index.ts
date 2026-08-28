@@ -282,12 +282,10 @@ const startServer = async () => {
 };
 
 import { startCallCleanupJob, startChatWorker, startWeeklyHostLevelJob } from "./services/cron.service";
-import { populateDefaultAvatarsForExistingUsers } from "./scripts/populateDefaultAvatars";
 
 startServer().then(() => {
   // Database-backed workers start only after MongoDB is ready.
   startCallCleanupJob();
   startChatWorker();
   startWeeklyHostLevelJob();
-  populateDefaultAvatarsForExistingUsers().catch(err => console.error("Error populating default avatars:", err));
 });

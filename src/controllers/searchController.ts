@@ -13,7 +13,10 @@ export const globalSearch = async (req: Request, res: Response) => {
             return sendResponse(res, 200, true, 'Query string too short', { results: [] });
         }
 
-        const regex = new RegExp(queryStr, 'i');
+        const escapedQuery = queryStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+        const regex = new RegExp(escapedQuery, 'i');
+        const numQuery = !isNaN(Number(queryStr)) ? Number(queryStr) : null;
+
         const userOrConditions: any[] = [
             { name: regex },
             { email: regex },
@@ -21,7 +24,8 @@ export const globalSearch = async (req: Request, res: Response) => {
             { employeeCode: regex },
             { specialCode: regex },
             { meethiId: regex },
-            { referralCode: regex }
+            { referralCode: regex },
+            ...(numQuery ? [{ userId: numQuery }] : [])
         ];
 
         // If queryStr is a valid Mongo ObjectId, search by _id as well

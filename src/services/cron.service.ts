@@ -32,6 +32,15 @@ export const startCallCleanupJob = () => {
             const fiveMinutesAgo = new Date(now.getTime() - 5 * 60000);
             const twoMinutesAgo = new Date(now.getTime() - 2 * 60000);
 
+            // 0. Active Call Per-Minute Billing & Balance Check
+            const activeCalls = await CoinsTransaction.find({
+                status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
+            }).select('_id status callStart meta userId hostId').lean();
+
+            for (const activeCall of activeCalls) {
+                await BillingService.processActiveCallBilling(activeCall._id as any);
+            }
+
             // Enforce purchased call duration after a server restart or if an
             // in-memory deadline timer was lost. Billing uses the exact limit,
             // not the few extra seconds until this cron tick.

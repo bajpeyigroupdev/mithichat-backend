@@ -8,6 +8,7 @@ import { CallStatus, TransactionType } from "../constants/user";
 import mongoose from "mongoose";
 import { getIO, getUserRoom } from "../sockets";
 import { getCachedSettings } from "./settingsController";
+import { deductUserWalletAtomic } from "../services/billing.service";
 
 const DEFAULT_COMMISSION_PERCENT = 30;
 
@@ -46,7 +47,10 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         }
 
         const totalCost = giftDoc.cost * qty;
-        const sender = await User.findById(senderId).session(session);
+        const sender = mongoose.Types.ObjectId.isValid(String(senderId))
+            ? await User.findById(senderId).session(session)
+            : await User.findOne({ $or: [{ userId: Number(senderId) || 0 }, { meethiId: String(senderId) }] }).session(session);
+
         if (!sender) {
             await session.abortTransaction();
             return sendResponse(res, 404, false, "Sender not found");
@@ -54,12 +58,12 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
 
         let receiverId: string | mongoose.Types.ObjectId | null = null;
         let callTransaction: any = null;
-        let rawReceiverId = req.body.receiverId || req.body.receiver || req.body.recipientId;
+        let rawReceiverId = req.body.receiverId || req.body.receiver || req.body.recipientId || req.body.hostId;
 
         if (callId) {
             callTransaction = await CoinsTransaction.findById(callId).session(session);
             if (callTransaction) {
-                receiverId = String(callTransaction.userId) === String(senderId)
+                receiverId = String(callTransaction.userId) === String(sender._id)
                     ? callTransaction.hostId
                     : callTransaction.userId;
             }
@@ -74,11 +78,26 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             return sendResponse(res, 400, false, "Receiver not found for gift");
         }
 
-        const receiver = await User.findById(receiverId).session(session);
+        let receiver: any = null;
+        if (mongoose.Types.ObjectId.isValid(String(receiverId))) {
+            receiver = await User.findById(receiverId).session(session);
+        }
+        if (!receiver) {
+            const numId = Number(receiverId);
+            receiver = await User.findOne({
+                $or: [
+                    ...(isNaN(numId) ? [] : [{ userId: numId }]),
+                    { meethiId: String(receiverId) }
+                ]
+            }).session(session);
+        }
+
         if (!receiver) {
             await session.abortTransaction();
             return sendResponse(res, 404, false, "Gift recipient not found");
         }
+
+        const realReceiverId = receiver._id;
 
         const systemSettings = await getCachedSettings();
         const giftCommissionPercent = Math.max(
@@ -89,54 +108,35 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         const hostEarning = Math.round(totalCost * hostEarningShare);
         const platformCommission = Math.max(0, totalCost - hostEarning);
 
-        const activeStatuses = [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED, CallStatus.RINGING];
-        const callRate = Number((callTransaction?.meta as any)?.callDiamondsPerMinute || 100);
-        const reservedCoinsForCall =
-            callTransaction &&
-            String(callTransaction.userId) === String(senderId) &&
-            activeStatuses.includes(callTransaction.status)
-                ? callRate
-                : 0;
-
-        const totalBalance = Number(sender.coins || 0) + Number(sender.diamonds || 0);
-        const spendableBalance = Math.max(0, totalBalance - reservedCoinsForCall);
-
-        if (totalBalance < totalCost) {
+        // Deduct from Sender atomically (coins first, then diamonds)
+        const deductResult = await deductUserWalletAtomic(sender._id, totalCost, session);
+        if (!deductResult.success) {
             await session.abortTransaction();
             return sendResponse(
                 res,
                 400,
                 false,
-                "Insufficient coins to send this gift"
+                "INSUFFICIENT_DIAMONDS: Insufficient balance to send this gift",
+                { code: 'INSUFFICIENT_DIAMONDS', errorCode: 'INSUFFICIENT_DIAMONDS' }
             );
         }
 
-        // Deduct from Sender (coins first, then diamonds)
-        let remainingDeduct = totalCost;
-        let coinsDeduct = Math.min(sender.coins || 0, remainingDeduct);
-        remainingDeduct -= coinsDeduct;
-        let diamondsDeduct = Math.min(sender.diamonds || 0, remainingDeduct);
-
-        sender.coins = (sender.coins || 0) - coinsDeduct;
-        sender.diamonds = (sender.diamonds || 0) - diamondsDeduct;
-        await sender.save({ session });
-
-        // Add to Receiver (Host earns coins)
+        const updatedSender = await User.findById(sender._id).session(session) as any;
         let updatedReceiver: any = null;
         if (hostEarning > 0) {
             updatedReceiver = await User.findByIdAndUpdate(
-                receiverId,
+                realReceiverId,
                 { $inc: { coins: hostEarning } },
                 { session, new: true }
             );
         } else {
-            updatedReceiver = await User.findById(receiverId).session(session);
+            updatedReceiver = await User.findById(realReceiverId).session(session);
         }
 
         // Record Transaction
         await CoinsTransaction.create([{
             userId: sender._id,
-            hostId: receiverId,
+            hostId: realReceiverId,
             type: TransactionType.GIFT_SENT || 'gift_sent',
             coinsSpent: totalCost,
             hostEarning,
@@ -149,7 +149,9 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         const giftPayload = {
             callId: callId ? String(callId) : '',
             senderId: String(sender._id),
-            receiverId: String(receiverId),
+            senderUserId: sender.userId,
+            receiverId: String(realReceiverId),
+            receiverUserId: receiver.userId,
             giftId: String(giftDoc._id),
             name: giftDoc.name,
             icon: giftDoc.icon,
@@ -162,31 +164,71 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         };
 
         const io = getIO();
-        io.to(getUserRoom(String(receiverId))).emit('giftReceived', giftPayload);
-        io.to(getUserRoom(String(sender._id))).emit('giftReceived', giftPayload);
+        const receiverRooms = [
+            `user:${realReceiverId}`,
+            ...(receiver.userId ? [`user:${receiver.userId}`] : []),
+            ...(receiver.meethiId ? [`user:${receiver.meethiId}`] : [])
+        ];
+        const senderRooms = [
+            `user:${sender._id}`,
+            ...(sender.userId ? [`user:${sender.userId}`] : []),
+            ...(sender.meethiId ? [`user:${sender.meethiId}`] : [])
+        ];
+
+        receiverRooms.forEach(room => io.to(room).emit('giftReceived', giftPayload));
+        senderRooms.forEach(room => io.to(room).emit('giftReceived', giftPayload));
+        if (callId) {
+            io.to(`call:${callId}`).emit('giftReceived', giftPayload);
+        }
 
         // Emit real-time updated balance to Sender
-        io.to(getUserRoom(String(sender._id))).emit('balanceUpdated', {
+        const activeSender = updatedSender || sender;
+        const senderBalPayload = {
             userId: String(sender._id),
-            coins: Number(sender.coins || 0),
-            diamonds: Number(sender.diamonds || 0),
-            totalBalance: Number(sender.coins || 0) + Number(sender.diamonds || 0),
-        });
+            coins: Number(activeSender.coins || 0),
+            diamonds: Number(activeSender.diamonds || 0),
+            totalBalance: Number(activeSender.coins || 0) + Number(activeSender.diamonds || 0),
+        };
+        senderRooms.forEach(room => io.to(room).emit('balanceUpdated', senderBalPayload));
 
         // Emit real-time updated balance to Receiver (Host gets Coins)
         if (updatedReceiver) {
-            io.to(getUserRoom(String(receiverId))).emit('balanceUpdated', {
-                userId: String(receiverId),
+            const receiverBalPayload = {
+                userId: String(realReceiverId),
                 coins: Number(updatedReceiver.coins || 0),
                 diamonds: Number(updatedReceiver.diamonds || 0),
                 totalBalance: Number(updatedReceiver.coins || 0) + Number(updatedReceiver.diamonds || 0),
-            });
+            };
+            receiverRooms.forEach(room => io.to(room).emit('balanceUpdated', receiverBalPayload));
+        }
+
+        // Check if sender balance is 0 after gift and terminates active call immediately
+        const senderTotalBal = Number(activeSender.coins || 0) + Number(activeSender.diamonds || 0);
+        if (senderTotalBal <= 0) {
+            const activeCallId = callId || callTransaction?._id;
+            let targetCallId = activeCallId;
+            if (!targetCallId) {
+                const activeCallDoc = await CoinsTransaction.findOne({
+                    userId: sender._id,
+                    status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
+                }).select('_id').lean();
+                if (activeCallDoc) {
+                    targetCallId = activeCallDoc._id;
+                }
+            }
+            if (targetCallId) {
+                console.log(`[GIFT] Sender balance reached 0 after gift. Terminating active call ${targetCallId}`);
+                const { BillingService } = await import("../services/billing.service");
+                BillingService.processActiveCallBilling(targetCallId as any).catch(err => {
+                    console.error("Error terminating active call after gift:", err);
+                });
+            }
         }
 
         return sendResponse(res, 200, true, "Gift sent successfully", {
-            newBalance: Number(sender.coins || 0) + Number(sender.diamonds || 0),
-            diamonds: Number(sender.diamonds || 0),
-            coins: Number(sender.coins || 0),
+            newBalance: Number(activeSender.coins || 0) + Number(activeSender.diamonds || 0),
+            diamonds: Number(activeSender.diamonds || 0),
+            coins: Number(activeSender.coins || 0),
             hostEarnedCoins: hostEarning,
             totalBalance: Number(sender.coins || 0) + Number(sender.diamonds || 0),
             giftName: giftDoc.name,

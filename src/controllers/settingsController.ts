@@ -23,6 +23,8 @@ const NUMBER_RULES: Record<string, { min: number; max: number }> = {
     welcomeRewardDiamonds: { min: 0, max: 100000 },
     referralRewardDiamonds: { min: 0, max: 100000 },
     defaultMaxAccountsPerDevice: { min: 1, max: 1000 },
+    minimumSupportedVersion: { min: 1, max: 1000000 },
+    latestVersionCode: { min: 1, max: 1000000 },
 };
 const BOOLEAN_KEYS = ['maintenanceMode', 'emailAlerts', 'userNotifications', 'systemDigest'];
 const CONTENT_KEYS = ['privacyPolicy', 'termsAndConditions'];

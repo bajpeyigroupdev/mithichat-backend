@@ -223,12 +223,17 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
         if (search) {
           const searchStr = String(search).trim();
-          const searchRegex = new RegExp(searchStr, 'i');
+          const escapedSearch = searchStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+          const searchRegex = new RegExp(escapedSearch, 'i');
           const orConditions: any[] = [
             { name: searchRegex },
             { email: searchRegex },
             { userName: searchRegex },
-            { phoneNumber: searchRegex }
+            { phoneNumber: searchRegex },
+            { meethiId: searchRegex },
+            { employeeCode: searchRegex },
+            { specialCode: searchRegex },
+            { referralCode: searchRegex }
           ];
           if (!isNaN(Number(searchStr))) {
             orConditions.push({ userId: Number(searchStr) });
@@ -238,7 +243,7 @@ export const getUsers = async (req: AuthRequest, res: Response) => {
 
         const totalUsers = await User.countDocuments(filter);
         const users = await User.find(filter)
-          .select("userId name coins diamonds isBlocked createdAt role email phoneNumber image gender level isVIP")
+          .select("userId meethiId name userName coins diamonds isBlocked createdAt role email phoneNumber image gender level isVIP employeeCode specialCode")
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limitNumber)

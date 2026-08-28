@@ -54,13 +54,16 @@ export const getChatViolations = async (req: AuthRequest, res: Response) => {
 
     // Handle search by matching sender/receiver user names or text
     if (search) {
-      const searchRegex = new RegExp(String(search).trim(), "i");
+      const searchStr = String(search).trim();
+      const escapedSearch = searchStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, "i");
       const matchedUsers = await User.find({
         $or: [
           { name: searchRegex },
           { email: searchRegex },
           { phoneNumber: searchRegex },
-          { userId: !isNaN(Number(search)) ? Number(search) : undefined },
+          { meethiId: searchRegex },
+          { userId: !isNaN(Number(searchStr)) ? Number(searchStr) : undefined },
         ].filter(Boolean) as any,
       }).select("_id");
 

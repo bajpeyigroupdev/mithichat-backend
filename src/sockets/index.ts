@@ -23,9 +23,13 @@ export const getUserRoom = (userId: string) => `user:${userId}`;
 
 
 // -------------------- 🔑 Access io Globally --------------------
+export const getIOOptional = (): Server | null => {
+    return ioInstance || null;
+};
+
 export const getIO = (): Server => {
     if (!ioInstance) {
-        throw new Error("❌ Socket.io instance not initialized yet");
+        return null as any;
     }
     return ioInstance;
 };
@@ -233,6 +237,11 @@ const chatSocket = (io: Server) => {
                         };
                         await txn.save();
 
+                        // Instantly process minute 1 billing so caller balance updates immediately on 1st second
+                        BillingService.processActiveCallBilling(txn._id as any).catch(err =>
+                            console.error("Failed initial minute 1 billing on joinChannel:", err)
+                        );
+
                         if (callDeadlineAt) {
                             scheduleCallDeadline(
                                 io,
@@ -390,9 +399,42 @@ const handleEndCall = async (
             const payload = result.data ?? { transactionId };
 
             if (txRef) {
-                // Broadcast to both participant rooms and the call room
-                io.to(getUserRoom(String(txRef.userId))).emit("callEnded", payload);
-                io.to(getUserRoom(String(txRef.hostId))).emit("callEnded", payload);
+                const callerDoc = await User.findById(txRef.userId).select('_id userId meethiId coins diamonds').lean();
+                const hostDoc = await User.findById(txRef.hostId).select('_id userId meethiId coins diamonds').lean();
+
+                const callerRooms = [
+                    `user:${txRef.userId}`,
+                    ...(callerDoc?.userId ? [`user:${callerDoc.userId}`] : []),
+                    ...(callerDoc?.meethiId ? [`user:${callerDoc.meethiId}`] : [])
+                ];
+                const hostRooms = [
+                    `user:${txRef.hostId}`,
+                    ...(hostDoc?.userId ? [`user:${hostDoc.userId}`] : []),
+                    ...(hostDoc?.meethiId ? [`user:${hostDoc.meethiId}`] : [])
+                ];
+
+                callerRooms.forEach(room => io.to(room).emit("callEnded", payload));
+                hostRooms.forEach(room => io.to(room).emit("callEnded", payload));
+
+                if (callerDoc) {
+                    const callerBalPayload = {
+                        userId: String(callerDoc._id),
+                        coins: Number(callerDoc.coins || 0),
+                        diamonds: Number(callerDoc.diamonds || 0),
+                        totalBalance: Number(callerDoc.coins || 0) + Number(callerDoc.diamonds || 0),
+                    };
+                    callerRooms.forEach(room => io.to(room).emit("balanceUpdated", callerBalPayload));
+                }
+
+                if (hostDoc) {
+                    const hostBalPayload = {
+                        userId: String(hostDoc._id),
+                        coins: Number(hostDoc.coins || 0),
+                        diamonds: Number(hostDoc.diamonds || 0),
+                        totalBalance: Number(hostDoc.coins || 0) + Number(hostDoc.diamonds || 0),
+                    };
+                    hostRooms.forEach(room => io.to(room).emit("balanceUpdated", hostBalPayload));
+                }
             }
             io.to(`call:${transactionId}`).emit("callEnded", payload);
         } else {

@@ -328,12 +328,16 @@ export const getRecruitedMembers = async (req: Request, res: Response) => {
 
     if (search && String(search).trim() !== '') {
       const searchStr = String(search).trim();
-      const searchRegex = new RegExp(searchStr, 'i');
+      const escapedSearch = searchStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, 'i');
       const searchNum = Number(searchStr);
       const searchOrs: any[] = [
         { name: searchRegex },
         { email: searchRegex },
+        { userName: searchRegex },
         { phoneNumber: searchRegex },
+        { meethiId: searchRegex },
+        { employeeCode: searchRegex },
         { specialCode: searchRegex },
         { referralCode: searchRegex },
       ];
