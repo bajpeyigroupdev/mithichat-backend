@@ -109,7 +109,7 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
         const platformCommission = Math.max(0, totalCost - hostEarning);
 
         // Deduct from Sender atomically (coins first, then diamonds)
-        const deductResult = await deductUserWalletAtomic(sender._id, totalCost, session);
+        const deductResult = await deductUserWalletAtomic(sender._id as any, totalCost, session);
         if (!deductResult.success) {
             await session.abortTransaction();
             return sendResponse(
