@@ -102,8 +102,8 @@ export class BillingService {
                 transaction.callStart = now;
             }
 
-            const elapsedSec = Math.max(1, Math.ceil((now.getTime() - new Date(callStart).getTime()) / 1000));
-            const requiredBilledMinutes = Math.ceil(elapsedSec / 60);
+            const elapsedSec = Math.max(0, Math.floor((now.getTime() - new Date(callStart).getTime()) / 1000));
+            const requiredBilledMinutes = Math.floor(elapsedSec / 60) + 1;
 
             const meta = (transaction.meta || {}) as any;
             let currentlyBilledMinutes = Number(meta.billedMinutes || 0);
@@ -114,67 +114,30 @@ export class BillingService {
                 meta?.callDiamondsPerMinute || fallbackSettings?.callRatePerMinute || CALL_DIAMONDS_PER_MINUTE
             ));
 
-            // Check if caller balance is less than call rate per minute (100 diamonds) mid-call
-            const liveCaller = await User.findById(transaction.userId).select('coins diamonds').session(session).lean() as any;
-            const callerBalance = Number(liveCaller?.coins || 0) + Number(liveCaller?.diamonds || 0);
-
-            if (callerBalance < callDiamondsPerMinute) {
-                console.log(`[CALL_BILLING] Caller ${transaction.userId} balance (${callerBalance}) is less than rate (${callDiamondsPerMinute}) during active call ${transactionId}. Terminating call immediately.`);
-                await session.abortTransaction();
-
-                const endResult = await BillingService.processCallEnd(transactionId, now, 0);
-
-                try {
-                    const io = getIO();
-                    if (io && typeof io.to === 'function') {
-                        const endPayload = {
-                            transactionId: String(transactionId),
-                            reason: 'INSUFFICIENT_DIAMONDS',
-                            errorCode: 'INSUFFICIENT_DIAMONDS',
-                            message: 'Call ended due to insufficient diamonds.',
-                            duration: endResult.data?.duration || elapsedSec,
-                        };
-                        const txRef = await CoinsTransaction.findById(transactionId).select('userId hostId').lean() as any;
-                        if (txRef) {
-                            const callerDoc = await User.findById(txRef.userId).select('_id userId meethiId').lean();
-                            const hostDoc = await User.findById(txRef.hostId).select('_id userId meethiId').lean();
-
-                            const callerRooms = [
-                                `user:${txRef.userId}`,
-                                ...(callerDoc?.userId ? [`user:${callerDoc.userId}`] : []),
-                                ...(callerDoc?.meethiId ? [`user:${callerDoc.meethiId}`] : [])
-                            ];
-                            const hostRooms = [
-                                `user:${txRef.hostId}`,
-                                ...(hostDoc?.userId ? [`user:${hostDoc.userId}`] : []),
-                                ...(hostDoc?.meethiId ? [`user:${hostDoc.meethiId}`] : [])
-                            ];
-
-                            callerRooms.forEach(room => io.to(room).emit('callEnded', endPayload));
-                            hostRooms.forEach(room => io.to(room).emit('callEnded', endPayload));
-                        }
-                        io.to(`call:${String(transactionId)}`).emit('callEnded', endPayload);
-                    }
-                } catch (e) {
-                    console.error('Socket emit error on call termination:', e);
-                }
-
-                return { success: false, terminated: true, billedMinutes: currentlyBilledMinutes };
-            }
-
+            // CRITICAL FIX: If currently paid minutes cover the current elapsed duration,
+            // the call is ACTIVE and ENTITLED. DO NOT check caller balance for FUTURE minutes yet!
             if (currentlyBilledMinutes >= requiredBilledMinutes) {
                 await transaction.save({ session });
                 await session.commitTransaction();
                 return { success: true, billedMinutes: currentlyBilledMinutes };
             }
 
-            // Process minute blocks sequentially from currentlyBilledMinutes + 1 to requiredBilledMinutes
+            // Process minute blocks sequentially for unbilled minutes (from currentlyBilledMinutes + 1 to requiredBilledMinutes)
             for (let m = currentlyBilledMinutes + 1; m <= requiredBilledMinutes; m++) {
+                const liveCaller = await User.findById(transaction.userId).select('coins diamonds').session(session).lean() as any;
+                const balanceBefore = Number(liveCaller?.coins || 0) + Number(liveCaller?.diamonds || 0);
+
+                console.log(`[BILLING] TRANSACTION ID: ${transactionId}`);
+                console.log(`[BILLING] RATE: ${callDiamondsPerMinute}`);
+                console.log(`[BILLING] BALANCE BEFORE: ${balanceBefore}`);
+                console.log(`[BILLING] CURRENT MINUTE: ${m}`);
+
                 const deductResult = await deductUserWalletAtomic(transaction.userId, callDiamondsPerMinute, session);
 
                 if (!deductResult.success) {
                     // Caller cannot afford minute block m!
-                    console.log(`[CALL_BILLING] Insufficient balance for call ${transactionId} at minute ${m}. Terminating call.`);
+                    console.log(`[BILLING] NEXT MINUTE ELIGIBLE: false`);
+                    console.log(`[BILLING] AUTO TERMINATION: Insufficient balance for Minute ${m} (Balance: ${balanceBefore}, Required: ${callDiamondsPerMinute})`);
                     await session.abortTransaction();
 
                     // Terminate call cleanly via processCallEnd
@@ -221,6 +184,17 @@ export class BillingService {
 
                 currentlyBilledMinutes = m;
                 alreadyBilledAmount += callDiamondsPerMinute;
+
+                const callerAfter = await User.findById(transaction.userId).select('coins diamonds').session(session).lean() as any;
+                const balanceAfter = Number(callerAfter?.coins || 0) + Number(callerAfter?.diamonds || 0);
+                const minuteDeadline = new Date(callStart.getTime() + m * 60_000);
+
+                console.log(`[BILLING] FIRST MINUTE CHARGED: ${m === 1}`);
+                console.log(`[BILLING] CURRENT MINUTE PAID: true`);
+                console.log(`[BILLING] CONNECTED AT: ${callStart.toISOString()}`);
+                console.log(`[BILLING] MINUTE DEADLINE: ${minuteDeadline.toISOString()}`);
+                console.log(`[BILLING] BALANCE AFTER: ${balanceAfter}`);
+                console.log(`[BILLING] NEXT MINUTE ELIGIBLE: ${balanceAfter >= callDiamondsPerMinute}`);
             }
 
             transaction.coinsSpent = alreadyBilledAmount;

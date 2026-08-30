@@ -385,6 +385,7 @@ const handleEndCall = async (
     durationSeconds?: number
 ) => {
     try {
+        console.log(`[BILLING] MANUAL HANGUP / TERMINATION: TransactionID ${transactionId} (DurationSec: ${durationSeconds ?? 'unspecified'})`);
         // Fetch participant IDs before billing so they are always available for routing
         const txRef = await CoinsTransaction.findById(transactionId).select('userId hostId').lean() as any;
 
