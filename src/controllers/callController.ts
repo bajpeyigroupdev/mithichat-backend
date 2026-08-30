@@ -545,7 +545,9 @@ export const startCall = async (req: AuthRequest, res: Response) => {
 
     const callerAgoraUid = Math.floor(Math.random() * 1e9);
     const hostAgoraUid = Math.floor(Math.random() * 1e9);
-    const tokenDuration = expirationTimeInSeconds;
+    const nowSec = Math.floor(Date.now() / 1000);
+    // Unix timestamp in seconds for token expiration (86400s / 24h validity window for robustness)
+    const tokenExpireTs = nowSec + Math.max(expirationTimeInSeconds, 86400);
 
     const callerToken = RtcTokenBuilder.buildTokenWithUid(
       APP_ID,
@@ -553,8 +555,8 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       channelName,
       callerAgoraUid,
       RtcRole.PUBLISHER,
-      tokenDuration,
-      tokenDuration
+      tokenExpireTs,
+      tokenExpireTs
     );
 
     const hostToken = RtcTokenBuilder.buildTokenWithUid(
@@ -563,8 +565,8 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       channelName,
       hostAgoraUid,
       RtcRole.PUBLISHER,
-      tokenDuration,
-      tokenDuration
+      tokenExpireTs,
+      tokenExpireTs
     );
 
     const transaction = await CoinsTransaction.create({
@@ -798,6 +800,7 @@ export const acceptIncomingCall = async (req: AuthRequest, res: Response) => {
     await User.findByIdAndUpdate(hostId, { $set: { isBusy: true } });
     const callData = buildCallData(transaction);
 
+    console.log(`[BILLING] CALL ACCEPTED: TransactionID ${transactionId} | HostID ${hostId}`);
     getIO().to(getUserRoom(String(transaction.userId))).emit("callAccepted", callData);
     return sendResponse(res, 200, true, "Call accepted", callData);
   } catch (error: any) {

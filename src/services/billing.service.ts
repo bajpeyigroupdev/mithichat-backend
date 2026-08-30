@@ -397,6 +397,8 @@ export class BillingService {
             const hostEarning = Math.round(durationSec * HOST_SHARE_PER_SECOND);
             transaction.hostEarning = hostEarning;
 
+            console.log(`[BILLING] HOST EARNING: TransactionID ${transactionId} | HostID ${transaction.hostId} | Coins: ${hostEarning} | DurationSec: ${durationSec}`);
+
             // Host earns coins exactly once (idempotent check)
             if (hostEarning > 0 && !startMeta?.hostEarningsCredited) {
                 await User.findByIdAndUpdate(

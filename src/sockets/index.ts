@@ -251,6 +251,7 @@ const chatSocket = (io: Server) => {
                             );
                         }
 
+                        console.log(`[BILLING] AGORA CONNECTED: TransactionID ${transactionId} | CallStart ${txn.callStart.toISOString()}`);
                         console.log(`🚀 Call ${transactionId} is now CONNECTED. Emitting callConnected to room.`);
                         io.to(callRoom).emit("callConnected", {
                             transactionId,
