@@ -19,6 +19,7 @@ import { BillingService } from '../services/billing.service';
 import { sendCallNotification, sendMissedCallNotification } from '../utils/pushNotification';
 import { recalculateAndUpdateHostLevel } from '../services/user.service';
 import { CALL_DIAMONDS_PER_MINUTE } from '../configs/monetization';
+import redis from '../configs/redisConfig';
 
 
 // export const startCall = async (req: AuthRequest, res: Response) => {
@@ -387,6 +388,8 @@ import { CALL_DIAMONDS_PER_MINUTE } from '../configs/monetization';
 // FIXED startCall function
 export const startCall = async (req: AuthRequest, res: Response) => {
   let reservedHostId: string | undefined;
+  let callerLockKey: string | undefined;
+  let callerLockToken: string | undefined;
   try {
     const { randomMatch = false } = req.body || {};
     let hostId = req.body?.hostId as string | undefined;
