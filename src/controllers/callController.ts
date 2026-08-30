@@ -17,6 +17,7 @@ import { convertToHMS } from '../utils/time.util';
 import { User } from '../models/user.model';
 import { BillingService } from '../services/billing.service';
 import { sendCallNotification, sendMissedCallNotification } from '../utils/pushNotification';
+import { notifyHostCallState } from '../services/callStateNotification.service';
 import { recalculateAndUpdateHostLevel } from '../services/user.service';
 import { CALL_DIAMONDS_PER_MINUTE } from '../configs/monetization';
 import redis from '../configs/redisConfig';
@@ -409,6 +410,13 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "Required call details are missing");
     }
 
+    callerLockKey = `call:start:${userId}`;
+    callerLockToken = uuidv4();
+    const lockAcquired = await redis.set(callerLockKey, callerLockToken, 'EX', 15, 'NX');
+    if (lockAcquired !== 'OK') {
+      return sendResponse(res, 409, false, "A call request is already being processed");
+    }
+
     // MANDATORY DB BALANCE CHECK (Read freshest value from database)
     const liveCaller = await User.findOne({
       _id: userId,
@@ -434,8 +442,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     // Double call / Race condition protection
     const existingActiveCall = await CoinsTransaction.findOne({
       userId,
-      status: { $in: [CallStatus.INITIATED, CallStatus.RINGING, CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
-      createdAt: { $gte: new Date(Date.now() - 45000) }
+      status: { $in: [CallStatus.INITIATED, CallStatus.RINGING, CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
     });
     if (existingActiveCall) {
       console.log('[CALL] DOUBLE CALL ATTEMPT BLOCKED | Active TxID:', existingActiveCall._id);
@@ -483,12 +490,11 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 404, false, "Host user not found");
     }
 
-    // Auto-clean stale isBusy lock if host has no active call transaction in past 45 seconds
+    // Clear an orphaned busy flag only when no active transaction exists.
     if (host.isBusy) {
       const activeCall = await CoinsTransaction.findOne({
         hostId: host._id,
-        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING, CallStatus.CONNECTED, CallStatus.ACCEPTED] },
-        createdAt: { $gte: new Date(Date.now() - 45000) }
+        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING, CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
       });
       if (!activeCall) {
         console.log('🧹 Host is marked busy but has no active call transaction. Resetting isBusy lock:', host._id);
@@ -529,9 +535,6 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       { new: true }
     );
 
-    if (!updatedHost && !randomMatch) {
-      updatedHost = await User.findByIdAndUpdate(host._id, { $set: { isBusy: true, isActive: true } }, { new: true });
-    }
 
     if (!updatedHost) {
       console.error('❌ Failed to set host as busy (might be in another call)');
@@ -577,7 +580,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       hostId: host._id,
       type: TransactionType.VOICE_CALL,
       status: CallStatus.INITIATED,
-      ringExpiresAt: new Date(Date.now() + 40_000),
+      ringExpiresAt: new Date(Date.now() + 45_000),
       channelName,
       meta: {
         channelName,
@@ -612,16 +615,19 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       maxMinutes,
       callerImage,
       calleeImage: host.image,
+      createdAt: transaction.createdAt,
+      ringExpiresAt: transaction.ringExpiresAt,
+      eventAt: transaction.createdAt,
     };
 
     console.log(`[CALL_INITIATED] Timestamp: ${new Date().toISOString()} | UserID: ${userId} | HostID: ${host._id} | Channel: ${channelName} | TxID: ${transaction._id}`);
     console.log('📤 Emitting incomingCall to rooms:', hostRoom, `user:${host._id}`);
 
-    // Broadcast to Host's Rooms (Multi-alias targeting to guarantee delivery)
-    io.to(hostRoom).emit("incomingCall", callPayload);
-    io.to(`user:${host._id}`).emit("incomingCall", callPayload);
-    if (host.userId) io.to(`user:${host.userId}`).emit("incomingCall", callPayload);
-    if (host.meethiId) io.to(`user:${host.meethiId}`).emit("incomingCall", callPayload);
+    // Socket.IO unions multi-room broadcasts, so each socket receives one event.
+    const hostRooms = [hostRoom];
+    if (host.userId) hostRooms.push(`user:${host.userId}`);
+    if (host.meethiId) hostRooms.push(`user:${host.meethiId}`);
+    io.to(hostRooms).emit("incomingCall", callPayload);
 
     // Transition status to RINGING since socket/notification is dispatched
     transaction.status = CallStatus.RINGING;
@@ -641,6 +647,9 @@ export const startCall = async (req: AuthRequest, res: Response) => {
         {
           channelName,
           maxMinutes: String(maxMinutes),
+          createdAt: transaction.createdAt.toISOString(),
+          ringExpiresAt: transaction.ringExpiresAt!.toISOString(),
+          eventAt: transaction.createdAt.toISOString(),
           agoraString: JSON.stringify({
             hostToken,
             hostAgoraUid,
@@ -661,7 +670,10 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       maxMinutes,
       expiresInSeconds: expirationTimeInSeconds,
       callRatePerMinute: CALL_RATE_PER_MINUTE,
+      createdAt: transaction.createdAt,
+      ringExpiresAt: transaction.ringExpiresAt,
       agora: {
+        appId: APP_ID,
         callerToken,
         callerAgoraUid,
         hostToken,
@@ -681,6 +693,15 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       await User.findByIdAndUpdate(reservedHostId, { $set: { isBusy: false } });
     }
     return sendResponse(res, 500, false, error.message || "Failed to start call");
+  } finally {
+    if (callerLockKey && callerLockToken) {
+      await redis.eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        1,
+        callerLockKey,
+        callerLockToken
+      ).catch(() => undefined);
+    }
   }
 };
 // FIXED endCall function
@@ -712,6 +733,7 @@ export const endCall = async (req: AuthRequest, res: Response) => {
       const io = getIO();
       io.to(getUserRoom(String(transaction.userId))).emit("callEnded", payload);
       io.to(getUserRoom(String(transaction.hostId))).emit("callEnded", payload);
+      await notifyHostCallState(transaction.hostId, String(transaction._id), 'ended');
 
       // Missed Call Notification
       if (!transaction.callStart && String(transaction.userId) === String(participantId)) {
@@ -782,7 +804,8 @@ export const acceptIncomingCall = async (req: AuthRequest, res: Response) => {
       {
         _id: transactionId,
         hostId,
-        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] }
+        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
+        ringExpiresAt: { $gt: new Date() }
       },
       { status: CallStatus.ACCEPTED, lastHeartbeat: new Date() },
       { new: true }
@@ -835,6 +858,8 @@ export const rejectIncomingCall = async (req: AuthRequest, res: Response) => {
 
     await User.findByIdAndUpdate(hostId, { $set: { isBusy: false } });
     getIO().to(getUserRoom(String(transaction.userId))).emit("callRejected", { transactionId });
+    getIO().to(getUserRoom(String(transaction.hostId))).emit("callEnded", { transactionId, reason: 'rejected' });
+    await notifyHostCallState(transaction.hostId, String(transaction._id), 'rejected');
     return sendResponse(res, 200, true, "Call rejected");
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message || "Failed to reject call");
@@ -1343,7 +1368,15 @@ export const getCallStatus = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "Invalid Transaction ID format");
     }
 
-    const transaction = await CoinsTransaction.findById(transactionId);
+    const participantId = req.user?.id;
+    if (!participantId) {
+      return sendResponse(res, 401, false, "User not authenticated");
+    }
+
+    const transaction = await CoinsTransaction.findOne({
+      _id: transactionId,
+      $or: [{ userId: participantId }, { hostId: participantId }],
+    });
     if (!transaction) {
       console.warn(`[CALL_STATUS_WARN] Call transaction not found in DB: ${transactionId}`);
       return sendResponse(res, 404, false, "Transaction not found");
@@ -1359,6 +1392,8 @@ export const getCallStatus = async (req: AuthRequest, res: Response) => {
       status: transaction.status,
       transactionId: transaction._id,
       channelName,
+      createdAt: transaction.createdAt,
+      ringExpiresAt: transaction.ringExpiresAt,
       agora: {
         callerToken: meta?.callerToken,
         callerAgoraUid: meta?.callerAgoraUid,

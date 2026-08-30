@@ -14,14 +14,15 @@ import { createNotification } from "./notificationController";
 import { Agency } from "../models/agency.model";
 import { Request as RequestModel, RequestStatus } from "../models/request.model";
 import { HierarchyScopeService } from "../utils/hierarchyScope";
+import { isPlayableVoiceUrl } from "../utils/voiceMedia";
 
 export const applyHost = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const rawUserId = req.user?.userId || req.body.userId || req.body.meethiChatId;
         const audioUrl = req.body.audio || req.body.voiceAudioUrl || req.body.audioUrl || req.body.voiceUrl || req.body.voice || req.body.introAudio;
 
-        if (!audioUrl) {
-            return sendResponse(res, 400, false, "Voice recording audio URL is required.");
+        if (!isPlayableVoiceUrl(audioUrl)) {
+            return sendResponse(res, 400, false, "A valid voice recording audio URL is required.");
         }
 
         const isNum = rawUserId !== undefined && rawUserId !== null && !isNaN(Number(rawUserId));

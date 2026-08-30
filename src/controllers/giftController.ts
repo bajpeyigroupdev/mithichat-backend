@@ -202,29 +202,6 @@ export const sendGift = async (req: AuthRequest, res: Response) => {
             receiverRooms.forEach(room => io.to(room).emit('balanceUpdated', receiverBalPayload));
         }
 
-        // Check if sender balance is less than required call rate (100 diamonds) after gift and terminate active call immediately
-        const senderTotalBal = Number(activeSender.coins || 0) + Number(activeSender.diamonds || 0);
-        if (senderTotalBal < 100) {
-            const activeCallId = callId || callTransaction?._id;
-            let targetCallId = activeCallId;
-            if (!targetCallId) {
-                const activeCallDoc = await CoinsTransaction.findOne({
-                    userId: sender._id,
-                    status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
-                }).select('_id').lean();
-                if (activeCallDoc) {
-                    targetCallId = activeCallDoc._id;
-                }
-            }
-            if (targetCallId) {
-                console.log(`[GIFT] Sender balance (${senderTotalBal}) is less than 100 after gift. Terminating active call ${targetCallId}`);
-                const { BillingService } = await import("../services/billing.service");
-                BillingService.processActiveCallBilling(targetCallId as any).catch(err => {
-                    console.error("Error terminating active call after gift:", err);
-                });
-            }
-        }
-
         return sendResponse(res, 200, true, "Gift sent successfully", {
             newBalance: Number(activeSender.coins || 0) + Number(activeSender.diamonds || 0),
             diamonds: Number(activeSender.diamonds || 0),

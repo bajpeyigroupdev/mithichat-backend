@@ -18,6 +18,7 @@ import { HierarchyScopeService } from '../utils/hierarchyScope';
 import mongoose from 'mongoose';
 import TempHostModel from '../models/temp.host.model';
 import { permanentlyDeleteUserRecord } from '../services/permanentUserDeletion.service';
+import { firstPlayableVoiceUrl, isPlayableVoiceUrl } from '../utils/voiceMedia';
 
 const canManagePermissionTarget = async (
   actor: NonNullable<AuthRequest['user']>,
@@ -874,7 +875,7 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
       if (docObj.role === 'host' || docObj.requestType === 'Host Request') {
         docObj.data = docObj.data || {};
         if (!docObj.data.voiceAudioUrl && !docObj.data.audio && !docObj.data.voice) {
-          let foundVoice = docObj.data.portfolio || docObj.data.introAudio || docObj.data.voiceUrl || docObj.data.audioURL;
+          let foundVoice = firstPlayableVoiceUrl(docObj.data.introAudio, docObj.data.voiceUrl, docObj.data.audioURL);
 
           if (!foundVoice && (docObj.data.email || docObj.data.meethiChatId || docObj.data.mithiChatId)) {
             const app = await RecruitmentApplication.findOne({
@@ -885,10 +886,14 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
             }).lean();
             if (app) {
               const voiceDoc = (app.documents || []).find((d: any) =>
-                d.documentType === 'Voice' || d.documentType === 'Audio' || d.documentType === 'Portfolio' ||
-                d.name?.toLowerCase().includes('voice') || d.name?.toLowerCase().includes('portfolio') || d.name?.toLowerCase().includes('audition')
+                d.documentType === 'Voice' || d.documentType === 'Audio' ||
+                d.name?.toLowerCase().includes('voice') || d.name?.toLowerCase().includes('audition')
               );
-              foundVoice = (app.roleData as any)?.voiceAudioUrl || (app.roleData as any)?.audio || (app.roleData as any)?.portfolio || voiceDoc?.url;
+              foundVoice = firstPlayableVoiceUrl(
+                (app.roleData as any)?.voiceAudioUrl,
+                (app.roleData as any)?.audio,
+                voiceDoc?.url
+              );
             }
           }
 
@@ -902,7 +907,7 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
             if (user?.audio) foundVoice = user.audio;
           }
 
-          if (foundVoice) {
+          if (isPlayableVoiceUrl(foundVoice)) {
             docObj.data.voiceAudioUrl = foundVoice;
             docObj.data.audio = foundVoice;
             docObj.data.voice = foundVoice;

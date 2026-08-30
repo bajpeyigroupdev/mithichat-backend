@@ -53,7 +53,7 @@ export const sendPushNotification = async (
       // Chat notifications are rendered locally by Notifee so messages from
       // the same conversation can be grouped and expose Reply/Mark read.
       // Other notification types can still use Firebase's system rendering.
-      ...(payload.data?.type === 'message' ? {} : {
+      ...(['message', 'missed_call'].includes(payload.data?.type || '') ? {} : {
         notification: {
           title: payload.title,
           body: payload.body,
@@ -174,7 +174,7 @@ export const sendCallNotification = async (
       },
       android: {
         priority: "high" as const,
-        ttl: 30000, // Deliver immediately, discard stale calls after 30 seconds.
+        ttl: 50000, // Deliver immediately, discard after the 45-second answer window.
       },
       apns: {
         headers: {
@@ -222,3 +222,32 @@ export const sendMissedCallNotification = async (
     targetUserId,
   },
 });
+export const sendCallStateNotification = async (
+  token: string,
+  transactionId: string,
+  state: 'ended' | 'cancelled' | 'rejected' | 'expired',
+  eventAt: Date
+) => {
+  if (!token) return { success: false, error: 'missing-token' };
+  try {
+    const messageId = await admin.messaging().send({
+      token,
+      data: {
+        type: 'call_state',
+        transactionId,
+        callId: transactionId,
+        state,
+        eventAt: eventAt.toISOString(),
+      },
+      android: { priority: 'high', ttl: 50_000 },
+      apns: {
+        headers: { 'apns-priority': '10' },
+        payload: { aps: { contentAvailable: true } },
+      },
+    });
+    return { success: true, messageId };
+  } catch (error: any) {
+    console.error(`[CALL] Failed to push ${state} state for ${transactionId}:`, error?.code || error?.message);
+    return { success: false, error: error?.code || error?.message || 'push-send-failed' };
+  }
+};

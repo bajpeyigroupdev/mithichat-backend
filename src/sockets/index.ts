@@ -9,6 +9,7 @@ import { CallStatus } from "../constants/user";
 import { getAllHostsService, invalidateHostCache } from "../services/user.service";
 import { BillingService } from '../services/billing.service';
 import { PermissionEngine } from "../utils/permissionEngine";
+import { notifyHostCallState } from "../services/callStateNotification.service";
 
 // Redis Pub/Sub for Adapter
 const pubClient = redis;
@@ -158,169 +159,139 @@ const chatSocket = (io: Server) => {
         // ------------------ Call Handlers ------------------
 
         socket.on("acceptCall", async ({ transactionId }: { transactionId: string }) => {
-            console.log(`📞 Host accepting call: ${transactionId}`);
-
-            const txn = await CoinsTransaction.findByIdAndUpdate(
-                transactionId,
+            if (!transactionId) return;
+            const txn = await CoinsTransaction.findOneAndUpdate(
+                {
+                    _id: transactionId,
+                    hostId: socket.user!.id,
+                    status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
+                    ringExpiresAt: { $gt: new Date() },
+                },
                 { status: CallStatus.ACCEPTED, lastHeartbeat: new Date() },
                 { new: true }
             );
-
             if (!txn) {
-                console.error('❌ Transaction not found:', transactionId);
+                socket.emit("callActionError", { transactionId, action: "accept", message: "Call is unavailable" });
                 return;
             }
 
             await User.findByIdAndUpdate(txn.hostId, { $set: { isBusy: true } });
             socket.data.transactionId = transactionId;
-
             const meta = txn.meta as any;
-            const channelName = txn.channelName || meta?.channelName;
-
-            // Notify Caller (Target Room)
-            io.to(getUserRoom(String(txn.userId))).emit("callAccepted", {
+            const payload = {
                 transactionId,
-                channelName,
-
+                channelName: txn.channelName || meta?.channelName,
                 agora: {
-                    callerToken: meta.callerToken,
-                    callerAgoraUid: meta.callerAgoraUid,
-
-                    hostToken: meta.hostToken,
-                    hostAgoraUid: meta.hostAgoraUid,
-
-                    appId: meta.appId,
+                    callerToken: meta?.callerToken,
+                    callerAgoraUid: meta?.callerAgoraUid,
+                    hostToken: meta?.hostToken,
+                    hostAgoraUid: meta?.hostAgoraUid,
+                    appId: meta?.appId,
                 },
-            });
-
-            // Confirm to Host
-            socket.emit("acceptedBySystem", {
-                transactionId,
-                channelName,
-
-                agora: {
-                    hostToken: meta.hostToken,
-                    hostAgoraUid: meta.hostAgoraUid,
-
-                    callerToken: meta.callerToken,
-                    callerAgoraUid: meta.callerAgoraUid,
-
-                    appId: meta.appId,
-                },
-            });
+            };
+            io.to(getUserRoom(String(txn.userId))).emit("callAccepted", payload);
+            socket.emit("acceptedBySystem", payload);
         });
 
         socket.on("joinChannel", async ({ transactionId }: { transactionId: string }) => {
-            const callRoom = `call:${transactionId}`;
-            console.log(`👤 Socket ${socket.id} joining call room: ${callRoom}`);
-            socket.join(callRoom);
-
+            if (!transactionId) return;
             try {
-                const sockets = await io.in(callRoom).allSockets();
-                console.log(`📞 Room ${callRoom} size: ${sockets.size}`);
+                const txn = await CoinsTransaction.findOne({
+                    _id: transactionId,
+                    $or: [{ userId: socket.user!.id }, { hostId: socket.user!.id }],
+                    status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
+                });
+                if (!txn) {
+                    socket.emit("callActionError", { transactionId, action: "join", message: "Call is unavailable" });
+                    return;
+                }
 
-                const txn = await CoinsTransaction.findById(transactionId);
-                if (txn) {
-                    if (sockets.size === 2) {
-                        // Both joined! Transition status to CONNECTED
-                        txn.status = CallStatus.CONNECTED;
-                        txn.callStart = txn.callStart || new Date();
-                        txn.lastHeartbeat = new Date();
-                        const meta = (txn.meta || {}) as any;
-                        const maxMinutes = Math.max(0, Number(meta.maxMinutes || 0));
-                        const callDeadlineAt = maxMinutes > 0
-                            ? new Date(txn.callStart.getTime() + maxMinutes * 60_000)
-                            : null;
-                        txn.meta = {
-                            ...meta,
-                            ...(callDeadlineAt ? { callDeadlineAt } : {}),
-                        };
-                        await txn.save();
+                const callRoom = `call:${transactionId}`;
+                socket.data.userId = String(socket.user!.id);
+                socket.data.transactionId = transactionId;
+                await socket.join(callRoom);
 
-                        // Instantly process minute 1 billing so caller balance updates immediately on 1st second
-                        BillingService.processActiveCallBilling(txn._id as any).catch(err =>
-                            console.error("Failed initial minute 1 billing on joinChannel:", err)
+                const roomSockets = await io.in(callRoom).fetchSockets();
+                const participantIds = new Set(roomSockets.map(s => String(s.data.userId || '')));
+                const bothParticipantsJoined =
+                    participantIds.has(String(txn.userId)) &&
+                    participantIds.has(String(txn.hostId));
+
+                if (bothParticipantsJoined && txn.status !== CallStatus.CONNECTED) {
+                    const connected = await CoinsTransaction.findOneAndUpdate(
+                        {
+                            _id: transactionId,
+                            status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING] },
+                        },
+                        {
+                            $set: {
+                                status: CallStatus.CONNECTED,
+                                callStart: txn.callStart || new Date(),
+                                lastHeartbeat: new Date(),
+                            },
+                        },
+                        { new: true }
+                    );
+                    if (connected) {
+                        BillingService.processActiveCallBilling(connected._id as any).catch(err =>
+                            console.error("Failed initial minute billing:", err)
                         );
-
-                        if (callDeadlineAt) {
-                            scheduleCallDeadline(
-                                io,
-                                String(txn._id),
-                                callDeadlineAt,
-                                maxMinutes * 60
-                            );
-                        }
-
-                        console.log(`[BILLING] AGORA CONNECTED: TransactionID ${transactionId} | CallStart ${txn.callStart.toISOString()}`);
-                        console.log(`🚀 Call ${transactionId} is now CONNECTED. Emitting callConnected to room.`);
                         io.to(callRoom).emit("callConnected", {
                             transactionId,
-                            callStart: txn.callStart,
+                            callStart: connected.callStart,
                         });
-                    } else if (txn.status === CallStatus.ACCEPTED) {
-                        // Only one joined. Transition status to CONNECTING
-                        txn.status = CallStatus.CONNECTING;
-                        await txn.save();
-                        console.log(`⏳ Call ${transactionId} status set to CONNECTING.`);
                     }
+                } else if (txn.status === CallStatus.ACCEPTED) {
+                    await CoinsTransaction.updateOne(
+                        { _id: transactionId, status: CallStatus.ACCEPTED },
+                        { $set: { status: CallStatus.CONNECTING, lastHeartbeat: new Date() } }
+                    );
                 }
-            } catch (err: any) {
-                console.error("❌ Error in joinChannel status update:", err.message);
+            } catch (error) {
+                console.error("joinChannel failed:", error);
             }
         });
 
         socket.on("leaveChannel", async ({ transactionId }: { transactionId: string }) => {
-            const callRoom = `call:${transactionId}`;
-            console.log(`👤 Socket ${socket.id} leaving call room: ${callRoom}`);
-            socket.leave(callRoom);
+            if (!transactionId) return;
+            const isParticipant = await CoinsTransaction.exists({
+                _id: transactionId,
+                $or: [{ userId: socket.user!.id }, { hostId: socket.user!.id }],
+            });
+            if (isParticipant) await socket.leave(`call:${transactionId}`);
         });
 
-        socket.on("rejectCall", async ({ transactionId }) => {
-            console.log(`❌ Host rejecting call: ${transactionId}`);
-
-            const txn = await CoinsTransaction.findByIdAndUpdate(
-                transactionId,
+        socket.on("rejectCall", async ({ transactionId }: { transactionId: string }) => {
+            if (!transactionId) return;
+            const txn = await CoinsTransaction.findOneAndUpdate(
+                {
+                    _id: transactionId,
+                    hostId: socket.user!.id,
+                    status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
+                },
                 { status: CallStatus.REJECTED, callEnd: new Date() },
                 { new: true }
             );
-
-            if (txn) {
-                await User.findByIdAndUpdate(txn.hostId, { $set: { isBusy: false } });
-
-                // Notify Caller
-                io.to(getUserRoom(String(txn.userId))).emit("callRejected", { transactionId });
-            }
+            if (!txn) return;
+            await User.findByIdAndUpdate(txn.hostId, { $set: { isBusy: false } });
+            io.to(getUserRoom(String(txn.userId))).emit("callRejected", { transactionId });
+            io.to(getUserRoom(String(txn.hostId))).emit("callEnded", { transactionId, reason: "rejected" });
+            await notifyHostCallState(txn.hostId, String(txn._id), "rejected");
         });
 
         socket.on("missedCall", async ({ transactionId }: { transactionId: string }) => {
-            console.log(`⚠️ Call missed/timed out: ${transactionId}`);
-
-            const txn = await CoinsTransaction.findByIdAndUpdate(
-                transactionId,
-                { status: CallStatus.MISSED, callEnd: new Date() }, // Or CallStatus.MISSED
+            if (!transactionId) return;
+            const txn = await CoinsTransaction.findOneAndUpdate(
+                {
+                    _id: transactionId,
+                    $or: [{ userId: socket.user!.id }, { hostId: socket.user!.id }],
+                    status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
+                },
+                { status: CallStatus.MISSED, callEnd: new Date() },
                 { new: true }
             );
-
-            if (txn) {
-                await User.findByIdAndUpdate(txn.hostId, { $set: { isBusy: false } });
-
-                // Fetch Caller Details to notify Host
-                const caller = await User.findById(txn.userId);
-                const host = await User.findById(txn.hostId);
-
-                if (host && host.fcmToken && caller) {
-                    // Import lazily or at top
-                    const { sendMissedCallNotification } = require("../utils/pushNotification");
-                    sendMissedCallNotification(
-                        host.fcmToken,
-                        caller.name || "User",
-                        caller.image || ""
-                    );
-                }
-
-                // Notify Caller (ACK) - currently caller initiates this, so they know. 
-                // But if Host initiated? (Not supported yet).
-            }
+            if (!txn) return;
+            await User.findByIdAndUpdate(txn.hostId, { $set: { isBusy: false } });
         });
 
         socket.on("endCall", async ({
@@ -330,11 +301,9 @@ const chatSocket = (io: Server) => {
             transactionId: string;
             durationSeconds?: number;
         }) => {
-            console.log(`🔴 Ending call (Socket): ${transactionId}`);
             if (!transactionId) return;
-            await handleEndCall(io, transactionId, durationSeconds);
+            await handleEndCall(io, transactionId, String(socket.user!.id), durationSeconds);
         });
-
         // ------------------ Disconnect ------------------
         socket.on("disconnect", async () => {
             try {
@@ -358,8 +327,16 @@ const chatSocket = (io: Server) => {
                 if (sockets.size === 0) {
                     await redis.srem("online_users", uid);
                     const lastOnline = new Date();
+                    const hasActiveCall = await CoinsTransaction.exists({
+                        hostId: uid,
+                        status: { $in: [CallStatus.INITIATED, CallStatus.RINGING, CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
+                    });
                     await User.findByIdAndUpdate(uid, {
-                        $set: { lastOnline, isOnline: false, isBusy: false }
+                        $set: {
+                            lastOnline,
+                            isOnline: false,
+                            ...(hasActiveCall ? {} : { isBusy: false }),
+                        }
                     });
 
                     io.emit("userOffline", { userId: uid, lastOnline });
@@ -383,12 +360,20 @@ const chatSocket = (io: Server) => {
 const handleEndCall = async (
     io: Server,
     transactionId: string,
+    participantId: string,
     durationSeconds?: number
 ) => {
     try {
         console.log(`[BILLING] MANUAL HANGUP / TERMINATION: TransactionID ${transactionId} (DurationSec: ${durationSeconds ?? 'unspecified'})`);
         // Fetch participant IDs before billing so they are always available for routing
-        const txRef = await CoinsTransaction.findById(transactionId).select('userId hostId').lean() as any;
+        const txRef = await CoinsTransaction.findOne({
+            _id: transactionId,
+            $or: [{ userId: participantId }, { hostId: participantId }],
+        }).select('userId hostId').lean() as any;
+        if (!txRef) {
+            console.warn(`Unauthorized endCall ignored for transaction ${transactionId}`);
+            return;
+        }
 
         const result = await BillingService.processCallEnd(
             transactionId,
@@ -439,6 +424,7 @@ const handleEndCall = async (
                 }
             }
             io.to(`call:${transactionId}`).emit("callEnded", payload);
+            await notifyHostCallState(txRef.hostId, transactionId, "ended");
         } else {
             console.error(`❌ Call End Failed for ${transactionId}: ${result.message}`);
         }
@@ -448,24 +434,6 @@ const handleEndCall = async (
     }
 };
 
-const scheduleCallDeadline = (
-    io: Server,
-    transactionId: string,
-    deadline: Date,
-    maxDurationSeconds: number
-) => {
-    const delayMs = Math.max(0, deadline.getTime() - Date.now());
-    // Node timers above 2^31-1 ms fire immediately. Long-balance calls rely
-    // on the persistent cron fallback instead of an unsafe in-memory timer.
-    if (delayMs > 2_147_483_647) return;
-
-    const timer = setTimeout(() => {
-        handleEndCall(io, transactionId, maxDurationSeconds).catch(error => {
-            console.error(`Call deadline end failed for ${transactionId}:`, error);
-        });
-    }, delayMs);
-    timer.unref?.();
-};
 export default chatSocket;
 // Export onlineUsers to keep other files from crashing, but it is empty/useless now.
 export const onlineUsers = {}; 

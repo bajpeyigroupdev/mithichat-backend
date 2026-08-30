@@ -8,6 +8,7 @@ import { sendRecruitmentWorkflowNotification } from '../services/recruitmentNoti
 import { automateEmployeeCreationOnApproval } from '../services/employeeLifecycleService';
 import { generateStrongPassword } from './emsController';
 import { HierarchyScopeService } from '../utils/hierarchyScope';
+import { firstPlayableVoiceUrl } from '../utils/voiceMedia';
 
 const RECRUITMENT_ROLE_RANK: Record<string, number> = {
     owner: 0,
@@ -293,9 +294,19 @@ export const submitApplication = async (req: Request, res: Response) => {
                 const adharFrontDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('front') || d.documentType === 'GovtID');
                 const adharBackDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('back'));
                 const panDoc = parsedDocs.find(d => d.name?.toLowerCase().includes('pan') || d.documentType === 'Certificate');
-                const voiceDoc = parsedDocs.find(d => d.documentType === 'Voice' || d.documentType === 'Audio' || d.name?.toLowerCase().includes('voice') || d.name?.toLowerCase().includes('portfolio') || d.documentType === 'Portfolio');
+                const voiceDoc = parsedDocs.find(d =>
+                    d.documentType === 'Voice' ||
+                    d.documentType === 'Audio' ||
+                    d.name?.toLowerCase().includes('voice') ||
+                    d.name?.toLowerCase().includes('audition')
+                );
 
-                const voiceUrl = body.voiceAudioUrl || body.audio || body.voice || voiceDoc?.url || body.portfolio || '';
+                const voiceUrl = firstPlayableVoiceUrl(
+                    body.voiceAudioUrl,
+                    body.audio,
+                    body.voice,
+                    voiceDoc?.url
+                );
 
                 const generatedPassword = generateStrongPassword(applicantName, applicantPhone, applicantEmail);
 

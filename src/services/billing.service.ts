@@ -68,6 +68,20 @@ export async function deductUserWalletAtomic(
     return { success: true, coinsDeduct, diamondsDeduct };
 }
 
+/** Atomically deduct call credit from diamonds only. */
+export async function deductUserDiamondsAtomic(
+    userId: Types.ObjectId | string,
+    amount: number,
+    session?: ClientSession
+): Promise<boolean> {
+    if (amount <= 0) return true;
+    return Boolean(await User.findOneAndUpdate(
+        { _id: userId, diamonds: { $gte: amount } },
+        { $inc: { diamonds: -amount } },
+        { new: true, ...(session ? { session } : {}) }
+    ));
+}
+
 export class BillingService {
 
     /**
@@ -124,17 +138,17 @@ export class BillingService {
 
             // Process minute blocks sequentially for unbilled minutes (from currentlyBilledMinutes + 1 to requiredBilledMinutes)
             for (let m = currentlyBilledMinutes + 1; m <= requiredBilledMinutes; m++) {
-                const liveCaller = await User.findById(transaction.userId).select('coins diamonds').session(session).lean() as any;
-                const balanceBefore = Number(liveCaller?.coins || 0) + Number(liveCaller?.diamonds || 0);
+                const liveCaller = await User.findById(transaction.userId).select('diamonds').session(session).lean() as any;
+                const balanceBefore = Number(liveCaller?.diamonds || 0);
 
                 console.log(`[BILLING] TRANSACTION ID: ${transactionId}`);
                 console.log(`[BILLING] RATE: ${callDiamondsPerMinute}`);
                 console.log(`[BILLING] BALANCE BEFORE: ${balanceBefore}`);
                 console.log(`[BILLING] CURRENT MINUTE: ${m}`);
 
-                const deductResult = await deductUserWalletAtomic(transaction.userId, callDiamondsPerMinute, session);
+                const deductionSucceeded = await deductUserDiamondsAtomic(transaction.userId, callDiamondsPerMinute, session);
 
-                if (!deductResult.success) {
+                if (!deductionSucceeded) {
                     // Caller cannot afford minute block m!
                     console.log(`[BILLING] NEXT MINUTE ELIGIBLE: false`);
                     console.log(`[BILLING] AUTO TERMINATION: Insufficient balance for Minute ${m} (Balance: ${balanceBefore}, Required: ${callDiamondsPerMinute})`);
@@ -185,8 +199,8 @@ export class BillingService {
                 currentlyBilledMinutes = m;
                 alreadyBilledAmount += callDiamondsPerMinute;
 
-                const callerAfter = await User.findById(transaction.userId).select('coins diamonds').session(session).lean() as any;
-                const balanceAfter = Number(callerAfter?.coins || 0) + Number(callerAfter?.diamonds || 0);
+                const callerAfter = await User.findById(transaction.userId).select('diamonds').session(session).lean() as any;
+                const balanceAfter = Number(callerAfter?.diamonds || 0);
                 const minuteDeadline = new Date(callStart.getTime() + m * 60_000);
 
                 console.log(`[BILLING] FIRST MINUTE CHARGED: ${m === 1}`);
@@ -256,7 +270,7 @@ export class BillingService {
         transactionId: string | Types.ObjectId,
         callEndTime: Date = new Date(),
         retryAttempt: number = 0,
-        reportedDurationSec?: number
+        _reportedDurationSec?: number
     ): Promise<{
         success: boolean;
         data?: any;
@@ -324,25 +338,8 @@ export class BillingService {
                     (callEndTime.getTime() - new Date(transaction.callStart).getTime()) / 1000
                 )
             );
-            const maxPossibleDurationSec = Math.max(
-                1,
-                Math.ceil(
-                    (callEndTime.getTime() - new Date(transaction.createdAt).getTime()) / 1000
-                )
-            );
-            const normalizedReportedDuration = Number.isFinite(Number(reportedDurationSec))
-                ? Math.max(1, Math.floor(Number(reportedDurationSec)))
-                : 0;
-            const safeReportedDurationSec = Math.min(
-                normalizedReportedDuration,
-                maxPossibleDurationSec,
-                serverDurationSec + 20
-            );
-
-            const durationSec =
-                normalizedReportedDuration > 0
-                    ? safeReportedDurationSec
-                    : serverDurationSec;
+            // Persisted server timestamps are authoritative for all accounting.
+            const durationSec = serverDurationSec;
             const billedMinutes = Math.ceil(durationSec / 60);
 
             // Level-based host earning
@@ -364,37 +361,26 @@ export class BillingService {
             const totalCallCost = billedMinutes * callDiamondsPerMinute;
             const alreadyBilledAmount = Number(startMeta?.alreadyBilledAmount || 0);
 
-            let netDeductRemaining = totalCallCost - alreadyBilledAmount;
+            const netDeductRemaining = Math.max(0, totalCallCost - alreadyBilledAmount);
+            let chargedAmount = alreadyBilledAmount;
 
             if (netDeductRemaining > 0 && durationSec > 0) {
-                const deductRes = await deductUserWalletAtomic(transaction.userId, netDeductRemaining, session);
-                if (!deductRes.success) {
-                    // Partial deduction if balance ran out mid-minute
-                    const user = await User.findById(transaction.userId).session(session);
-                    if (user) {
-                        const availCoins = Math.max(0, Number(user.coins || 0));
-                        const availDiamonds = Math.max(0, Number(user.diamonds || 0));
-                        const pCoins = Math.min(availCoins, netDeductRemaining);
-                        const pRem = netDeductRemaining - pCoins;
-                        const pDiamonds = Math.min(availDiamonds, pRem);
-
-                        if (pCoins > 0 || pDiamonds > 0) {
-                            await User.findByIdAndUpdate(
-                                transaction.userId,
-                                { $inc: { coins: -pCoins, diamonds: -pDiamonds } },
-                                { session }
-                            );
-                        }
-                        transaction.coinsSpent = alreadyBilledAmount + pCoins + pDiamonds;
-                    }
-                } else {
-                    transaction.coinsSpent = totalCallCost;
+                const missingMinutes = Math.max(
+                    0,
+                    billedMinutes - Math.floor(alreadyBilledAmount / callDiamondsPerMinute)
+                );
+                for (let minute = 0; minute < missingMinutes; minute++) {
+                    if (!await deductUserDiamondsAtomic(transaction.userId, callDiamondsPerMinute, session)) break;
+                    chargedAmount += callDiamondsPerMinute;
                 }
-            } else {
-                transaction.coinsSpent = alreadyBilledAmount || totalCallCost;
             }
+            transaction.coinsSpent = chargedAmount;
 
-            const hostEarning = Math.round(durationSec * HOST_SHARE_PER_SECOND);
+            const fundedMinutes = Math.floor(chargedAmount / callDiamondsPerMinute);
+            const earningDurationSec = Math.min(durationSec, fundedMinutes * 60);
+            const hostEarning = earningDurationSec > 0
+                ? Math.max(1, Math.round(earningDurationSec * HOST_SHARE_PER_SECOND))
+                : 0;
             transaction.hostEarning = hostEarning;
 
             console.log(`[BILLING] HOST EARNING: TransactionID ${transactionId} | HostID ${transaction.hostId} | Coins: ${hostEarning} | DurationSec: ${durationSec}`);
@@ -410,11 +396,7 @@ export class BillingService {
 
             // 5. Update Transaction State
             transaction.callEnd = callEndTime;
-            if (normalizedReportedDuration > 0) {
-                transaction.callStart = new Date(
-                    callEndTime.getTime() - durationSec * 1000
-                );
-            }
+
             transaction.status = CallStatus.ENDED;
             transaction.duration = durationSec;
             transaction.meta = {
@@ -427,7 +409,8 @@ export class BillingService {
                     platformCommissionRate: Number(startMeta?.platformCommissionRate || fallbackSettings?.commissionRate || 0),
                     billedMinutes,
                     billingMode: 'started_minute',
-                    reportedDurationSec: normalizedReportedDuration || undefined,
+                    fundedMinutes,
+                    earningDurationSec,
                 },
             };
 
@@ -476,7 +459,7 @@ export class BillingService {
                     transactionId,
                     callEndTime,
                     retryAttempt + 1,
-                    reportedDurationSec
+                    _reportedDurationSec
                 );
             }
             console.error('Processing Call End Failed:', error);

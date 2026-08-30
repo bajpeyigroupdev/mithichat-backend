@@ -28,7 +28,7 @@ export interface ICoinsTransaction extends Document {
     hostAgoraUid?: number;
     maxMinutes?: number;
     reservedDiamonds?: number;
-    callDeadlineAt?: Date | string;
+
     billing?: {
       hostLevel: number;
       hostCoinPerMinute: number;
@@ -37,6 +37,8 @@ export interface ICoinsTransaction extends Document {
       billedMinutes?: number;
       billingMode?: 'started_minute';
       reportedDurationSec?: number;
+      fundedMinutes?: number;
+      earningDurationSec?: number;
     };
     [key: string]: unknown;
   };

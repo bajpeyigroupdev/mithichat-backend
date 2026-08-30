@@ -8,6 +8,7 @@ import { ChatQueueService } from './chatQueue.service';
 import { getIO, getUserRoom } from '../sockets';
 import { createNotification } from '../controllers/notificationController';
 import { sendMissedCallNotification } from '../utils/pushNotification';
+import { notifyHostCallState } from './callStateNotification.service';
 
 /**
  * Chat Persistent Worker (Runs every 1s)
@@ -25,48 +26,24 @@ export const startChatWorker = () => {
  * 2. ONGOING calls with no heartbeat for 2 minutes (Connection lost)
  */
 export const startCallCleanupJob = () => {
-    // Run every five seconds so ringing calls respect the 40-second SLA.
-    cron.schedule('*/5 * * * * *', async () => {
+    // Check unanswered-call expiry every second; active billing remains on a five-second cadence.
+    cron.schedule('* * * * * *', async () => {
         try {
             const now = new Date();
             const fiveMinutesAgo = new Date(now.getTime() - 5 * 60000);
             const twoMinutesAgo = new Date(now.getTime() - 2 * 60000);
 
             // 0. Active Call Per-Minute Billing & Balance Check
-            const activeCalls = await CoinsTransaction.find({
-                status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
-            }).select('_id status callStart meta userId hostId').lean();
+            if (now.getSeconds() % 5 === 0) {
+                const activeCalls = await CoinsTransaction.find({
+                    status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] }
+                }).select('_id status callStart meta userId hostId').lean();
 
-            for (const activeCall of activeCalls) {
-                await BillingService.processActiveCallBilling(activeCall._id as any);
-            }
-
-            // Enforce purchased call duration after a server restart or if an
-            // in-memory deadline timer was lost. Billing uses the exact limit,
-            // not the few extra seconds until this cron tick.
-            const deadlineCalls = await CoinsTransaction.find({
-                status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
-                'meta.callDeadlineAt': { $lte: now },
-            });
-
-            for (const txn of deadlineCalls) {
-                const meta = (txn.meta || {}) as any;
-                const deadline = new Date(meta.callDeadlineAt);
-                const maxDurationSeconds = Math.max(1, Number(meta.maxMinutes || 1) * 60);
-                const result = await BillingService.processCallEnd(
-                    txn._id as any,
-                    deadline,
-                    0,
-                    maxDurationSeconds
-                );
-                if (result.success) {
-                    const io = getIO();
-                    const payload = result.data ?? { transactionId: String(txn._id) };
-                    io.to(getUserRoom(String(txn.userId))).emit('callEnded', payload);
-                    io.to(getUserRoom(String(txn.hostId))).emit('callEnded', payload);
-                    io.to(`call:${String(txn._id)}`).emit('callEnded', payload);
+                for (const activeCall of activeCalls) {
+                    await BillingService.processActiveCallBilling(activeCall._id as any);
                 }
             }
+
             // 1. Fix Stuck INITIATED/RINGING Calls
             const stuckPending = await CoinsTransaction.find({
                 status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
@@ -78,10 +55,20 @@ export const startCallCleanupJob = () => {
 
             if (stuckPending.length > 0) {
                 console.log(`found ${stuckPending.length} stuck pending calls`);
-                for (const txn of stuckPending) {
-                    txn.status = CallStatus.MISSED;
-                    txn.callEnd = now;
-                    await txn.save();
+                for (const candidate of stuckPending) {
+                    const txn = await CoinsTransaction.findOneAndUpdate(
+                        {
+                            _id: candidate._id,
+                            status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
+                            $or: [
+                                { ringExpiresAt: { $lte: now } },
+                                { ringExpiresAt: { $exists: false }, createdAt: { $lt: fiveMinutesAgo } }
+                            ]
+                        },
+                        { $set: { status: CallStatus.EXPIRED, callEnd: now } },
+                        { new: true }
+                    );
+                    if (!txn) continue;
 
                     // Release host
                     await User.findByIdAndUpdate(txn.hostId, { isBusy: false });
@@ -89,6 +76,8 @@ export const startCallCleanupJob = () => {
                     const io = getIO();
                     io.to(getUserRoom(String(txn.userId))).emit('callEnded', payload);
                     io.to(getUserRoom(String(txn.hostId))).emit('callEnded', payload);
+                    await notifyHostCallState(txn.hostId, String(txn._id), 'expired', now);
+                    console.log(`[CALL] EXPIRED ${txn._id} at ${now.toISOString()}`);
                     const [caller, host] = await Promise.all([
                         User.findById(txn.userId).select('name image fcmToken').lean(),
                         User.findById(txn.hostId).select('name image fcmToken').lean(),
