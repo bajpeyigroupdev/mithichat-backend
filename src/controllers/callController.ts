@@ -579,7 +579,10 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       userId,
       hostId: host._id,
       type: TransactionType.VOICE_CALL,
-      status: CallStatus.INITIATED,
+      // Persist RINGING before either Socket.IO or FCM can deliver the call.
+      // Saving a stale document after emission could otherwise overwrite an
+      // ACCEPTED state produced by a fast notification action.
+      status: CallStatus.RINGING,
       ringExpiresAt: new Date(Date.now() + 45_000),
       channelName,
       meta: {
@@ -628,10 +631,6 @@ export const startCall = async (req: AuthRequest, res: Response) => {
     if (host.userId) hostRooms.push(`user:${host.userId}`);
     if (host.meethiId) hostRooms.push(`user:${host.meethiId}`);
     io.to(hostRooms).emit("incomingCall", callPayload);
-
-    // Transition status to RINGING since socket/notification is dispatched
-    transaction.status = CallStatus.RINGING;
-    await transaction.save();
 
     console.log(`[CALL_RINGING] Timestamp: ${new Date().toISOString()} | TxID: ${transaction._id} | Status: RINGING`);
 
@@ -853,6 +852,14 @@ export const rejectIncomingCall = async (req: AuthRequest, res: Response) => {
     );
 
     if (!transaction) {
+      const alreadyRejected = await CoinsTransaction.exists({
+        _id: transactionId,
+        hostId,
+        status: CallStatus.REJECTED,
+      });
+      if (alreadyRejected) {
+        return sendResponse(res, 200, true, 'Call already rejected');
+      }
       return sendResponse(res, 409, false, "Call is no longer available");
     }
 

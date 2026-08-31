@@ -171,6 +171,26 @@ const chatSocket = (io: Server) => {
                 { new: true }
             );
             if (!txn) {
+                const accepted = await CoinsTransaction.findOne({
+                    _id: transactionId,
+                    hostId: socket.user!.id,
+                    status: { $in: [CallStatus.ACCEPTED, CallStatus.CONNECTING, CallStatus.CONNECTED] },
+                });
+                if (accepted) {
+                    const meta = accepted.meta as any;
+                    socket.emit('acceptedBySystem', {
+                        transactionId,
+                        channelName: accepted.channelName || meta?.channelName,
+                        agora: {
+                            callerToken: meta?.callerToken,
+                            callerAgoraUid: meta?.callerAgoraUid,
+                            hostToken: meta?.hostToken,
+                            hostAgoraUid: meta?.hostAgoraUid,
+                            appId: meta?.appId,
+                        },
+                    });
+                    return;
+                }
                 socket.emit("callActionError", { transactionId, action: "accept", message: "Call is unavailable" });
                 return;
             }
@@ -281,17 +301,23 @@ const chatSocket = (io: Server) => {
 
         socket.on("missedCall", async ({ transactionId }: { transactionId: string }) => {
             if (!transactionId) return;
+            const now = new Date();
             const txn = await CoinsTransaction.findOneAndUpdate(
                 {
                     _id: transactionId,
                     $or: [{ userId: socket.user!.id }, { hostId: socket.user!.id }],
                     status: { $in: [CallStatus.INITIATED, CallStatus.RINGING] },
+                    ringExpiresAt: { $lte: now },
                 },
-                { status: CallStatus.MISSED, callEnd: new Date() },
+                { status: CallStatus.EXPIRED, callEnd: now },
                 { new: true }
             );
             if (!txn) return;
             await User.findByIdAndUpdate(txn.hostId, { $set: { isBusy: false } });
+            const payload = { transactionId, reason: 'no_answer' };
+            io.to(getUserRoom(String(txn.userId))).emit('callEnded', payload);
+            io.to(getUserRoom(String(txn.hostId))).emit('callEnded', payload);
+            await notifyHostCallState(txn.hostId, String(txn._id), 'expired', now);
         });
 
         socket.on("endCall", async ({
