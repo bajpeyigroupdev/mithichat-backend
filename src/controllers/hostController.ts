@@ -60,7 +60,7 @@ export const applyHost = async (req: AuthRequest, res: Response, next: NextFunct
             const applicantPhone = req.body.phone || req.body.mobile || userObj?.phoneNumber || '';
             const adharFrontUrl = req.body.adharFront || req.body.aadhaarFront || '';
             const adharBackUrl = req.body.adharBack || req.body.aadhaarBack || '';
-            const panUrl = req.body.pan || req.body.panCard || '';
+            const selfieWithIdCardUrl = req.body.selfieWithIdCard || req.body.pan || req.body.panCard || '';
 
             await RequestModel.create({
                 requestType: 'Host Request',
@@ -79,12 +79,14 @@ export const applyHost = async (req: AuthRequest, res: Response, next: NextFunct
                     aadhaarFront: adharFrontUrl,
                     adharBack: adharBackUrl,
                     aadhaarBack: adharBackUrl,
-                    pan: panUrl,
-                    panCard: panUrl,
+                    selfieWithIdCard: selfieWithIdCardUrl,
+                    // Preserve legacy aliases while all clients migrate to selfieWithIdCard.
+                    pan: selfieWithIdCardUrl,
+                    panCard: selfieWithIdCardUrl,
                     documents: req.body.documents || [
                         { name: 'Aadhaar Front', documentType: 'GovtID', url: adharFrontUrl },
                         { name: 'Aadhaar Back', documentType: 'GovtID', url: adharBackUrl },
-                        { name: 'PAN Card', documentType: 'Certificate', url: panUrl },
+                        { name: 'Selfie with ID Card', documentType: 'SelfieWithID', url: selfieWithIdCardUrl },
                         { name: 'Host Voice Audition', documentType: 'Voice', url: audioUrl }
                     ].filter(d => Boolean(d.url)),
                     gender: req.body.gender || userObj?.gender || 'female',
