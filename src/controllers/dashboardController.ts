@@ -13,27 +13,27 @@ import { Logger } from '../utils/logger';
 import dayjs from 'dayjs';
 import { CallStatus, TransactionType } from '../constants/user';
 import { PANEL_ACCOUNT_ROLES } from '../utils/accountScope';
+import { HierarchyScopeService } from '../utils/hierarchyScope';
 
 
 
 // Helper to get host filter based on role
 const getHostFilter = async (req: Request): Promise<any> => {
-    const { role, userId } = (req as any).user || {};
+    const actor = (req as any).user;
+    const { role } = actor || {};
 
     if (!role || ['superAdmin', 'owner', 'operator', 'customerSupport'].includes(role)) {
         return {};
     }
 
-    if (['admin', 'agency'].includes(role)) {
-        const adminUser = await User.findById(userId);
-        if (adminUser?.meethiId) {
-            const myHosts = await User.find({ meethiId: adminUser.meethiId, role: 'host' }).select('_id');
-            const hostIds = myHosts.map(h => h._id);
-            if (hostIds.length > 0) {
-                return { hostId: { $in: hostIds } };
-            }
-        }
-        return {};
+    if (['superAdmin', 'super-admin', 'admin', 'agency'].includes(role)) {
+        const myHosts = await User.find({
+            $and: [
+                HierarchyScopeService.buildDashboardScope({ id: String(actor.id), role }),
+                { role: 'host' },
+            ],
+        }).select('_id');
+        return { hostId: { $in: myHosts.map((host) => host._id) } };
     }
 
     return {};
@@ -57,15 +57,28 @@ export const getDashboardStats = async (
 ): Promise<void> => {
     try {
         const hostFilter = await getHostFilter(req);
+        const actor = (req as any).user;
+        const userScope = actor
+            ? HierarchyScopeService.buildDashboardScope({ id: String(actor.id), role: actor.role })
+            : { _id: null };
+        const requestScope = actor
+            ? HierarchyScopeService.buildRequestScope({ id: String(actor.id), role: actor.role })
+            : { _id: null };
+        const scopedUserFilter = (extra: Record<string, any> = {}) => ({
+            $and: [userScope, extra],
+        });
+        const scopedRequestFilter = (extra: Record<string, any> = {}) => ({
+            $and: [requestScope, extra],
+        });
 
         // Phase 5 & 6 Enterprise Real-Time Aggregations
         const { Request: RequestModel } = await import('../models/request.model');
 
         // Request Statistics (EMS)
         const [pendingRequests, approvedRequests, rejectedRequests] = await Promise.all([
-            RequestModel.countDocuments({ status: 'pending' }).catch(() => 0),
-            RequestModel.countDocuments({ status: 'approved' }).catch(() => 0),
-            RequestModel.countDocuments({ status: 'rejected' }).catch(() => 0),
+            RequestModel.countDocuments(scopedRequestFilter({ status: 'pending' })).catch(() => 0),
+            RequestModel.countDocuments(scopedRequestFilter({ status: 'approved' })).catch(() => 0),
+            RequestModel.countDocuments(scopedRequestFilter({ status: 'rejected' })).catch(() => 0),
         ]);
 
         // Role Counts (MongoDB Users)
@@ -79,14 +92,14 @@ export const getDashboardStats = async (
             totalSellers,
             totalCustomerSupport
         ] = await Promise.all([
-            User.countDocuments({ role: 'superAdmin', isDeleted: false }),
-            User.countDocuments({ role: 'admin', isDeleted: false }),
-            User.countDocuments({ role: 'agency', isDeleted: false }),
-            User.countDocuments({ role: 'operator', isDeleted: false }),
-            User.countDocuments({ role: 'host', isDeleted: false }),
-            User.countDocuments({ role: 'host', isDeleted: false, isApproved: true }),
-            User.countDocuments({ role: 'coinSeller', isDeleted: false }),
-            User.countDocuments({ role: 'customerSupport', isDeleted: false }),
+            User.countDocuments(scopedUserFilter({ role: 'superAdmin', isDeleted: false })),
+            User.countDocuments(scopedUserFilter({ role: 'admin', isDeleted: false })),
+            User.countDocuments(scopedUserFilter({ role: 'agency', isDeleted: false })),
+            User.countDocuments(scopedUserFilter({ role: 'operator', isDeleted: false })),
+            User.countDocuments(scopedUserFilter({ role: 'host', isDeleted: false })),
+            User.countDocuments(scopedUserFilter({ role: 'host', isDeleted: false, isApproved: true })),
+            User.countDocuments(scopedUserFilter({ role: 'coinSeller', isDeleted: false })),
+            User.countDocuments(scopedUserFilter({ role: 'customerSupport', isDeleted: false })),
         ]);
 
         // Registration Timeframes
@@ -94,10 +107,20 @@ export const getDashboardStats = async (
         const weekStart = dayjs().subtract(7, 'day').startOf('day').toDate();
         const monthStart = dayjs().subtract(30, 'day').startOf('day').toDate();
 
-        const [todaysRegistrations, weeklyRegistrations, monthlyRegistrations] = await Promise.all([
-            User.countDocuments({ createdAt: { $gte: todayStart } }),
-            User.countDocuments({ createdAt: { $gte: weekStart } }),
-            User.countDocuments({ createdAt: { $gte: monthStart } }),
+        const [
+            todaysRegistrations,
+            weeklyRegistrations,
+            monthlyRegistrations,
+            todayNewHosts,
+            weeklyNewHosts,
+            monthlyNewHosts,
+        ] = await Promise.all([
+            User.countDocuments(scopedUserFilter({ createdAt: { $gte: todayStart } })),
+            User.countDocuments(scopedUserFilter({ createdAt: { $gte: weekStart } })),
+            User.countDocuments(scopedUserFilter({ createdAt: { $gte: monthStart } })),
+            User.countDocuments(scopedUserFilter({ role: 'host', createdAt: { $gte: todayStart } })),
+            User.countDocuments(scopedUserFilter({ role: 'host', createdAt: { $gte: weekStart } })),
+            User.countDocuments(scopedUserFilter({ role: 'host', createdAt: { $gte: monthStart } })),
         ]);
 
         // User Status Breakdown & Unique Active Users (DAU & MAU)
@@ -105,11 +128,11 @@ export const getDashboardStats = async (
         const past30d = dayjs().subtract(30, 'day').toDate();
 
         const [activeUsersCount, inactiveUsersCount, blockedUsersCount, deletedUsersCount, dauCount, mauCount] = await Promise.all([
-            User.countDocuments({ isDeleted: false, isBlocked: false, isActive: true }),
-            User.countDocuments({ isDeleted: false, isActive: false }),
-            User.countDocuments({ isDeleted: false, isBlocked: true }),
-            User.countDocuments({ isDeleted: true }),
-            User.countDocuments({
+            User.countDocuments(scopedUserFilter({ isDeleted: false, isBlocked: false, isActive: true })),
+            User.countDocuments(scopedUserFilter({ isDeleted: false, isActive: false })),
+            User.countDocuments(scopedUserFilter({ isDeleted: false, isBlocked: true })),
+            User.countDocuments(scopedUserFilter({ isDeleted: true })),
+            User.countDocuments(scopedUserFilter({
                 isDeleted: false,
                 role: { $nin: PANEL_ACCOUNT_ROLES },
                 $or: [
@@ -118,8 +141,8 @@ export const getDashboardStats = async (
                     { updatedAt: { $gte: past24h } },
                     { isActive: true }
                 ]
-            }).catch(() => 0),
-            User.countDocuments({
+            })).catch(() => 0),
+            User.countDocuments(scopedUserFilter({
                 isDeleted: false,
                 role: { $nin: PANEL_ACCOUNT_ROLES },
                 $or: [
@@ -128,11 +151,14 @@ export const getDashboardStats = async (
                     { updatedAt: { $gte: past30d } },
                     { isActive: true }
                 ]
-            }).catch(() => 0),
+            })).catch(() => 0),
         ]);
 
         // Total users (Global count of app users, excluding panel staff)
-        const totalUsers = await User.countDocuments({ isDeleted: false, role: { $nin: PANEL_ACCOUNT_ROLES } });
+        const totalUsers = await User.countDocuments(scopedUserFilter({
+            isDeleted: false,
+            role: { $nin: PANEL_ACCOUNT_ROLES },
+        }));
 
         // Pending Reports Count
         const reportsPending = await Report.countDocuments({ status: 'pending' }).catch(() => 0);
@@ -244,6 +270,11 @@ export const getDashboardStats = async (
                 today: todaysRegistrations,
                 weekly: weeklyRegistrations,
                 monthly: monthlyRegistrations,
+            },
+            hostRegistrations: {
+                today: todayNewHosts,
+                weekly: weeklyNewHosts,
+                monthly: monthlyNewHosts,
             },
             statuses: {
                 active: activeUsersCount,

@@ -19,6 +19,10 @@ import mongoose from 'mongoose';
 import TempHostModel from '../models/temp.host.model';
 import { permanentlyDeleteUserRecord } from '../services/permanentUserDeletion.service';
 import { firstPlayableVoiceUrl, isPlayableVoiceUrl } from '../utils/voiceMedia';
+import {
+  sanitizeCredentialsForViewer,
+  sanitizeRequestForViewer,
+} from '../utils/requestResponseSanitizer';
 
 const canManagePermissionTarget = async (
   actor: NonNullable<AuthRequest['user']>,
@@ -914,7 +918,7 @@ export const listRequests = async (req: AuthRequest, res: Response) => {
           }
         }
       }
-      return docObj;
+      return sanitizeRequestForViewer(docObj, currentUser?.role);
     }));
 
     return sendResponse(res, 200, true, 'Requests listed successfully', {
@@ -945,7 +949,13 @@ export const getRequestById = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    return sendResponse(res, 200, true, 'Request retrieved successfully', request);
+    return sendResponse(
+      res,
+      200,
+      true,
+      'Request retrieved successfully',
+      sanitizeRequestForViewer(request, req.user?.role)
+    );
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -1129,7 +1139,13 @@ export const updateRequestStatus = async (req: AuthRequest, res: Response) => {
       `Request status changed from ${oldStatus} to ${status} by ${(actor as any).name || actor.role}`
     );
 
-    return sendResponse(res, 200, true, `Request status updated to ${status}`, requestObj);
+    return sendResponse(
+      res,
+      200,
+      true,
+      `Request status updated to ${status}`,
+      sanitizeRequestForViewer(requestObj, actor.role)
+    );
   } catch (error: any) {
     return sendResponse(res, 500, false, error.message);
   }
@@ -1355,9 +1371,10 @@ export const approveRequest = async (req: AuthRequest, res: Response) => {
     }
 
     await requestObj.save();
+    const targetRole = requestObj.role || requestObj.requestType;
     return sendResponse(res, 200, true, 'Approval processed successfully.', {
-      request: requestObj,
-      generatedCredentials,
+      request: sanitizeRequestForViewer(requestObj, actor.role),
+      generatedCredentials: sanitizeCredentialsForViewer(generatedCredentials, actor.role, targetRole),
       approvedBy: (actor as any).name || actor.role,
       approvedDate: new Date().toISOString(),
     });
@@ -1425,7 +1442,7 @@ export const rejectRequest = async (req: AuthRequest, res: Response) => {
     );
 
     return sendResponse(res, 200, true, 'Request rejected successfully.', {
-      request: requestObj,
+      request: sanitizeRequestForViewer(requestObj, actor.role),
       rejectedBy: (actor as any).name || actor.role,
       rejectedDate: new Date().toISOString(),
       reason: rejectReason,
