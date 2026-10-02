@@ -21,6 +21,7 @@ import { notifyHostCallState } from '../services/callStateNotification.service';
 import { recalculateAndUpdateHostLevel } from '../services/user.service';
 import { CALL_DIAMONDS_PER_MINUTE } from '../configs/monetization';
 import redis from '../configs/redisConfig';
+import { grantHostConsentAndStart, registerRecordingIntent, stopRecordingForCall } from '../services/recordingService';
 
 
 // export const startCall = async (req: AuthRequest, res: Response) => {
@@ -392,7 +393,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
   let callerLockKey: string | undefined;
   let callerLockToken: string | undefined;
   try {
-    const { randomMatch = false } = req.body || {};
+    const { randomMatch = false, recordingConsent = false, recordingConsentPolicyVersion } = req.body || {};
     let hostId = req.body?.hostId as string | undefined;
     const { id: userId, name, image: callerImage } = req.user || {};
 
@@ -551,6 +552,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
 
     const callerAgoraUid = Math.floor(Math.random() * 1e9);
     const hostAgoraUid = Math.floor(Math.random() * 1e9);
+    const recordingAgoraUid = Math.floor(Math.random() * 1e9);
     const nowSec = Math.floor(Date.now() / 1000);
     // Unix timestamp in seconds for token expiration (86400s / 24h validity window for robustness)
     const tokenExpireTs = nowSec + Math.max(expirationTimeInSeconds, 86400);
@@ -575,6 +577,12 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       tokenExpireTs
     );
 
+    // The recorder token stays server-side and is used only after both parties consent.
+    const recordingToken = RtcTokenBuilder.buildTokenWithUid(
+      APP_ID, APP_CERTIFICATE, channelName, recordingAgoraUid,
+      RtcRole.PUBLISHER, tokenExpireTs, tokenExpireTs
+    );
+
     const transaction = await CoinsTransaction.create({
       userId,
       hostId: host._id,
@@ -596,8 +604,16 @@ export const startCall = async (req: AuthRequest, res: Response) => {
         reservedDiamonds: maxMinutes * CALL_RATE_PER_MINUTE,
         callDiamondsPerMinute: CALL_RATE_PER_MINUTE,
         platformCommissionRate: Number(runtimeSettings.commissionRate || 0),
+        recordingRequested: recordingConsent === true,
+        recordingConsentPolicyVersion: recordingConsentPolicyVersion || process.env.RECORDING_CONSENT_POLICY_VERSION || '1',
+        recordingAgoraUid,
+        recordingToken,
       },
     });
+
+    if (recordingConsent === true) {
+      await registerRecordingIntent(String(transaction._id), true, recordingConsentPolicyVersion);
+    }
 
     console.log('💾 Transaction created:', transaction._id);
 
@@ -621,6 +637,11 @@ export const startCall = async (req: AuthRequest, res: Response) => {
       createdAt: transaction.createdAt,
       ringExpiresAt: transaction.ringExpiresAt,
       eventAt: transaction.createdAt,
+      recording: {
+        requested: recordingConsent === true,
+        disclosure: process.env.RECORDING_CONSENT_DISCLOSURE || 'This call may be recorded only if both participants agree.',
+        policyVersion: recordingConsentPolicyVersion || process.env.RECORDING_CONSENT_POLICY_VERSION || '1',
+      },
     };
 
     console.log(`[CALL_INITIATED] Timestamp: ${new Date().toISOString()} | UserID: ${userId} | HostID: ${host._id} | Channel: ${channelName} | TxID: ${transaction._id}`);
@@ -684,6 +705,7 @@ export const startCall = async (req: AuthRequest, res: Response) => {
         image: host.image || '',
         gender: host.gender,
       },
+      recording: { requested: recordingConsent === true, consentRequired: true },
     });
 
   } catch (error: any) {
@@ -728,6 +750,9 @@ export const endCall = async (req: AuthRequest, res: Response) => {
     );
 
     if (result.success) {
+      void stopRecordingForCall(String(transaction._id)).catch((recordingError) =>
+        console.error('[recording] failed to queue stop:', recordingError?.message)
+      );
       const payload = { transactionId };
       const io = getIO();
       io.to(getUserRoom(String(transaction.userId))).emit("callEnded", payload);
@@ -766,7 +791,7 @@ export const endCall = async (req: AuthRequest, res: Response) => {
 
 export const acceptIncomingCall = async (req: AuthRequest, res: Response) => {
   try {
-    const { transactionId } = req.body || {};
+    const { transactionId, recordingConsent = false, recordingConsentPolicyVersion } = req.body || {};
     const hostId = req.user?.id;
     if (!transactionId || !hostId) {
       return sendResponse(res, 400, false, "transactionId is required");
@@ -824,6 +849,11 @@ export const acceptIncomingCall = async (req: AuthRequest, res: Response) => {
 
     await User.findByIdAndUpdate(hostId, { $set: { isBusy: true } });
     const callData = buildCallData(transaction);
+    if (recordingConsent === true) {
+      void grantHostConsentAndStart(String(transactionId), true, recordingConsentPolicyVersion).catch((recordingError) =>
+        console.error('[RECORDING] Failed to start after host consent', recordingError)
+      );
+    }
 
     console.log(`[BILLING] CALL ACCEPTED: TransactionID ${transactionId} | HostID ${hostId}`);
     getIO().to(getUserRoom(String(transaction.userId))).emit("callAccepted", callData);

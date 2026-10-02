@@ -9,6 +9,7 @@ import { getIO, getUserRoom } from '../sockets';
 import { createNotification } from '../controllers/notificationController';
 import { sendMissedCallNotification } from '../utils/pushNotification';
 import { notifyHostCallState } from './callStateNotification.service';
+import { stopRecordingForCall } from './recordingService';
 
 /**
  * Chat Persistent Worker (Runs every 1s)
@@ -137,6 +138,9 @@ export const startCallCleanupJob = () => {
 
                     // BUG-03 + BUG-11 FIX: Emit callEnded so both app screens dismiss
                     if (result.success) {
+                        void stopRecordingForCall(String(txn._id)).catch((error) =>
+                            console.error('[RECORDING] Failed to queue stop for zombie call', error)
+                        );
                         const io = getIO();
                         const payload = result.data ?? { transactionId: String(txn._id) };
                         io.to(getUserRoom(String(txRef.userId))).emit('callEnded', payload);

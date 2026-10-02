@@ -40,8 +40,8 @@ export const renderReferralLandingPage = async (req: Request, res: Response) => 
   <!-- OpenGraph / Social Meta Tags -->
   <meta property="og:title" content="Meethi Chat Special Invitation from ${inviterName}">
   <meta property="og:description" content="Use code ${inviterCode} to claim 100 Free Welcome Coins on India's #1 Live Video & Voice Social App.">
-  <meta property="og:image" content="${inviterAvatar || 'https://mithichat.live/logo.png'}">
-  <meta property="og:url" content="https://mithichat.live/invite?ref=${inviterCode}">
+  <meta property="og:image" content="${inviterAvatar || 'https://meethi.live/logo.png'}">
+  <meta property="og:url" content="https://meethi.live/invite?ref=${inviterCode}">
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -351,7 +351,7 @@ export const renderReferralLandingPage = async (req: Request, res: Response) => 
     <div class="badge">✨ Special Invite</div>
 
     <div class="inviter-card">
-      <img src="${inviterAvatar || 'https://mithichat.live/logo.png'}" alt="Inviter" class="inviter-avatar" onerror="this.src='https://mithichat.live/logo.png'">
+      <img src="${inviterAvatar || 'https://meethi.live/logo.png'}" alt="Inviter" class="inviter-avatar" onerror="this.src='https://meethi.live/logo.png'">
       <div class="inviter-info">
         <h4>${inviterName}</h4>
         <p>invited you to join Meethi Chat!</p>

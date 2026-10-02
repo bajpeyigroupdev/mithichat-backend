@@ -52,7 +52,7 @@ export async function automateEmployeeCreationOnApproval(applicationId: string) 
                 designation: `${app.role.toUpperCase()} Lead`,
                 status: 'active_employee',
                 joiningDate: new Date(),
-                offerLetterUrl: `https://api.mithichat.live/policies/offer-${app.applicationId}.pdf`
+                offerLetterUrl: `https://api.meethi.live/policies/offer-${app.applicationId}.pdf`
             });
         }
 

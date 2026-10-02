@@ -8,6 +8,7 @@ import { User } from "../models/user.model";
 import { CallStatus } from "../constants/user";
 import { getAllHostsService, invalidateHostCache } from "../services/user.service";
 import { BillingService } from '../services/billing.service';
+import { stopRecordingForCall } from '../services/recordingService';
 import { PermissionEngine } from "../utils/permissionEngine";
 import { notifyHostCallState } from "../services/callStateNotification.service";
 
@@ -409,6 +410,9 @@ const handleEndCall = async (
         );
 
         if (result.success) {
+            void stopRecordingForCall(transactionId).catch((error) =>
+                console.error('[RECORDING] Failed to queue stop after socket call end', error)
+            );
             const payload = result.data ?? { transactionId };
 
             if (txRef) {

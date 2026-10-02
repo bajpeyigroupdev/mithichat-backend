@@ -12,7 +12,7 @@ const s3Client = new S3Client({
   }
 });
 
-const API_BASE = 'https://api.mithichat.live/api';
+const API_BASE = 'https://api.meethi.live/api';
 const BUCKET = (process.env.AWS_S3_BUCKET_NAME || 'talklivedata').trim();
 
 async function main() {
@@ -56,7 +56,7 @@ async function main() {
     console.log('🎉 AWS S3 Upload Completed Successfully!');
     console.log('Direct AWS S3 URL:', s3Url);
 
-    console.log('4. Registering Release on Live API (api.mithichat.live)...');
+    console.log('4. Registering Release on Live API (api.meethi.live)...');
     const releaseRes = await axios.post(
       `${API_BASE}/v1/app-releases/upload`,
       {

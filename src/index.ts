@@ -21,6 +21,9 @@ import { getSystemMessages } from "./controllers/notificationController";
 import verificationRoutes from "./routes/verificationRoutes";
 import adminVerificationRoutes from "./routes/adminVerificationRoutes";
 
+import recordingRoutes from './routes/recordingRoutes';
+import aiCommandRoutes from './routes/aiCommandRoutes';
+
 const app: Application = express();
 
 app.set("trust proxy", 1);
@@ -35,22 +38,22 @@ const allowedOrigins = [
   'http://localhost:5174',
   'http://localhost:5050',
 
-  'https://mithichat.live',
-  'https://www.mithichat.live',
-  'https://api.mithichat.live',
+  'https://meethi.live',
+  'https://www.meethi.live',
+  'https://api.meethi.live',
 
-  'https://admin.mithichat.live',
-  'http://admin.mithichat.live',
+  'https://admin.meethi.live',
+  'http://admin.meethi.live',
 
-  'https://agency.mithichat.live',
-  'https://operator.mithichat.live',
-  'https://host.mithichat.live',
-  'https://adminjoin.mithichat.live',
-  'https://support.mithichat.live',
-  'https://superadmin.mithichat.live',
+  'https://agency.meethi.live',
+  'https://operator.meethi.live',
+  'https://host.meethi.live',
+  'https://adminjoin.meethi.live',
+  'https://support.meethi.live',
+  'https://superadmin.meethi.live',
 
-  'https://management.mithichat.live',
-  'http://management.mithichat.live',
+  'https://management.meethi.live',
+  'http://management.meethi.live',
 
   'https://danilo-syngamic-unterrifically.ngrok-free.dev',
 ].filter(Boolean);
@@ -58,7 +61,7 @@ const allowedOrigins = [
 const isLocalhostOrigin = (origin: string) => {
   try {
     const url = new URL(origin);
-    return ['localhost', '127.0.0.1'].includes(url.hostname) || url.hostname.endsWith('.mithichat.live');
+    return ['localhost', '127.0.0.1'].includes(url.hostname) || url.hostname.endsWith('.meethi.live');
   } catch {
     return false;
   }
@@ -66,12 +69,24 @@ const isLocalhostOrigin = (origin: string) => {
 
 app.use(cors({
   origin: (origin, callback) => {
-    callback(null, true);
+    if (!origin || allowedOrigins.includes(origin) || isLocalhostOrigin(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error('Origin is not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-simulation-user-id'],
 }));
+
+const sensitiveAdminLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many sensitive admin requests. Try again shortly.' },
+});
+app.use('/api/v1/admin/recordings', sensitiveAdminLimiter);
 
 app.use((req, res, next) => {
   console.log(`📡 Incoming Request: ${req.method} ${req.url}`);
@@ -100,7 +115,12 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 app.use("/policies", express.static(path.join(__dirname, "../policies")));
 
 // Body parsing with size limits
-app.use(express.json({ limit: '50mb' })); // Increased for document base64 payloads
+app.use(express.json({
+  limit: '50mb',
+  verify: (req: any, _res, buffer) => {
+    if (req.originalUrl?.includes('/recordings/webhook')) req.rawBody = Buffer.from(buffer);
+  },
+})); // Increased for document base64 payloads; webhook raw bytes retained for HMAC.
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // 2. NoSQL Injection Prevention (must be after body parsers for Express v5)
@@ -176,6 +196,14 @@ import { getAllPlugins, togglePluginStatus } from "./controllers/pluginControlle
 import { getTasks, createTask, updateTaskStatus } from "./controllers/taskController";
 import { generateAIPlatformInsights } from "./services/aiInsightsService";
 
+// Sensitive enterprise read/write surfaces require authentication even when a
+// downstream controller forgets to declare it explicitly.
+app.use([
+  '/api/v1/search', '/api/v1/monitoring', '/api/v1/activity-feed',
+  '/api/v1/reports', '/api/v1/plugins', '/api/v1/tasks', '/api/v1/bi',
+  '/api/v1/process-mining', '/api/v1/analytics/ai-insights',
+], verifyToken);
+
 // Enterprise V6.0 High Availability & Prometheus Health Checks
 app.get('/healthz', (_req, res) => res.status(200).json({ status: 'OK', timestamp: new Date() }));
 app.get('/livez', (_req, res) => res.status(200).json({ status: 'ALIVE', uptime: process.uptime() }));
@@ -211,6 +239,9 @@ app.get("/api/v1/analytics/ai-insights", async (_req, res) => {
 app.get("/api/system-messages", verifyToken, getSystemMessages);
 
 
+
+app.use('/api/v1/admin/recordings', recordingRoutes);
+app.use('/api/v1/admin/ai', aiCommandRoutes);
 
 // Root Route
 app.get("/", (req, res) => {
@@ -283,10 +314,13 @@ const startServer = async () => {
 
 import { startCallCleanupJob, startChatWorker, startWeeklyHostLevelJob, startStaleHostCleanupJob } from "./services/cron.service";
 
+import { startRecordingJobWorker } from './services/recordingJobWorker';
+
 startServer().then(() => {
   // Database-backed workers start only after MongoDB is ready.
   startCallCleanupJob();
   startChatWorker();
   startWeeklyHostLevelJob();
   startStaleHostCleanupJob();
+  startRecordingJobWorker();
 });

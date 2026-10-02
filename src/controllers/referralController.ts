@@ -359,7 +359,7 @@ export const getReferralDetails = async (req: AuthRequest, res: Response) => {
       };
     });
 
-    const referralLink = `https://mithichat.live/refer/${user.referralCode}`;
+    const referralLink = `https://meethi.live/refer/${user.referralCode}`;
 
     return sendResponse(res, 200, true, "Referral details fetched successfully", {
       referralCode: user.referralCode,

@@ -7,9 +7,9 @@ dotenv.config({ path: path.join(__dirname, "../../.env") });
 
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/umang";
 
-export const DEFAULT_FEMALE_AVATAR_URL = "https://api.mithichat.live/uploads/avatars/female_default.webp";
-export const DEFAULT_MALE_AVATAR_URL = "https://api.mithichat.live/uploads/avatars/male_default.webp";
-export const DEFAULT_NEUTRAL_AVATAR_URL = "https://api.mithichat.live/uploads/avatars/neutral_default.webp";
+export const DEFAULT_FEMALE_AVATAR_URL = "https://api.meethi.live/uploads/avatars/female_default.webp";
+export const DEFAULT_MALE_AVATAR_URL = "https://api.meethi.live/uploads/avatars/male_default.webp";
+export const DEFAULT_NEUTRAL_AVATAR_URL = "https://api.meethi.live/uploads/avatars/neutral_default.webp";
 
 export function isValidAvatarUrl(url: any): boolean {
   if (!url || typeof url !== 'string') return false;

@@ -100,7 +100,7 @@ export const uploadDirectFile = async (req: AuthRequest, res: Response) => {
       return sendResponse(res, 400, false, "No file uploaded");
     }
 
-    const host = req.get("host") || "api.mithichat.live";
+    const host = req.get("host") || "api.meethi.live";
     const protocol = req.protocol === "https" || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
     const fileUrl = `${protocol}://${host}/uploads/gifts/${file.filename}`;
 

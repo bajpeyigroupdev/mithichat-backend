@@ -4,6 +4,17 @@ import { Logger } from '../utils/logger';
 
 export async function generateAIPlatformInsights() {
     try {
+        const { getOperationsSnapshot } = await import('./adminOperationsService');
+        const snapshot = await getOperationsSnapshot();
+        return {
+            success: true,
+            timestamp: new Date(),
+            summaryTitle: 'Operational Insights (Database Facts)',
+            insights: [],
+            databaseFacts: snapshot,
+            interpretation: 'No generated claim is shown unless it is backed by the attached database snapshot.'
+        };
+        /* Legacy implementation retained temporarily below for migration history.
         const [totalApps, pendingApps, approvedApps, totalUsers] = await Promise.all([
             RecruitmentApplication.countDocuments(),
             RecruitmentApplication.countDocuments({ status: 'pending' }),
@@ -25,7 +36,7 @@ export async function generateAIPlatformInsights() {
             timestamp: new Date(),
             summaryTitle: 'Executive AI Operational Insights',
             insights
-        };
+        }; */
     } catch (error: any) {
         await Logger('generateAIPlatformInsights', error);
         return {

@@ -10,7 +10,7 @@ cloudinary.config({
   secure: true
 });
 
-const API_BASE = 'https://api.mithichat.live/api';
+const API_BASE = 'https://api.meethi.live/api';
 
 async function main() {
   try {
@@ -46,7 +46,7 @@ async function main() {
     console.log('Cloudinary Upload Success!');
     console.log('Secure URL:', uploadRes.secure_url);
 
-    console.log('4. Registering Release on Production API (api.mithichat.live)...');
+    console.log('4. Registering Release on Production API (api.meethi.live)...');
     const releaseRes = await axios.post(
       `${API_BASE}/v1/app-releases/upload`,
       {

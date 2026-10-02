@@ -16,9 +16,9 @@ async function run() {
       {
         image: {
           $in: [
-            'https://api.mithichat.live/uploads/avatars/male_default.webp',
-            'https://api.mithichat.live/uploads/avatars/female_default.webp',
-            'https://api.mithichat.live/uploads/avatars/neutral_default.webp',
+            'https://api.meethi.live/uploads/avatars/male_default.webp',
+            'https://api.meethi.live/uploads/avatars/female_default.webp',
+            'https://api.meethi.live/uploads/avatars/neutral_default.webp',
             '/uploads/avatars/female_default.webp',
             '/uploads/avatars/male_default.webp',
             '/uploads/avatars/neutral_default.webp'

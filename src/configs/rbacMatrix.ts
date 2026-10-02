@@ -63,6 +63,8 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
     name: 'Operator',
     allowedRoutes: [
       '/dashboard',
+      '/ai',
+      '/recordings',
       '/users',
       '/recharges',
       '/recharges/user',
@@ -147,6 +149,8 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
     name: 'Super Admin',
     allowedRoutes: [
       '/dashboard',
+      '/ai',
+      '/recordings',
       '/admins',
       '/admins/create',
       '/admins/request',
@@ -198,6 +202,7 @@ export const ROLE_PERMISSION_MATRIX: Record<string, RoleDefinition> = {
     name: 'Admin',
     allowedRoutes: [
       '/dashboard',
+      '/recordings',
       '/agencies',
       '/agencies/create',
       '/agencies/request',

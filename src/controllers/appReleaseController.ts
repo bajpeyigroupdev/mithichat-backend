@@ -120,7 +120,7 @@ export const getLatestRelease = async (_req: Request, res: Response) => {
       });
     }
 
-    const host = process.env.BASE_URL || "https://api.mithichat.live/api";
+    const host = process.env.BASE_URL || "https://api.meethi.live/api";
     const fullDownloadUrl = `${host.replace(/\/api$/, "")}/api/v1/app-releases/download`;
 
     return res.status(200).json({
@@ -213,7 +213,7 @@ export const downloadLatestRelease = async (_req: Request, res: Response) => {
     }
 
     // Final fallback: redirect to website static release build
-    return res.redirect("https://mithichat.live/app-release.apk");
+    return res.redirect("https://meethi.live/app-release.apk");
   } catch (error: any) {
     console.error("[AppRelease] downloadLatestRelease error:", error);
     return sendResponse(res, 500, false, "Download failed due to server error.");

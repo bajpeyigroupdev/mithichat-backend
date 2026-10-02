@@ -1576,7 +1576,7 @@ export const finalizeUserApproval = async (
       const existing = await User.findOne({ referralCode });
       if (!existing) isUnique = true;
     }
-    referralLink = `https://apply.mithichat.live${roleConfig.path}?ref=${referralCode}`;
+    referralLink = `https://apply.meethi.live${roleConfig.path}?ref=${referralCode}`;
   }
 
   const audioRecordingUrl = data.audio || data.voiceAudioUrl || data.audioUrl || data.voiceUrl || data.voice || data.introAudio || '';

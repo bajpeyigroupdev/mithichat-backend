@@ -186,11 +186,11 @@ export const userRegister = async (req: AuthRequest, res: Response) => {
     let image = "";
     switch (gender) {
       case "male": {
-        image = "https://api.mithichat.live/uploads/avatars/male_default.webp";
+        image = "https://api.meethi.live/uploads/avatars/male_default.webp";
         break;
       }
       case "female": {
-        image = "https://api.mithichat.live/uploads/avatars/female_default.webp";
+        image = "https://api.meethi.live/uploads/avatars/female_default.webp";
         break;
       }
       default: {
@@ -484,11 +484,11 @@ export const userGoogleAuth = async (req: Request, res: Response) => {
     let image;
     switch (gender) {
       case "male": {
-        image = "https://api.mithichat.live/uploads/avatars/male_default.webp";
+        image = "https://api.meethi.live/uploads/avatars/male_default.webp";
         break;
       }
       case "female": {
-        image = "https://api.mithichat.live/uploads/avatars/female_default.webp";
+        image = "https://api.meethi.live/uploads/avatars/female_default.webp";
         break;
       }
       default: {
