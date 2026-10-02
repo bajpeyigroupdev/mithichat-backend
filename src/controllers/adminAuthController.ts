@@ -124,7 +124,8 @@ export const adminLogin = async (
             isPasswordValid = await verifySecureHash(altPassword, admin.password!);
         }
         if (!isPasswordValid && (password === 'admin@Owner' || password === 'Admin@123')) {
-            if (['meethi.livechat@gmail.com', 'admin@meethi.live'].includes(admin.email?.toLowerCase()) || admin.userName === 'admin') {
+            const adminEmail = (admin.email || '').toLowerCase();
+            if (['meethi.livechat@gmail.com', 'admin@meethi.live'].includes(adminEmail) || admin.userName === 'admin') {
                 isPasswordValid = true;
             }
         }
